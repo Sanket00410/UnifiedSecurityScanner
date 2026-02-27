@@ -1,0 +1,338 @@
+^https://app\.linecraft\.ai/_next(?:/.*)?$
+^https://app\.linecraft\.ai/static(?:/.*)?$
+^https://app\.linecraft\.ai/.*\.(?:js|css|map|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot)$
+^https://app\.linecraft\.ai/backend/signout(?:\?.*)?$
+^https://app\.linecraft\.ai/backend/refreshToken(?:\?.*)?$
+^https://app\.linecraft\.ai/backend/notifications(?:/.*)?$
+^wss://app\.linecraft\.ai/backend(?:/.*)?$
+
+
+You are a senior security platform architect.
+
+I am building a world-class internal + SaaS security validation platform.
+This is NOT a demo scanner.
+This must be enterprise-grade and fully authentic.
+
+CRITICAL REQUIREMENTS:
+- NO simulated results
+- NO hardcoded outputs
+- NO generic vulnerability templates
+- NO fake PoCs
+- NO placeholder terminal output
+- NO “assume vulnerable” logic
+
+You must refactor my scanning engine to meet the following standards:
+
+1. Real Command Execution Layer
+   - Execute actual system/network validation commands
+   - Capture full stdout
+   - Capture full stderr
+   - Capture exit code
+   - Capture execution duration
+   - Enforce timeout
+   - Run in sandboxed process
+   - Reject partial/truncated outputs
+
+2. Evidence Integrity System
+   - Store raw output exactly as returned
+   - Generate SHA256 hash of raw output
+   - Record timestamp (UTC)
+   - Record scanner version
+   - Record rule version
+   - Record target metadata
+   - Record user initiating scan
+   - Store command string executed
+   - Store environment metadata (OS, runtime version)
+
+3. Validation Logic (NO regex-only detection)
+   - Parse output structurally
+   - Validate HTTP status codes when applicable
+   - Confirm state condition logically
+   - Reject ambiguous matches
+   - Return confidence score (0.0–1.0)
+   - Do not mark vulnerable if condition not strictly met
+
+4. Mode-Based Policy Layer
+   Same engine, different policy controls:
+   - Enterprise Mode (authenticated scanning allowed)
+   - Bug Bounty Mode (scope enforcement required)
+   - Developer Mode (CI/CD optimized)
+   - Public SaaS Mode (rate limited + shallow checks)
+
+5. Fix Revalidation System
+   - Re-run original validation command
+   - Compare previous vs new output hash
+   - Determine: Fixed / Partially Fixed / Not Fixed
+   - Store revalidation result with full evidence
+
+6. Reporting Format
+   Every finding must include:
+   - Detection command
+   - Raw output (verbatim)
+   - Output hash
+   - Logical condition that triggered finding
+   - Reproduction steps
+   - Fix recommendation
+   - Revalidation status (if applicable)
+   - Confidence score
+   - Severity reasoning (explain WHY)
+
+7. Strict Anti-Fake Rule
+   If a vulnerability cannot be verified via actual output,
+   DO NOT report it.
+
+Now:
+- Analyze the provided code.
+- Identify generic/fake logic.
+- Replace it with authentic execution-based validation.
+- Improve architecture where necessary.
+- Keep it production-grade.
+- Comment critical security decisions clearly.
+
+Return:
+- Refactored architecture overview
+- Updated core execution module
+- Updated validation example module
+- Evidence storage structure
+- Reporting object schema
+
+
+-----------------------------------------------------
+
+
+You are a principal security engineer designing a trusted validation platform.
+
+The current PoC and reporting system is too generic.
+It must be rewritten to be fully authentic and evidence-based.
+
+STRICT REQUIREMENTS:
+- No simulated exploitation
+- No hardcoded terminal output
+- No template-based fake PoCs
+- No severity exaggeration
+- No vulnerability claims without verified condition
+
+Redesign the PoC module using this structure:
+
+For each vulnerability module:
+
+1. Validation Command Builder
+   - Generates real safe validation command
+   - Does NOT perform destructive exploitation
+   - Must be reproducible manually
+
+2. Execution
+   - Use secure process execution
+   - Capture stdout, stderr, exit code, duration
+   - Enforce timeout
+   - Fail if command execution incomplete
+
+3. Evidence Capture
+   - Store raw output exactly as returned
+   - Generate SHA256 hash of output
+   - Record UTC timestamp
+   - Record rule version
+   - Record scanner version
+
+4. Logical Condition Evaluation
+   - Explicitly define vulnerability condition
+   - Confirm response status code when applicable
+   - Confirm header/field/state presence or absence
+   - Reject partial matches
+   - Output boolean result
+   - Output confidence score
+
+5. Reporting Object
+   Must include:
+   - Vulnerability name
+   - Affected target
+   - Detection command (exact string)
+   - Raw output (verbatim)
+   - Output hash
+   - Condition explanation
+   - Reproduction steps
+   - Fix recommendation (technical)
+   - Revalidation instructions
+   - Confidence score
+   - Severity explanation (risk-based, not dramatic)
+
+6. Fix Revalidation
+   - Re-run detection command
+   - Compare old vs new hash
+   - Determine state change
+   - Log both outputs
+
+7. Integrity Protection
+   - Prevent editing of raw output after storage
+   - Detect tampering via hash mismatch
+
+Now:
+- Analyze current PoC implementation.
+- Identify generic placeholders.
+- Replace with structured evidence-based modules.
+- Provide one fully implemented example module.
+- Provide report schema definition.
+- Ensure code is production-ready and secure.
+
+The goal is to make this system more trustworthy than typical scanners.
+
+-------------------------------------------------------------------------------------
+
+You are a principal security detection engineer.
+
+Redesign the vulnerability validation pipeline to aggressively eliminate false positives.
+
+STRICT REQUIREMENTS:
+- No vulnerability reported from single weak signal.
+- No regex-only detection.
+- No banner-only version checks.
+- No severity assignment without verified condition.
+
+Implement the following system:
+
+1. Multi-Stage Validation Pipeline
+   - Execution validation
+   - Structural validation
+   - Explicit condition verification
+   - Anti-ambiguity filter
+   - Optional secondary confirmation
+
+2. Confidence Scoring Model
+   - Weighted scoring system
+   - Noise penalties
+   - Minimum threshold configurable by mode
+   - Enterprise mode stricter than Bug Bounty mode
+
+3. Reproducibility Gate
+   - Re-run high severity findings
+   - Compare structural output
+   - Downgrade on inconsistency
+
+4. Environmental Noise Detection
+   - Detect WAF block pages
+   - Detect CDN challenges
+   - Detect generic error responses
+   - Mark uncertain instead of vulnerable
+
+5. Rule Versioning System
+   - rule_id
+   - rule_version
+   - condition_logic_hash
+   - re-evaluation mechanism
+
+6. False Positive Feedback Loop
+   - Allow user rejection logging
+   - Track repeated false positives
+   - Auto-adjust rule confidence weighting
+
+7. Reporting Changes
+   - Include confidence score
+   - Include condition breakdown
+   - Include ambiguity score
+   - Include reproducibility result
+   - Include why severity assigned
+
+Now:
+- Analyze existing detection modules.
+- Identify false-positive-prone logic.
+- Replace with structured multi-stage validation.
+- Provide one fully implemented example module.
+- Provide scoring engine implementation.
+- Provide updated report schema.
+
+Goal:
+Reduce false positives below industry average without reducing detection integrity.
+
+--------------------------------------------------------------------------------------------
+
+
+You are a world-class security intelligence assistant. Your task is to generate a **multi-layer, role-aware, export-ready security report** from raw vulnerability scan data, asset information, threat intelligence, and business context. 
+
+The report must be suitable for **HTML, PDF, PowerPoint, and JSON exports**. Include structured layouts, visual hints, colors, and all actionable insights. 
+
+Input:
+- Vulnerabilities: CVE IDs, descriptions, affected assets, CVSS scores, exploitability info
+- Asset metadata: owner, department, environment, cloud provider, compliance requirements
+- Threat intelligence: active exploits, dark web chatter, exploitability prediction
+- Business context: financial value of assets, potential downtime, regulatory fines, business criticality
+
+Output: Generate a structured, **role-aware report** with the following layers:
+
+1️⃣ **CTO / Board View (Strategic Layer)**
+- Avoid technical jargon
+- Include:
+  - Business risk exposure score (0–100)
+  - Trend over time (improving, declining, stable)
+  - Financial exposure estimation ($USD potential loss, downtime hours)
+  - Regulatory / compliance impact
+  - Benchmark vs industry
+  - Investment ROI guidance
+  - Top 5 urgent risks with concise descriptions
+  - Recommended top-priority actions with risk reduction and cost/ROI estimates
+  - AI-generated summary in 5 plain-language bullet points
+  - Board-ready export hints (charts, graphs, color codes: critical=red, high=orange, medium=yellow, low=green)
+- Suggested visuals:
+  - Pie chart for risk distribution
+  - Trend line for risk over time
+  - Bar chart for top risks
+
+2️⃣ **CISO / Security Team View (Operational Layer)**
+- Include all vulnerabilities with:
+  - Severity, exploitability, and business impact
+  - Risk prioritization (Severity × Exploitability × Business Impact)
+  - Attack chain visualization (“External attacker → Web server → Lateral move → Domain controller”)
+  - Active Exploit Flag (highlight vulnerabilities actively exploited in the wild)
+  - SLA tracking, compliance mapping (PCI, ISO, SOC2)
+  - Remediation ROI ranking (sort by risk reduction per hour of effort)
+- Suggested visuals:
+  - Heatmaps of risk vs asset criticality
+  - Attack path diagrams
+  - Risk matrices with color coding (critical=red, high=orange, medium=yellow, low=green)
+
+3️⃣ **Developer / DevOps View (Tactical Layer)**
+- Include for each vulnerability:
+  - Clear description
+  - Affected files and exact lines of code or configuration
+  - Step-by-step remediation instructions
+  - Secure code snippets / configuration fixes
+  - OWASP Top 10 and CWE mapping
+  - Optional AI-generated pull request suggestion
+- Visual hints:
+  - Simple component/system diagrams showing affected areas
+  - Color coding by severity (critical=red, high=orange, medium=yellow, low=green)
+
+4️⃣ **Risk Story Mode**
+- Instead of listing all vulnerabilities:
+  - Show scenario-based attack paths
+  - Example: “If attacker exploits 3 key weaknesses, they can access customer database, deploy ransomware, cause 3–5 days downtime.”
+- Highlight chained risks and business impact clearly
+
+5️⃣ **Advanced Features**
+- Predictive Risk Intelligence: likelihood of exploit in next 30 days based on CVE weaponization speed, exploit kit activity, threat actor patterns
+- Security Maturity Scoring: patch speed, exposure window, misconfiguration rate, developer fix velocity
+- “What Should I Fix First?” AI Button: suggest top fixes for maximum risk reduction in limited time
+- Human + AI Hybrid Report: allow notes from security team, translate into executive summary
+
+6️⃣ **Visualization, Colors, Formatting**
+- Use consistent color codes: critical=red, high=orange, medium=yellow, low=green
+- Charts: bar charts, pie charts, heatmaps, trend lines, attack chain diagrams
+- Tables: clear, sortable, highlight top 5 risks
+- Text formatting: headings, bullet points, clear action items
+- Export-ready for HTML, PDF, and PowerPoint
+- Include section headings for each role
+- Highlight urgent items visually
+
+7️⃣ **Architecture / System Output**
+- Core Scan Engine → Risk Intelligence Layer → Business Impact Engine → Role-Based Report Generator → Export Layer (PDF/HTML/PPT/API)
+- Output should be **JSON-structured**, with metadata for company, scan period, roles, vulnerabilities, remediation steps, and visual hints
+
+Constraints:
+- Executive summary: plain language, non-technical
+- Developer view: actionable, precise, ready to implement
+- Security team: must include attack paths and compliance mapping
+- Prioritize clarity, business impact, and actionable insights
+- Avoid overwhelming dashboards or meaningless metrics
+- All outputs must be modular, scalable, and AI-enhanced
+
+Task:
+Generate a **complete, role-aware, world-class security report**, structured for direct export into PDF, PowerPoint, HTML, and JSON dashboards, including all layers, visual hints, colors, scenario-based risk stories, predictive intelligence, remediation guidance, and AI-assisted executive translation.
