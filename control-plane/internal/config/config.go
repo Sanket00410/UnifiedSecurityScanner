@@ -8,6 +8,7 @@ import (
 
 type Config struct {
 	APIBindAddress     string
+	GRPCBindAddress    string
 	DatabaseURL        string
 	DatabaseMaxConns   int32
 	DatabaseMinConns   int32
@@ -20,6 +21,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		APIBindAddress:     getEnv("USS_API_BIND_ADDRESS", ":8080"),
+		GRPCBindAddress:    getEnv("USS_GRPC_BIND_ADDRESS", ":9090"),
 		DatabaseURL:        getEnv("USS_DATABASE_URL", "postgres://postgres:postgres@localhost:5432/unified_security_scanner?sslmode=disable"),
 		DatabaseMaxConns:   getInt32("USS_DATABASE_MAX_CONNS", 4),
 		DatabaseMinConns:   getInt32("USS_DATABASE_MIN_CONNS", 1),

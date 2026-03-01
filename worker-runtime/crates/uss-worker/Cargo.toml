@@ -2,3 +2,12 @@
 name = "uss-worker"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["rt", "net", "time"] }
+tokio-stream = "0.1.17"
+tonic = { version = "0.12.3", features = ["transport"] }
+prost = "0.13.5"
+
+[build-dependencies]
+tonic-build = "0.12.3"

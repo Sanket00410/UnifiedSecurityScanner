@@ -16,16 +16,9 @@ impl ExecutionMode {
             _ => Err(format!("unsupported execution mode: {value}")),
         }
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Passive => "passive",
-            Self::ActiveValidation => "active_validation",
-            Self::RestrictedExploit => "restricted_exploit",
-        }
-    }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AdapterRequest {
     pub job_id: String,

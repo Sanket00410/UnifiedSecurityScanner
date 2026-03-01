@@ -2,27 +2,39 @@ mod adapter;
 mod executors;
 
 use adapter::{AdapterRequest, AdapterResult, ExecutionMode};
+use proto::worker_control_plane_client::WorkerControlPlaneClient;
+use proto::ExecutionMode as ProtoExecutionMode;
+use proto::JobAssignment;
+use proto::JobResult;
+use proto::JobState;
+use proto::JobStatusEvent;
+use proto::WorkerCapability;
+use proto::WorkerRegistrationRequest;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::env;
 use std::process;
-use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::runtime::Builder;
+use tokio::time::sleep;
+use tokio_stream::iter;
+use tonic::transport::Channel;
+use tonic::transport::Endpoint;
+
+pub mod proto {
+    tonic::include_proto!("uss.worker.v1");
+}
 
 #[derive(Debug, Clone)]
 struct Config {
     worker_id: String,
-    control_plane: String,
+    worker_version: String,
+    operating_system: String,
+    hostname: String,
+    grpc_endpoint: String,
     heartbeat_interval: Duration,
     daemon_mode: bool,
-}
-
-#[derive(Debug)]
-struct HeartbeatEnvelope {
-    worker_id: String,
-    control_plane: String,
-    status: &'static str,
-    capabilities: Vec<&'static str>,
-    timestamp_unix: u64,
+    evidence_root: String,
 }
 
 fn main() {
@@ -31,35 +43,17 @@ fn main() {
         return;
     }
 
-    let cfg = Config::from_env();
-    eprintln!(
-        "worker starting id={} control_plane={} daemon_mode={}",
-        cfg.worker_id, cfg.control_plane, cfg.daemon_mode
-    );
-
-    let boot_contract = AdapterRequest {
-        job_id: "bootstrap".to_string(),
-        tenant_id: "bootstrap".to_string(),
-        adapter_id: "worker-bootstrap".to_string(),
-        target_kind: "system".to_string(),
-        target: "control-plane".to_string(),
-        execution_mode: ExecutionMode::Passive,
-        approved_profile: "bootstrap".to_string(),
-        approved_modules: Vec::new(),
-        labels: BTreeMap::new(),
-        evidence_dir: "./evidence".to_string(),
-        max_runtime_seconds: 5,
+    let runtime = match Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("build runtime: {err}");
+            process::exit(1);
+        }
     };
 
-    eprintln!("adapter_request_contract={}", adapter_request_json(&boot_contract));
-
-    emit_heartbeat(&cfg);
-
-    if cfg.daemon_mode {
-        loop {
-            thread::sleep(cfg.heartbeat_interval);
-            emit_heartbeat(&cfg);
-        }
+    if let Err(err) = runtime.block_on(run_worker()) {
+        eprintln!("{err}");
+        process::exit(1);
     }
 }
 
@@ -67,11 +61,94 @@ impl Config {
     fn from_env() -> Self {
         Self {
             worker_id: env::var("USS_WORKER_ID").unwrap_or_else(|_| "worker-local".to_string()),
-            control_plane: env::var("USS_CONTROL_PLANE_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
+            worker_version: env::var("USS_WORKER_VERSION").unwrap_or_else(|_| "0.1.0".to_string()),
+            operating_system: env::var("USS_WORKER_OS")
+                .unwrap_or_else(|_| env::consts::OS.to_string()),
+            hostname: env::var("USS_WORKER_HOST").unwrap_or_else(|_| {
+                env::var("COMPUTERNAME")
+                    .or_else(|_| env::var("HOSTNAME"))
+                    .unwrap_or_else(|_| "worker-host".to_string())
+            }),
+            grpc_endpoint: env::var("USS_WORKER_GRPC_ADDR")
+                .or_else(|_| env::var("USS_CONTROL_PLANE_URL"))
+                .unwrap_or_else(|_| "127.0.0.1:9090".to_string()),
             heartbeat_interval: parse_duration_seconds("USS_HEARTBEAT_INTERVAL_SECONDS", 30),
             daemon_mode: parse_bool("USS_WORKER_DAEMON", false),
+            evidence_root: env::var("USS_EVIDENCE_ROOT")
+                .unwrap_or_else(|_| "./evidence".to_string()),
         }
+    }
+}
+
+async fn run_worker() -> Result<(), String> {
+    let cfg = Config::from_env();
+    eprintln!(
+        "worker starting id={} grpc_endpoint={} daemon_mode={}",
+        cfg.worker_id, cfg.grpc_endpoint, cfg.daemon_mode
+    );
+
+    let endpoint = Endpoint::from_shared(normalize_grpc_endpoint(&cfg.grpc_endpoint))
+        .map_err(|err| format!("parse grpc endpoint: {err}"))?;
+    let channel = endpoint
+        .connect()
+        .await
+        .map_err(|err| format!("connect grpc: {err}"))?;
+    let mut client = WorkerControlPlaneClient::new(channel);
+
+    let registration = client
+        .register_worker(WorkerRegistrationRequest {
+            worker_id: cfg.worker_id.clone(),
+            worker_version: cfg.worker_version.clone(),
+            operating_system: cfg.operating_system.clone(),
+            hostname: cfg.hostname.clone(),
+            capabilities: default_capabilities(),
+        })
+        .await
+        .map_err(|err| format!("register worker: {err}"))?
+        .into_inner();
+
+    if !registration.accepted {
+        return Err("worker registration was rejected".to_string());
+    }
+
+    let lease_id = registration.lease_id;
+    let heartbeat_interval = if registration.heartbeat_interval_seconds > 0 {
+        Duration::from_secs(registration.heartbeat_interval_seconds as u64)
+    } else {
+        cfg.heartbeat_interval
+    };
+
+    eprintln!(
+        "worker registered lease_id={} heartbeat_interval_seconds={}",
+        lease_id,
+        heartbeat_interval.as_secs()
+    );
+
+    loop {
+        let heartbeat = client
+            .heartbeat(proto::HeartbeatRequest {
+                worker_id: cfg.worker_id.clone(),
+                lease_id: lease_id.clone(),
+                timestamp_unix: current_unix_timestamp() as i64,
+                metrics: default_metrics(),
+            })
+            .await
+            .map_err(|err| format!("worker heartbeat: {err}"))?
+            .into_inner();
+
+        if !heartbeat.assignments.is_empty() {
+            eprintln!("received {} assignments", heartbeat.assignments.len());
+        }
+
+        for assignment in heartbeat.assignments {
+            execute_assignment(&mut client, &cfg, assignment).await?;
+        }
+
+        if !cfg.daemon_mode {
+            return Ok(());
+        }
+
+        sleep(heartbeat_interval).await;
     }
 }
 
@@ -98,6 +175,185 @@ fn run_adapter_mode() {
     }
 }
 
+async fn execute_assignment(
+    client: &mut WorkerControlPlaneClient<Channel>,
+    cfg: &Config,
+    assignment: JobAssignment,
+) -> Result<(), String> {
+    let job_id = assignment.job_id.clone();
+    let adapter_id = assignment.adapter_id.clone();
+    let target = assignment.target.clone();
+
+    eprintln!(
+        "executing assignment job_id={} adapter_id={} target={}",
+        job_id, adapter_id, target
+    );
+
+    publish_status(
+        client,
+        &cfg.worker_id,
+        &job_id,
+        JobState::Running,
+        format!("starting {adapter_id}"),
+    )
+    .await?;
+
+    let request = assignment_to_request(cfg, assignment);
+    let result = executors::execute(&request);
+
+    let (final_state, evidence_paths, error_message, summary) = match result {
+        Ok(result) => adapt_result(result),
+        Err(err) => (
+            JobState::Failed,
+            Vec::new(),
+            Some(err.clone()),
+            format!("{} failed", request.adapter_id),
+        ),
+    };
+
+    client
+        .publish_job_result(JobResult {
+            worker_id: cfg.worker_id.clone(),
+            job_id,
+            final_state: final_state as i32,
+            findings: Vec::new(),
+            evidence_paths,
+            error_message: error_message.unwrap_or_default(),
+        })
+        .await
+        .map_err(|err| format!("publish job result: {err}"))?;
+
+    eprintln!("{summary}");
+    Ok(())
+}
+
+async fn publish_status(
+    client: &mut WorkerControlPlaneClient<Channel>,
+    worker_id: &str,
+    job_id: &str,
+    state: JobState,
+    detail: String,
+) -> Result<(), String> {
+    client
+        .publish_job_status(iter(vec![JobStatusEvent {
+            worker_id: worker_id.to_string(),
+            job_id: job_id.to_string(),
+            state: state as i32,
+            detail,
+            timestamp_unix: current_unix_timestamp() as i64,
+        }]))
+        .await
+        .map_err(|err| format!("publish job status: {err}"))?;
+
+    Ok(())
+}
+
+fn assignment_to_request(cfg: &Config, assignment: JobAssignment) -> AdapterRequest {
+    let evidence_dir = format!(
+        "{}/{}",
+        cfg.evidence_root.trim_end_matches(['/', '\\']),
+        assignment.job_id
+    );
+
+    AdapterRequest {
+        job_id: assignment.job_id,
+        tenant_id: assignment.tenant_id,
+        adapter_id: assignment.adapter_id,
+        target_kind: assignment.target_kind,
+        target: assignment.target,
+        execution_mode: map_execution_mode(assignment.execution_mode),
+        approved_profile: "assigned".to_string(),
+        approved_modules: assignment.approved_modules,
+        labels: assignment.labels.into_iter().collect::<BTreeMap<_, _>>(),
+        evidence_dir,
+        max_runtime_seconds: if assignment.max_runtime_seconds <= 0 {
+            300
+        } else {
+            assignment.max_runtime_seconds as u64
+        },
+    }
+}
+
+fn adapt_result(result: AdapterResult) -> (JobState, Vec<String>, Option<String>, String) {
+    let final_state = if result.success {
+        JobState::Completed
+    } else {
+        JobState::Failed
+    };
+
+    (
+        final_state,
+        result.evidence_paths,
+        result.error_message,
+        result.summary,
+    )
+}
+
+fn map_execution_mode(value: i32) -> ExecutionMode {
+    match ProtoExecutionMode::try_from(value).unwrap_or(ProtoExecutionMode::ActiveValidation) {
+        ProtoExecutionMode::Passive => ExecutionMode::Passive,
+        ProtoExecutionMode::RestrictedExploit => ExecutionMode::RestrictedExploit,
+        _ => ExecutionMode::ActiveValidation,
+    }
+}
+
+fn normalize_grpc_endpoint(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    }
+}
+
+fn default_metrics() -> HashMap<String, String> {
+    let mut metrics = HashMap::with_capacity(2);
+    metrics.insert("cpu".to_string(), "1".to_string());
+    metrics.insert("memory_mb".to_string(), "64".to_string());
+    metrics
+}
+
+fn default_capabilities() -> Vec<WorkerCapability> {
+    vec![
+        WorkerCapability {
+            adapter_id: "zap".to_string(),
+            supported_target_kinds: vec![
+                "domain".to_string(),
+                "api".to_string(),
+                "url".to_string(),
+            ],
+            supported_modes: vec![
+                ProtoExecutionMode::Passive as i32,
+                ProtoExecutionMode::ActiveValidation as i32,
+            ],
+            labels: vec!["web".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "nmap".to_string(),
+            supported_target_kinds: vec![
+                "domain".to_string(),
+                "host".to_string(),
+                "ip".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::ActiveValidation as i32],
+            labels: vec!["network".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "metasploit".to_string(),
+            supported_target_kinds: vec![
+                "domain".to_string(),
+                "host".to_string(),
+                "ip".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::RestrictedExploit as i32],
+            labels: vec!["restricted".to_string()],
+            linux_preferred: false,
+        },
+    ]
+}
+
 fn adapter_request_from_env() -> Result<AdapterRequest, String> {
     let approved_modules = env::var("USS_APPROVED_MODULES")
         .unwrap_or_default()
@@ -122,28 +378,6 @@ fn adapter_request_from_env() -> Result<AdapterRequest, String> {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(300),
     })
-}
-
-fn emit_heartbeat(cfg: &Config) {
-    let envelope = HeartbeatEnvelope {
-        worker_id: cfg.worker_id.clone(),
-        control_plane: cfg.control_plane.clone(),
-        status: "ready",
-        capabilities: vec![
-            "sast",
-            "sca",
-            "secrets",
-            "iac",
-            "dast",
-            "nmap",
-            "nuclei",
-            "zap",
-            "metasploit-restricted",
-        ],
-        timestamp_unix: current_unix_timestamp(),
-    };
-
-    println!("{}", heartbeat_json(&envelope));
 }
 
 fn required_env(key: &str) -> Result<String, String> {
@@ -181,39 +415,6 @@ fn current_unix_timestamp() -> u64 {
     }
 }
 
-fn heartbeat_json(value: &HeartbeatEnvelope) -> String {
-    format!(
-        "{{\"worker_id\":\"{}\",\"control_plane\":\"{}\",\"status\":\"{}\",\"capabilities\":{},\"timestamp_unix\":{}}}",
-        escape_json(&value.worker_id),
-        escape_json(&value.control_plane),
-        value.status,
-        string_array_json(&value.capabilities),
-        value.timestamp_unix
-    )
-}
-
-fn adapter_request_json(value: &AdapterRequest) -> String {
-    let labels = map_json(&value.labels);
-    format!(
-        concat!(
-            "{{\"job_id\":\"{}\",\"tenant_id\":\"{}\",\"adapter_id\":\"{}\",\"target_kind\":\"{}\",",
-            "\"target\":\"{}\",\"execution_mode\":\"{}\",\"approved_profile\":\"{}\",",
-            "\"approved_modules\":{},\"labels\":{},\"evidence_dir\":\"{}\",\"max_runtime_seconds\":{}}}"
-        ),
-        escape_json(&value.job_id),
-        escape_json(&value.tenant_id),
-        escape_json(&value.adapter_id),
-        escape_json(&value.target_kind),
-        escape_json(&value.target),
-        value.execution_mode.as_str(),
-        escape_json(&value.approved_profile),
-        string_array_json(&value.approved_modules),
-        labels,
-        escape_json(&value.evidence_dir),
-        value.max_runtime_seconds
-    )
-}
-
 fn adapter_result_json(value: &AdapterResult) -> String {
     let error_json = match &value.error_message {
         Some(message) => format!("\"{}\"", escape_json(message)),
@@ -239,20 +440,6 @@ fn string_array_json(values: &[impl AsRef<str>]) -> String {
         .map(|value| format!("\"{}\"", escape_json(value.as_ref())))
         .collect::<Vec<_>>();
     format!("[{}]", items.join(","))
-}
-
-fn map_json(values: &BTreeMap<String, String>) -> String {
-    let items = values
-        .iter()
-        .map(|(key, value)| {
-            format!(
-                "\"{}\":\"{}\"",
-                escape_json(key),
-                escape_json(value)
-            )
-        })
-        .collect::<Vec<_>>();
-    format!("{{{}}}", items.join(","))
 }
 
 fn escape_json(value: &str) -> String {

@@ -25,7 +25,10 @@ impl ScannerAdapter for ZapAdapter {
     }
 
     fn supports(&self, mode: &ExecutionMode) -> bool {
-        matches!(mode, ExecutionMode::Passive | ExecutionMode::ActiveValidation)
+        matches!(
+            mode,
+            ExecutionMode::Passive | ExecutionMode::ActiveValidation
+        )
     }
 
     fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
@@ -51,7 +54,13 @@ impl ScannerAdapter for ZapAdapter {
             args.push("-silent".to_string());
         }
 
-        run_process(self.id(), &binary, &args, &evidence_path, request.max_runtime_seconds)
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &evidence_path,
+            request.max_runtime_seconds,
+        )
     }
 }
 
@@ -83,7 +92,13 @@ impl ScannerAdapter for NmapAdapter {
             request.target.clone(),
         ];
 
-        run_process(self.id(), &binary, &args, &evidence_path, request.max_runtime_seconds)
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &evidence_path,
+            request.max_runtime_seconds,
+        )
     }
 }
 
@@ -120,7 +135,13 @@ impl ScannerAdapter for MetasploitAdapter {
         );
         let args = vec!["-q".to_string(), "-x".to_string(), script];
 
-        run_process(self.id(), &binary, &args, &evidence_path, request.max_runtime_seconds)
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &evidence_path,
+            request.max_runtime_seconds,
+        )
     }
 }
 
@@ -198,7 +219,9 @@ fn run_process(
                 if started.elapsed() > Duration::from_secs(max_runtime_seconds) {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("{adapter_id} timed out after {max_runtime_seconds} seconds"));
+                    return Err(format!(
+                        "{adapter_id} timed out after {max_runtime_seconds} seconds"
+                    ));
                 }
 
                 thread::sleep(Duration::from_millis(200));

@@ -53,3 +53,22 @@ type JobAssignment struct {
 type HeartbeatResponse struct {
 	Assignments []JobAssignment `json:"assignments"`
 }
+
+type TaskStatus string
+
+const (
+	TaskStatusQueued    TaskStatus = "queued"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusCanceled  TaskStatus = "canceled"
+)
+
+type TaskContext struct {
+	TaskID     string
+	ScanJobID  string
+	TenantID   string
+	AdapterID  string
+	TargetKind string
+	Target     string
+}

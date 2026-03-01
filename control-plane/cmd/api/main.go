@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"unifiedsecurityscanner/control-plane/internal/config"
+	"unifiedsecurityscanner/control-plane/internal/grpcapi"
 	"unifiedsecurityscanner/control-plane/internal/httpapi"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 )
@@ -28,12 +29,18 @@ func main() {
 	}
 	defer store.Close()
 
-	server := httpapi.New(cfg, store)
-	errCh := make(chan error, 1)
+	httpServer := httpapi.New(cfg, store)
+	grpcServer := grpcapi.New(cfg.GRPCBindAddress, store, logger)
+	errCh := make(chan error, 2)
 
 	go func() {
 		logger.Printf("starting control plane api bind=%s version=%s", cfg.APIBindAddress, cfg.BuildVersion)
-		errCh <- server.ListenAndServe()
+		errCh <- httpServer.ListenAndServe()
+	}()
+
+	go func() {
+		logger.Printf("starting worker grpc bind=%s version=%s", cfg.GRPCBindAddress, cfg.BuildVersion)
+		errCh <- grpcServer.ListenAndServe()
 	}()
 
 	select {
@@ -42,8 +49,11 @@ func main() {
 		defer cancel()
 
 		logger.Println("shutdown signal received")
-		if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Fatalf("graceful shutdown failed: %v", err)
+		}
+		if err := grpcServer.Shutdown(shutdownCtx); err != nil {
+			logger.Fatalf("grpc shutdown failed: %v", err)
 		}
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {

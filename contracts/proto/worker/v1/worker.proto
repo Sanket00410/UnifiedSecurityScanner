@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package uss.worker.v1;
 
-option go_package = "unifiedsecurityscanner/contracts/proto/worker/v1;workerv1";
+option go_package = "unifiedsecurityscanner/control-plane/internal/gen/workerv1;workerv1";
 
 enum ExecutionMode {
   EXECUTION_MODE_UNSPECIFIED = 0;
