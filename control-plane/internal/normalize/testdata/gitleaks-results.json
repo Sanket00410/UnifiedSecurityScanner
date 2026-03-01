@@ -1,0 +1,8 @@
+[
+  {
+    "RuleID": "generic-api-key",
+    "Description": "Generic API key detected",
+    "File": "config/app.env",
+    "StartLine": 9
+  }
+]

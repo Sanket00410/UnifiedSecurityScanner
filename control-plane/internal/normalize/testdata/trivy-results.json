@@ -1,0 +1,20 @@
+{
+  "Results": [
+    {
+      "Target": "go.mod",
+      "Type": "gomod",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2025-1000",
+          "PkgName": "example/pkg",
+          "InstalledVersion": "1.0.0",
+          "FixedVersion": "1.0.3",
+          "Severity": "HIGH",
+          "Title": "Vulnerable dependency",
+          "Description": "A sample dependency issue.",
+          "PrimaryURL": "https://example.com/CVE-2025-1000"
+        }
+      ]
+    }
+  ]
+}

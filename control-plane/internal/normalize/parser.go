@@ -2,6 +2,7 @@ package normalize
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,6 +35,14 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseNmap(ctx, evidencePaths)
 	case "metasploit":
 		return parseMetasploit(ctx, evidencePaths)
+	case "semgrep":
+		return parseSemgrep(ctx, evidencePaths)
+	case "trivy":
+		return parseTrivy(ctx, evidencePaths)
+	case "gitleaks":
+		return parseGitleaks(ctx, evidencePaths)
+	case "checkov":
+		return parseCheckov(ctx, evidencePaths)
 	default:
 		return nil, fmt.Errorf("unsupported parser for adapter %s", adapterID)
 	}
@@ -194,6 +203,270 @@ func parseMetasploit(ctx Context, evidencePaths []string) ([]models.CanonicalFin
 	return findings, nil
 }
 
+func parseSemgrep(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type semgrepResult struct {
+		CheckID string `json:"check_id"`
+		Path    string `json:"path"`
+		Start   struct {
+			Line int `json:"line"`
+			Col  int `json:"col"`
+		} `json:"start"`
+		Extra struct {
+			Message  string `json:"message"`
+			Severity string `json:"severity"`
+			Metadata struct {
+				Category string `json:"category"`
+			} `json:"metadata"`
+		} `json:"extra"`
+	}
+	type semgrepOutput struct {
+		Results []semgrepResult `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open semgrep evidence %s: %w", path, err)
+		}
+
+		var payload semgrepOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode semgrep evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results {
+			category := "sast_rule_match"
+			if strings.TrimSpace(item.Extra.Metadata.Category) != "" {
+				category = strings.ToLower(strings.TrimSpace(item.Extra.Metadata.Category))
+			}
+
+			title := strings.TrimSpace(item.Extra.Message)
+			if title == "" {
+				title = strings.TrimSpace(item.CheckID)
+			}
+
+			findings = append(findings, baseFinding(ctx, now, category, title, normalizeSeverity(item.Extra.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind:   "file",
+				Path:   item.Path,
+				Line:   item.Start.Line,
+				Column: item.Start.Col,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Semgrep rule match",
+			}))
+		}
+	}
+
+	return findings, nil
+}
+
+func parseTrivy(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type trivyVulnerability struct {
+		VulnerabilityID  string `json:"VulnerabilityID"`
+		PkgName          string `json:"PkgName"`
+		InstalledVersion string `json:"InstalledVersion"`
+		FixedVersion     string `json:"FixedVersion"`
+		Severity         string `json:"Severity"`
+		Title            string `json:"Title"`
+		Description      string `json:"Description"`
+		PrimaryURL       string `json:"PrimaryURL"`
+	}
+	type trivyResult struct {
+		Target          string               `json:"Target"`
+		Type            string               `json:"Type"`
+		Vulnerabilities []trivyVulnerability `json:"Vulnerabilities"`
+	}
+	type trivyOutput struct {
+		Results []trivyResult `json:"Results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open trivy evidence %s: %w", path, err)
+		}
+
+		var payload trivyOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode trivy evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, result := range payload.Results {
+			for _, vuln := range result.Vulnerabilities {
+				title := strings.TrimSpace(vuln.Title)
+				if title == "" {
+					title = strings.TrimSpace(vuln.VulnerabilityID)
+				}
+
+				finding := baseFinding(ctx, now, "dependency_vulnerability", title, normalizeSeverity(vuln.Severity, "medium"), "high", models.CanonicalLocation{
+					Kind: "dependency",
+					Path: result.Target,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Trivy dependency vulnerability",
+				})
+				finding.Description = strings.TrimSpace(vuln.Description)
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      fixedVersionSummary(vuln.FixedVersion),
+					FixAvailable: strings.TrimSpace(vuln.FixedVersion) != "",
+					References:   nonEmptyStrings(vuln.PrimaryURL),
+				}
+				if strings.TrimSpace(vuln.PkgName) != "" {
+					finding.Tags = append(finding.Tags, "package:"+vuln.PkgName)
+				}
+				if strings.TrimSpace(vuln.InstalledVersion) != "" {
+					finding.Tags = append(finding.Tags, "version:"+vuln.InstalledVersion)
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parseGitleaks(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type gitleaksFinding struct {
+		RuleID      string `json:"RuleID"`
+		Description string `json:"Description"`
+		File        string `json:"File"`
+		StartLine   int    `json:"StartLine"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open gitleaks evidence %s: %w", path, err)
+		}
+
+		payload := make([]gitleaksFinding, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode gitleaks evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload {
+			title := strings.TrimSpace(item.Description)
+			if title == "" {
+				title = "Potential secret exposure"
+			}
+
+			finding := baseFinding(ctx, now, "secret_exposure", title, "high", "high", models.CanonicalLocation{
+				Kind: "file",
+				Path: item.File,
+				Line: item.StartLine,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Gitleaks secret match",
+			})
+			finding.Description = "Potential secret material was detected. Rotate the credential and remove it from source control history."
+			if strings.TrimSpace(item.RuleID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+			}
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Rotate the exposed secret and replace it with a managed secret reference.",
+				FixAvailable: true,
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseCheckov(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type checkovFailedCheck struct {
+		CheckID       string `json:"check_id"`
+		CheckName     string `json:"check_name"`
+		FilePath      string `json:"file_path"`
+		Resource      string `json:"resource"`
+		Severity      string `json:"severity"`
+		FileLineRange []int  `json:"file_line_range"`
+	}
+	type checkovOutput struct {
+		Results struct {
+			FailedChecks []checkovFailedCheck `json:"failed_checks"`
+		} `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open checkov evidence %s: %w", path, err)
+		}
+
+		var payload checkovOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode checkov evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results.FailedChecks {
+			title := strings.TrimSpace(item.CheckName)
+			if title == "" {
+				title = strings.TrimSpace(item.CheckID)
+			}
+
+			line := 0
+			if len(item.FileLineRange) > 0 {
+				line = item.FileLineRange[0]
+			}
+
+			finding := baseFinding(ctx, now, "iac_misconfiguration", title, normalizeSeverity(item.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: "file",
+				Path: item.FilePath,
+				Line: line,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Checkov failed policy",
+			})
+			if strings.TrimSpace(item.Resource) != "" {
+				finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.Resource))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func zapSeverity(line string) (severity string, category string, ok bool) {
 	lower := strings.ToLower(line)
 	switch {
@@ -296,6 +569,14 @@ func priorityForSeverity(severity string) string {
 
 func sourceLayer(adapterID string) string {
 	switch adapterID {
+	case "semgrep":
+		return "sast"
+	case "trivy":
+		return "sca"
+	case "gitleaks":
+		return "secrets"
+	case "checkov":
+		return "iac"
 	case "zap":
 		return "dast"
 	case "nmap", "metasploit":
@@ -303,4 +584,39 @@ func sourceLayer(adapterID string) string {
 	default:
 		return "pentest"
 	}
+}
+
+func normalizeSeverity(value string, fallback string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "critical", "error":
+		return "critical"
+	case "high":
+		return "high"
+	case "medium", "warning", "warn":
+		return "medium"
+	case "low", "info", "informational":
+		return "low"
+	default:
+		return fallback
+	}
+}
+
+func fixedVersionSummary(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("Upgrade to fixed version %s.", strings.TrimSpace(value))
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
 }

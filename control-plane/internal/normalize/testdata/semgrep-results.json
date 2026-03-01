@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "check_id": "go.security.audit.hardcoded-secret",
+      "path": "cmd/api/main.go",
+      "start": {
+        "line": 42,
+        "col": 7
+      },
+      "extra": {
+        "message": "Potential hardcoded credential",
+        "severity": "HIGH",
+        "metadata": {
+          "category": "sast_rule_match"
+        }
+      }
+    }
+  ]
+}

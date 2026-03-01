@@ -71,3 +71,114 @@ func TestParseMetasploitFixture(t *testing.T) {
 		t.Fatalf("expected module name in finding title, got %s", finding.Title)
 	}
 }
+
+func TestParseSemgrepFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("semgrep", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-semgrep",
+		AdapterID:  "semgrep",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "semgrep-results.json")})
+	if err != nil {
+		t.Fatalf("parse semgrep fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Severity != "high" {
+		t.Fatalf("unexpected finding severity: %s", finding.Severity)
+	}
+	if finding.Locations[0].Path != "cmd/api/main.go" {
+		t.Fatalf("unexpected finding path: %s", finding.Locations[0].Path)
+	}
+}
+
+func TestParseTrivyFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("trivy", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-trivy",
+		AdapterID:  "trivy",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "trivy-results.json")})
+	if err != nil {
+		t.Fatalf("parse trivy fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Remediation == nil || !finding.Remediation.FixAvailable {
+		t.Fatal("expected trivy finding to include a fixable remediation")
+	}
+}
+
+func TestParseGitleaksFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("gitleaks", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-gitleaks",
+		AdapterID:  "gitleaks",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "gitleaks-results.json")})
+	if err != nil {
+		t.Fatalf("parse gitleaks fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "secrets" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "secret_exposure" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+}
+
+func TestParseCheckovFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("checkov", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-checkov",
+		AdapterID:  "checkov",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "checkov-results.json")})
+	if err != nil {
+		t.Fatalf("parse checkov fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Locations[0].Line != 12 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}

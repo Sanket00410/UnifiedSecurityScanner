@@ -1,15 +1,3 @@
-mod adapter;
-mod executors;
-
-use adapter::{AdapterRequest, AdapterResult, ExecutionMode};
-use proto::worker_control_plane_client::WorkerControlPlaneClient;
-use proto::ExecutionMode as ProtoExecutionMode;
-use proto::JobAssignment;
-use proto::JobResult;
-use proto::JobState;
-use proto::JobStatusEvent;
-use proto::WorkerCapability;
-use proto::WorkerRegistrationRequest;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
@@ -20,10 +8,17 @@ use tokio::time::sleep;
 use tokio_stream::iter;
 use tonic::transport::Channel;
 use tonic::transport::Endpoint;
-
-pub mod proto {
-    tonic::include_proto!("uss.worker.v1");
-}
+use uss_worker::adapter::{AdapterRequest, AdapterResult, ExecutionMode};
+use uss_worker::executors;
+use uss_worker::proto;
+use uss_worker::proto::worker_control_plane_client::WorkerControlPlaneClient;
+use uss_worker::proto::ExecutionMode as ProtoExecutionMode;
+use uss_worker::proto::JobAssignment;
+use uss_worker::proto::JobResult;
+use uss_worker::proto::JobState;
+use uss_worker::proto::JobStatusEvent;
+use uss_worker::proto::WorkerCapability;
+use uss_worker::proto::WorkerRegistrationRequest;
 
 #[derive(Debug, Clone)]
 struct Config {
@@ -349,6 +344,34 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             ],
             supported_modes: vec![ProtoExecutionMode::RestrictedExploit as i32],
             labels: vec!["restricted".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "semgrep".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sast".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "trivy".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sca".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "gitleaks".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "secrets".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "checkov".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "iac".to_string()],
             linux_preferred: false,
         },
     ]

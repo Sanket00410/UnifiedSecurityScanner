@@ -11,6 +11,10 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "zap" => ZapAdapter.execute(request),
         "nmap" => NmapAdapter.execute(request),
         "metasploit" => MetasploitAdapter.execute(request),
+        "semgrep" => SemgrepAdapter.execute(request),
+        "trivy" => TrivyAdapter.execute(request),
+        "gitleaks" => GitleaksAdapter.execute(request),
+        "checkov" => CheckovAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
     }
 }
@@ -18,6 +22,10 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
 struct ZapAdapter;
 struct NmapAdapter;
 struct MetasploitAdapter;
+struct SemgrepAdapter;
+struct TrivyAdapter;
+struct GitleaksAdapter;
+struct CheckovAdapter;
 
 impl ScannerAdapter for ZapAdapter {
     fn id(&self) -> &'static str {
@@ -38,7 +46,7 @@ impl ScannerAdapter for ZapAdapter {
     fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
         self.validate(request)?;
 
-        let evidence_path = ensure_evidence_path(&request.evidence_dir, "zap-output.log")?;
+        let report_path = ensure_evidence_path(&request.evidence_dir, "zap-output.log")?;
         let binary = env::var("USS_ZAP_CMD").unwrap_or_else(|_| default_zap_binary().to_string());
 
         let mut args = vec![
@@ -46,7 +54,7 @@ impl ScannerAdapter for ZapAdapter {
             "-quickurl".to_string(),
             request.target.clone(),
             "-quickout".to_string(),
-            evidence_path.to_string_lossy().to_string(),
+            report_path.to_string_lossy().to_string(),
             "-quickprogress".to_string(),
         ];
 
@@ -58,8 +66,9 @@ impl ScannerAdapter for ZapAdapter {
             self.id(),
             &binary,
             &args,
-            &evidence_path,
+            &report_path,
             request.max_runtime_seconds,
+            vec![report_path.clone()],
         )
     }
 }
@@ -80,15 +89,15 @@ impl ScannerAdapter for NmapAdapter {
     fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
         self.validate(request)?;
 
-        let evidence_path = ensure_evidence_path(&request.evidence_dir, "nmap-output.log")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "nmap-output.log")?;
         let binary = env::var("USS_NMAP_CMD").unwrap_or_else(|_| "nmap".to_string());
-        let output_file = ensure_evidence_path(&request.evidence_dir, "nmap-report.txt")?;
+        let report_path = ensure_evidence_path(&request.evidence_dir, "nmap-report.txt")?;
 
         let args = vec![
             "-Pn".to_string(),
             "-T4".to_string(),
             "-oN".to_string(),
-            output_file.to_string_lossy().to_string(),
+            report_path.to_string_lossy().to_string(),
             request.target.clone(),
         ];
 
@@ -96,8 +105,9 @@ impl ScannerAdapter for NmapAdapter {
             self.id(),
             &binary,
             &args,
-            &evidence_path,
+            &log_path,
             request.max_runtime_seconds,
+            vec![report_path],
         )
     }
 }
@@ -141,6 +151,166 @@ impl ScannerAdapter for MetasploitAdapter {
             &args,
             &evidence_path,
             request.max_runtime_seconds,
+            vec![evidence_path.clone()],
+        )
+    }
+}
+
+impl ScannerAdapter for SemgrepAdapter {
+    fn id(&self) -> &'static str {
+        "semgrep"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "semgrep-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "semgrep-exec.log")?;
+        let binary = env::var("USS_SEMGREP_CMD").unwrap_or_else(|_| "semgrep".to_string());
+        let args = vec![
+            "scan".to_string(),
+            "--config".to_string(),
+            "auto".to_string(),
+            "--json".to_string(),
+            "--output".to_string(),
+            report_path.to_string_lossy().to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+        )
+    }
+}
+
+impl ScannerAdapter for TrivyAdapter {
+    fn id(&self) -> &'static str {
+        "trivy"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "trivy-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "trivy-exec.log")?;
+        let binary = env::var("USS_TRIVY_CMD").unwrap_or_else(|_| "trivy".to_string());
+        let args = vec![
+            "fs".to_string(),
+            "--quiet".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--output".to_string(),
+            report_path.to_string_lossy().to_string(),
+            "--scanners".to_string(),
+            "vuln".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+        )
+    }
+}
+
+impl ScannerAdapter for GitleaksAdapter {
+    fn id(&self) -> &'static str {
+        "gitleaks"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "gitleaks-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "gitleaks-exec.log")?;
+        let binary = env::var("USS_GITLEAKS_CMD").unwrap_or_else(|_| "gitleaks".to_string());
+        let args = vec![
+            "detect".to_string(),
+            "--no-banner".to_string(),
+            "--report-format".to_string(),
+            "json".to_string(),
+            "--report-path".to_string(),
+            report_path.to_string_lossy().to_string(),
+            "--source".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+        )
+    }
+}
+
+impl ScannerAdapter for CheckovAdapter {
+    fn id(&self) -> &'static str {
+        "checkov"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "checkov-results.json")?;
+        let binary = env::var("USS_CHECKOV_CMD").unwrap_or_else(|_| "checkov".to_string());
+        let args = vec![
+            "-d".to_string(),
+            request.target.clone(),
+            "-o".to_string(),
+            "json".to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
         )
     }
 }
@@ -180,11 +350,20 @@ fn run_process(
     args: &[String],
     log_path: &Path,
     max_runtime_seconds: u64,
+    reported_paths: Vec<PathBuf>,
 ) -> Result<AdapterResult, String> {
     let stdout_file = File::create(log_path).map_err(|err| format!("create log file: {err}"))?;
     let stderr_file = stdout_file
         .try_clone()
         .map_err(|err| format!("clone log file: {err}"))?;
+    let evidence_paths = if reported_paths.is_empty() {
+        vec![log_path.to_string_lossy().to_string()]
+    } else {
+        reported_paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+    };
 
     let mut child = Command::new(binary)
         .args(args)
@@ -201,7 +380,7 @@ fn run_process(
                     return Ok(AdapterResult {
                         success: true,
                         finding_count: 0,
-                        evidence_paths: vec![log_path.to_string_lossy().to_string()],
+                        evidence_paths,
                         summary: format!("{adapter_id} completed successfully"),
                         error_message: None,
                     });
@@ -210,7 +389,7 @@ fn run_process(
                 return Ok(AdapterResult {
                     success: false,
                     finding_count: 0,
-                    evidence_paths: vec![log_path.to_string_lossy().to_string()],
+                    evidence_paths,
                     summary: format!("{adapter_id} exited with status {status}"),
                     error_message: Some(format!("{adapter_id} exited with non-zero status")),
                 });

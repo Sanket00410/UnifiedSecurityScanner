@@ -21,6 +21,8 @@ var (
 	jobSequence            uint64
 	leaseSequence          uint64
 	taskSequence           uint64
+	policySequence         uint64
+	remediationSequence    uint64
 	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
 	ErrTaskNotFound        = errors.New("task not found")
 )
@@ -68,7 +70,7 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 	now := time.Now().UTC()
 	tools := sanitizeTools(request.Tools)
 	if len(tools) == 0 {
-		tools = []string{"semgrep", "trivy", "zap"}
+		tools = defaultToolsForTargetKind(request.TargetKind)
 	}
 
 	job := models.ScanJob{
@@ -388,6 +390,259 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 	return nil
 }
 
+func (s *Store) ListFindings(ctx context.Context, limit int) ([]models.CanonicalFinding, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT finding_json
+		FROM normalized_findings
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list findings: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]models.CanonicalFinding, 0, limit)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, fmt.Errorf("scan normalized finding: %w", err)
+		}
+
+		var finding models.CanonicalFinding
+		if err := json.Unmarshal(payload, &finding); err != nil {
+			return nil, fmt.Errorf("unmarshal normalized finding: %w", err)
+		}
+
+		out = append(out, finding)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate findings: %w", err)
+	}
+
+	return out, nil
+}
+
+func (s *Store) ListAssets(ctx context.Context, limit int) ([]models.AssetSummary, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			sj.target,
+			sj.target_kind,
+			MAX(sj.updated_at) AS last_scanned_at,
+			COUNT(DISTINCT sj.id) AS scan_count,
+			COUNT(nf.finding_id) AS finding_count
+		FROM scan_jobs sj
+		LEFT JOIN normalized_findings nf ON nf.scan_job_id = sj.id
+		GROUP BY sj.target, sj.target_kind
+		ORDER BY MAX(sj.updated_at) DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list assets: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]models.AssetSummary, 0, limit)
+	for rows.Next() {
+		var asset models.AssetSummary
+		if err := rows.Scan(
+			&asset.AssetID,
+			&asset.AssetType,
+			&asset.LastScannedAt,
+			&asset.ScanCount,
+			&asset.FindingCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan asset summary: %w", err)
+		}
+
+		out = append(out, asset)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate assets: %w", err)
+	}
+
+	return out, nil
+}
+
+func (s *Store) ListPolicies(ctx context.Context, limit int) ([]models.Policy, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+		FROM policies
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]models.Policy, 0, limit)
+	for rows.Next() {
+		var policy models.Policy
+		var rulesJSON []byte
+
+		if err := rows.Scan(
+			&policy.ID,
+			&policy.Name,
+			&policy.Scope,
+			&policy.Mode,
+			&policy.Enabled,
+			&rulesJSON,
+			&policy.UpdatedBy,
+			&policy.CreatedAt,
+			&policy.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan policy: %w", err)
+		}
+
+		if len(rulesJSON) > 0 {
+			if err := json.Unmarshal(rulesJSON, &policy.Rules); err != nil {
+				return nil, fmt.Errorf("unmarshal policy rules: %w", err)
+			}
+		}
+
+		out = append(out, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate policies: %w", err)
+	}
+
+	return out, nil
+}
+
+func (s *Store) CreatePolicy(ctx context.Context, request models.CreatePolicyRequest) (models.Policy, error) {
+	now := time.Now().UTC()
+	policy := models.Policy{
+		ID:        nextPolicyID(),
+		Name:      strings.TrimSpace(request.Name),
+		Scope:     strings.TrimSpace(request.Scope),
+		Mode:      strings.TrimSpace(request.Mode),
+		Enabled:   request.Enabled,
+		Rules:     sanitizeRuleList(request.Rules),
+		UpdatedBy: strings.TrimSpace(request.UpdatedBy),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if policy.Scope == "" {
+		policy.Scope = "global"
+	}
+	if policy.Mode == "" {
+		policy.Mode = "monitor"
+	}
+	if policy.UpdatedBy == "" {
+		policy.UpdatedBy = "system"
+	}
+
+	rulesJSON, err := json.Marshal(policy.Rules)
+	if err != nil {
+		return models.Policy{}, fmt.Errorf("marshal policy rules: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO policies (
+			id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $8
+		)
+	`, policy.ID, policy.Name, policy.Scope, policy.Mode, policy.Enabled, rulesJSON, policy.UpdatedBy, now)
+	if err != nil {
+		return models.Policy{}, fmt.Errorf("insert policy: %w", err)
+	}
+
+	return policy, nil
+}
+
+func (s *Store) ListRemediations(ctx context.Context, limit int) ([]models.RemediationAction, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, finding_id, title, status, owner, due_at, notes, created_at, updated_at
+		FROM remediation_actions
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list remediations: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]models.RemediationAction, 0, limit)
+	for rows.Next() {
+		var item models.RemediationAction
+		if err := rows.Scan(
+			&item.ID,
+			&item.FindingID,
+			&item.Title,
+			&item.Status,
+			&item.Owner,
+			&item.DueAt,
+			&item.Notes,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan remediation: %w", err)
+		}
+
+		out = append(out, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate remediations: %w", err)
+	}
+
+	return out, nil
+}
+
+func (s *Store) CreateRemediation(ctx context.Context, request models.CreateRemediationRequest) (models.RemediationAction, error) {
+	now := time.Now().UTC()
+	item := models.RemediationAction{
+		ID:        nextRemediationID(),
+		FindingID: strings.TrimSpace(request.FindingID),
+		Title:     strings.TrimSpace(request.Title),
+		Status:    strings.TrimSpace(request.Status),
+		Owner:     strings.TrimSpace(request.Owner),
+		DueAt:     request.DueAt,
+		Notes:     strings.TrimSpace(request.Notes),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if item.Status == "" {
+		item.Status = "open"
+	}
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO remediation_actions (
+			id, finding_id, title, status, owner, due_at, notes, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $8
+		)
+	`, item.ID, item.FindingID, item.Title, item.Status, item.Owner, item.DueAt, item.Notes, now)
+	if err != nil {
+		return models.RemediationAction{}, fmt.Errorf("insert remediation: %w", err)
+	}
+
+	return item, nil
+}
+
 func claimAssignmentsTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -637,6 +892,16 @@ func nextTaskID() string {
 	return fmt.Sprintf("task-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
+func nextPolicyID() string {
+	sequence := atomic.AddUint64(&policySequence, 1)
+	return fmt.Sprintf("policy-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextRemediationID() string {
+	sequence := atomic.AddUint64(&remediationSequence, 1)
+	return fmt.Sprintf("remediation-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
 func sanitizeTools(tools []string) []string {
 	seen := make(map[string]struct{}, len(tools))
 	out := make([]string, 0, len(tools))
@@ -655,6 +920,35 @@ func sanitizeTools(tools []string) []string {
 	}
 
 	return out
+}
+
+func sanitizeRuleList(rules []string) []string {
+	seen := make(map[string]struct{}, len(rules))
+	out := make([]string, 0, len(rules))
+
+	for _, rule := range rules {
+		normalized := strings.TrimSpace(rule)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+
+	return out
+}
+
+func defaultToolsForTargetKind(targetKind string) []string {
+	switch strings.ToLower(strings.TrimSpace(targetKind)) {
+	case "repo", "repository", "codebase", "filesystem":
+		return []string{"semgrep", "trivy", "gitleaks", "checkov"}
+	default:
+		return []string{"zap"}
+	}
 }
 
 func approvalModeForTools(tools []string) string {
@@ -689,6 +983,8 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "semgrep", "trivy", "gitleaks", "checkov":
+		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
 	case "zap":
@@ -713,6 +1009,14 @@ func approvedModulesForTool(tool string, targetKind string) []string {
 
 func maxRuntimeForTool(tool string) int64 {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "semgrep":
+		return 300
+	case "trivy":
+		return 300
+	case "gitleaks":
+		return 180
+	case "checkov":
+		return 240
 	case "zap":
 		return 600
 	case "metasploit":

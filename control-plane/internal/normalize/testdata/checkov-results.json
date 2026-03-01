@@ -1,0 +1,14 @@
+{
+  "results": {
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_21",
+        "check_name": "Ensure S3 bucket versioning is enabled",
+        "file_path": "infra/main.tf",
+        "resource": "aws_s3_bucket.logs",
+        "severity": "MEDIUM",
+        "file_line_range": [12, 28]
+      }
+    ]
+  }
+}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unified Security Scanner</title>
+  <link rel="stylesheet" href="/app/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="eyebrow">Unified Security Scanner</div>
+      <h1>Findings, Assets, Policies, and Remediation</h1>
+      <p class="subtitle">A live control-plane view over normalized findings and operational policy.</p>
+    </header>
+
+    <section class="metrics" id="metrics">
+      <article class="metric">
+        <span class="label">Findings</span>
+        <strong id="metric-findings">0</strong>
+      </article>
+      <article class="metric">
+        <span class="label">Assets</span>
+        <strong id="metric-assets">0</strong>
+      </article>
+      <article class="metric">
+        <span class="label">Policies</span>
+        <strong id="metric-policies">0</strong>
+      </article>
+      <article class="metric">
+        <span class="label">Remediations</span>
+        <strong id="metric-remediations">0</strong>
+      </article>
+    </section>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Findings</h2>
+          <span class="tag">Risk</span>
+        </div>
+        <div id="findings" class="stack"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Assets</h2>
+          <span class="tag">Inventory</span>
+        </div>
+        <div id="assets" class="stack"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Policies</h2>
+          <span class="tag">Guardrails</span>
+        </div>
+        <div id="policies" class="stack"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Remediation</h2>
+          <span class="tag">Execution</span>
+        </div>
+        <div id="remediations" class="stack"></div>
+      </section>
+    </main>
+  </div>
+
+  <template id="empty-state">
+    <article class="empty">No data yet.</article>
+  </template>
+
+  <script src="/app/app.js"></script>
+</body>
+</html>
