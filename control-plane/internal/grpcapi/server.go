@@ -24,7 +24,15 @@ type Server struct {
 	bind       string
 	grpcServer *grpc.Server
 	listener   net.Listener
-	store      *jobs.Store
+	store      workerStore
+}
+
+type workerStore interface {
+	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
+	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
+	RecordTaskStatus(ctx context.Context, workerID string, taskID string, state models.TaskStatus) error
+	GetTaskContext(ctx context.Context, taskID string) (models.TaskContext, error)
+	FinalizeTask(ctx context.Context, submission models.TaskResultSubmission) error
 }
 
 func New(bind string, store *jobs.Store, logger *log.Logger) *Server {
@@ -63,7 +71,7 @@ func (s *Server) Shutdown(_ context.Context) error {
 
 type workerService struct {
 	workerv1.UnimplementedWorkerControlPlaneServer
-	store  *jobs.Store
+	store  workerStore
 	logger *log.Logger
 }
 

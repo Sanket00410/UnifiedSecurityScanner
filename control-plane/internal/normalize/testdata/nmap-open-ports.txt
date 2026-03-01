@@ -1,0 +1,4 @@
+Starting Nmap 7.94 scan report for scanner.internal
+22/tcp open ssh
+80/tcp open http
+Nmap done: 1 IP address (1 host up) scanned in 3.42 seconds
