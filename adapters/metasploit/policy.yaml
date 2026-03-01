@@ -1,0 +1,16 @@
+adapter_id: metasploit
+display_name: Metasploit Restricted Adapter
+execution_modes:
+  - restricted_exploit
+requires_human_approval: true
+requires_approved_modules: true
+denied_capabilities:
+  - post_exploitation
+  - persistence
+  - pivoting
+  - unrestricted_reverse_shell
+default_timeout_seconds: 300
+evidence_requirements:
+  - console_log
+  - module_metadata
+  - finding_summary

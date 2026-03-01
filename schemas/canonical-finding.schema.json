@@ -1,0 +1,304 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unifiedsecurityscanner.local/schemas/canonical-finding.schema.json",
+  "title": "CanonicalFinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "finding_id",
+    "tenant_id",
+    "scanner",
+    "source",
+    "category",
+    "title",
+    "severity",
+    "confidence",
+    "status",
+    "first_seen_at",
+    "last_seen_at",
+    "asset",
+    "risk"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "finding_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scanner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "adapter_id",
+        "scan_job_id"
+      ],
+      "properties": {
+        "engine": {
+          "type": "string"
+        },
+        "adapter_id": {
+          "type": "string"
+        },
+        "engine_version": {
+          "type": "string"
+        },
+        "scan_job_id": {
+          "type": "string"
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "layer",
+        "tool"
+      ],
+      "properties": {
+        "layer": {
+          "type": "string",
+          "enum": [
+            "sast",
+            "sca",
+            "secret",
+            "iac",
+            "container",
+            "dast",
+            "pentest"
+          ]
+        },
+        "tool": {
+          "type": "string"
+        }
+      }
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "triaged",
+        "suppressed",
+        "accepted",
+        "resolved"
+      ]
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_id",
+        "asset_type",
+        "asset_name",
+        "environment",
+        "exposure"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string"
+        },
+        "asset_type": {
+          "type": "string"
+        },
+        "asset_name": {
+          "type": "string"
+        },
+        "environment": {
+          "type": "string"
+        },
+        "exposure": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "partner",
+            "internet"
+          ]
+        }
+      }
+    },
+    "locations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "package",
+              "image",
+              "endpoint",
+              "resource"
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "method": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "ref"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "log",
+              "sarif",
+              "http",
+              "screenshot",
+              "pcap",
+              "artifact"
+            ]
+          },
+          "ref": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "priority",
+        "overall_score",
+        "business_impact",
+        "exploitability",
+        "reachability",
+        "exposure"
+      ],
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": [
+            "p0",
+            "p1",
+            "p2",
+            "p3",
+            "p4"
+          ]
+        },
+        "overall_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "business_impact": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "exploitability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "reachability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "exposure": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        }
+      }
+    },
+    "remediation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "fix_available": {
+          "type": "boolean"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

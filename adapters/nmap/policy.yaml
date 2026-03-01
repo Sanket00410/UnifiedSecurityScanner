@@ -1,0 +1,12 @@
+adapter_id: nmap
+display_name: Nmap Discovery Adapter
+execution_modes:
+  - active_validation
+requires_human_approval: false
+requires_target_scope_match: true
+requires_rate_limit: true
+default_timeout_seconds: 180
+evidence_requirements:
+  - command_log
+  - host_summary
+  - port_summary

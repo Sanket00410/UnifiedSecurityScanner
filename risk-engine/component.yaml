@@ -1,0 +1,18 @@
+name: risk-engine
+runtime: go_or_rust
+purpose: Correlate normalized findings into business-prioritized remediation items.
+responsibilities:
+  - finding_deduplication
+  - exploit_path_correlation
+  - reachability_weighting
+  - business_impact_scoring
+  - remediation_priority_assignment
+primary_inputs:
+  - canonical_findings
+  - asset_inventory
+  - exposure_metadata
+  - compensating_controls
+primary_outputs:
+  - prioritized_findings
+  - remediation_groups
+  - sla_assignments

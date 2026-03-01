@@ -1,0 +1,16 @@
+name: ui
+runtime: typescript
+purpose: Web application for developers, AppSec teams, and platform administrators.
+responsibilities:
+  - findings_exploration
+  - remediation_workflows
+  - scan_job_submission
+  - approval_actions
+  - reporting_and_exports
+primary_inputs:
+  - control_plane_api
+  - risk_engine_views
+primary_outputs:
+  - user_actions
+  - workflow_updates
+  - exported_reports

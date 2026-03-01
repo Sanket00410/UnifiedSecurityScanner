@@ -1,30 +1,42 @@
-﻿# Unified Security Platform
+# Unified Security Platform
 
-This is a standalone project folder for a business-focused security platform that combines:
-- SAST
-- DAST
-- IaC scanning
-- Dependency scanning
+This repository defines an enterprise-grade unified application security platform for:
+- Code security (SAST)
+- Software composition analysis (SCA)
 - Secret detection
-- Unified business risk scoring
+- Infrastructure and cloud configuration scanning
+- Container and Kubernetes posture scanning
+- Web and API runtime testing (DAST)
+- Automated pentesting with curated Kali-class tool adapters
+- Business-aware risk scoring and remediation workflows
 
 ## Core Principle
-Detection alone is not the product. Prioritized, explainable risk is the product.
+Detection alone is not the product. Correlated, explainable, prioritized risk is the product.
 
-## High-Level Pipeline
-Code/Infra -> SAST -> Dependency+Secrets -> IaC -> DAST -> Risk Engine -> Developer UI
+## Enterprise Pipeline
+Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Secrets/IaC -> DAST -> Automated Pentesting -> Correlation Graph -> Risk Engine -> Findings Lifecycle and Remediation -> Developer and Security Operations UI
 
-## Initial Structure
-- `backend/` API + orchestration services
-- `frontend/` Developer and security UI
-- `scanners/` Integrations (Semgrep, CodeQL, ZAP, Trivy, Gitleaks, Checkov)
-- `risk-engine/` Correlation and business impact scoring
-- `orchestrator/` Workflow execution and scan scheduling
-- `docs/` Architecture and implementation guides
+## Platform Characteristics
+- Single web application with API-driven control plane
+- Cross-platform execution using Windows, Linux, and macOS runners
+- Multi-tenant, RBAC-enabled, SSO-ready, audit logged
+- Safe by design: active validation only on approved scoped targets with tool guardrails
+- Built for production deployment, not a demo or MVP
 
-## Next Build Steps
-1. Build scanner adapters for existing engines.
-2. Normalize all findings into one schema.
-3. Correlate findings across scanners.
-4. Implement risk score and confidence scoring.
-5. Add actionable fix suggestions with patch output.
+## Recommended Structure
+- `control-plane/` API gateway, auth, orchestration, policy, tenancy
+- `worker-runtime/` cross-platform scanner runners and job execution
+- `adapters/` engine integrations for static, dependency, IaC, dynamic, and validation tools
+- `risk-engine/` correlation, exploitability, business impact, and prioritization
+- `platform-services/` rule packs, feed sync, notifications, admin, and update management
+- `ui/` developer, AppSec, and management experience
+- `docs/` architecture and implementation guides
+- `.msd/` mirrored high-level system design documents
+
+## Immediate Build Priorities
+1. Define a normalized finding schema and evidence model shared by every scanner.
+2. Implement the control plane, job scheduler, and per-tenant policy engine.
+3. Build cross-platform worker agents with isolated scanner adapters.
+4. Add finding correlation, reachability analysis, and business risk scoring.
+5. Add rule/template update services, target registry, and findings lifecycle management.
+6. Expose one unified UI plus APIs for CI/CD, ticketing, SIEM, and governance integrations.

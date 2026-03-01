@@ -1,0 +1,13 @@
+adapter_id: zap
+display_name: OWASP ZAP Web Adapter
+execution_modes:
+  - passive
+  - active_validation
+requires_human_approval: false
+supports_authenticated_sessions: true
+requires_session_profile: true
+default_timeout_seconds: 600
+evidence_requirements:
+  - session_log
+  - finding_export
+  - request_response_summary

@@ -1,0 +1,93 @@
+version: 1
+name: unified-security-scanner-adapter-interface
+description: >
+  Contract for policy-gated scanner adapters executed by the worker runtime.
+
+adapter_request:
+  required:
+    - job_id
+    - tenant_id
+    - adapter_id
+    - target_kind
+    - target
+    - execution_mode
+    - approved_profile
+    - max_runtime_seconds
+    - evidence_dir
+  fields:
+    job_id:
+      type: string
+    tenant_id:
+      type: string
+    adapter_id:
+      type: string
+    target_kind:
+      type: string
+      allowed:
+        - repository
+        - api
+        - domain
+        - ip
+        - image
+        - cloud_account
+    target:
+      type: string
+    execution_mode:
+      type: string
+      allowed:
+        - passive
+        - active_validation
+        - restricted_exploit
+    approved_profile:
+      type: string
+    approved_modules:
+      type: array[string]
+    labels:
+      type: map[string]string
+    max_runtime_seconds:
+      type: integer
+      minimum: 1
+    evidence_dir:
+      type: string
+
+adapter_response:
+  required:
+    - success
+    - finding_count
+    - evidence_paths
+    - summary
+  fields:
+    success:
+      type: boolean
+    finding_count:
+      type: integer
+      minimum: 0
+    evidence_paths:
+      type: array[string]
+    summary:
+      type: string
+    error_message:
+      type: string
+
+tool_policies:
+  metasploit:
+    allowed_execution_modes:
+      - restricted_exploit
+    requires_approved_modules: true
+    requires_human_approval: true
+    denied_capabilities:
+      - post_exploitation
+      - persistence
+      - pivoting
+      - unrestricted_reverse_shell
+  nmap:
+    allowed_execution_modes:
+      - active_validation
+    requires_target_scope_match: true
+    requires_rate_limit: true
+  zap:
+    allowed_execution_modes:
+      - passive
+      - active_validation
+    supports_authenticated_sessions: true
+    requires_session_profile: true

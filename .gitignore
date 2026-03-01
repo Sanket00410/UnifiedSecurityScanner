@@ -1,0 +1,2 @@
+worker-runtime/crates/uss-worker/target/
+*.exe

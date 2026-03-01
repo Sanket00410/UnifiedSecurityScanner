@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package uss.worker.v1;
+
+option go_package = "unifiedsecurityscanner/contracts/proto/worker/v1;workerv1";
+
+enum ExecutionMode {
+  EXECUTION_MODE_UNSPECIFIED = 0;
+  EXECUTION_MODE_PASSIVE = 1;
+  EXECUTION_MODE_ACTIVE_VALIDATION = 2;
+  EXECUTION_MODE_RESTRICTED_EXPLOIT = 3;
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_QUEUED = 1;
+  JOB_STATE_RUNNING = 2;
+  JOB_STATE_COMPLETED = 3;
+  JOB_STATE_FAILED = 4;
+  JOB_STATE_CANCELED = 5;
+}
+
+message WorkerCapability {
+  string adapter_id = 1;
+  repeated string supported_target_kinds = 2;
+  repeated ExecutionMode supported_modes = 3;
+  repeated string labels = 4;
+  bool linux_preferred = 5;
+}
+
+message WorkerRegistrationRequest {
+  string worker_id = 1;
+  string worker_version = 2;
+  string operating_system = 3;
+  string hostname = 4;
+  repeated WorkerCapability capabilities = 5;
+}
+
+message WorkerRegistrationResponse {
+  bool accepted = 1;
+  string lease_id = 2;
+  int64 heartbeat_interval_seconds = 3;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  string lease_id = 2;
+  int64 timestamp_unix = 3;
+  map<string, string> metrics = 4;
+}
+
+message HeartbeatResponse {
+  repeated JobAssignment assignments = 1;
+}
+
+message JobAssignment {
+  string job_id = 1;
+  string tenant_id = 2;
+  string adapter_id = 3;
+  string target_kind = 4;
+  string target = 5;
+  ExecutionMode execution_mode = 6;
+  repeated string approved_modules = 7;
+  map<string, string> labels = 8;
+  int64 max_runtime_seconds = 9;
+  string evidence_upload_url = 10;
+}
+
+message JobStatusEvent {
+  string worker_id = 1;
+  string job_id = 2;
+  JobState state = 3;
+  string detail = 4;
+  int64 timestamp_unix = 5;
+}
+
+message FindingSummary {
+  string finding_id = 1;
+  string category = 2;
+  string severity = 3;
+  double risk_score = 4;
+}
+
+message JobResult {
+  string worker_id = 1;
+  string job_id = 2;
+  JobState final_state = 3;
+  repeated FindingSummary findings = 4;
+  repeated string evidence_paths = 5;
+  string error_message = 6;
+}
+
+message Ack {
+  bool accepted = 1;
+  string message = 2;
+}
+
+service WorkerControlPlane {
+  rpc RegisterWorker(WorkerRegistrationRequest) returns (WorkerRegistrationResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc PublishJobStatus(stream JobStatusEvent) returns (Ack);
+  rpc PublishJobResult(JobResult) returns (Ack);
+}

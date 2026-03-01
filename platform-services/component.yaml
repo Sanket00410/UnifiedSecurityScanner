@@ -1,0 +1,17 @@
+name: platform-services
+runtime: go
+purpose: Shared platform subsystems used by every control-plane and worker component.
+responsibilities:
+  - rule_pack_distribution
+  - advisory_feed_sync
+  - worker_upgrade_management
+  - notifications_and_approvals
+  - audit_export
+primary_inputs:
+  - signed_rule_packs
+  - advisory_feeds
+  - tenant_policies
+primary_outputs:
+  - versioned_updates
+  - approval_events
+  - audit_records
