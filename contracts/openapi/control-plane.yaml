@@ -8,6 +8,58 @@ info:
 servers:
   - url: http://localhost:8080
 paths:
+  /auth/oidc/start:
+    get:
+      operationId: startOidcSignIn
+      responses:
+        "307":
+          description: Redirects the browser to the configured OIDC provider
+        "503":
+          description: OIDC is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /auth/oidc/callback:
+    get:
+      operationId: finishOidcSignIn
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "307":
+          description: Redirects the browser back to the application after establishing a session cookie
+        "400":
+          description: Invalid callback parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "502":
+          description: Upstream OIDC exchange failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /auth/logout:
+    get:
+      operationId: browserLogout
+      responses:
+        "307":
+          description: Clears the browser session cookie and redirects to the app
+    post:
+      operationId: apiLogout
+      responses:
+        "204":
+          description: Clears the browser session cookie
   /healthz:
     get:
       operationId: getHealth
@@ -28,6 +80,7 @@ paths:
       operationId: getMetadata
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Control plane metadata
@@ -40,6 +93,7 @@ paths:
       operationId: getAuthSession
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Current authenticated session
@@ -58,6 +112,7 @@ paths:
       operationId: listApiTokens
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Tenant API tokens
@@ -76,6 +131,7 @@ paths:
       operationId: createApiToken
       security:
         - BearerToken: []
+        - SessionCookie: []
       requestBody:
         required: true
         content:
@@ -100,6 +156,7 @@ paths:
       operationId: disableApiToken
       security:
         - BearerToken: []
+        - SessionCookie: []
       parameters:
         - name: tokenId
           in: path
@@ -130,6 +187,7 @@ paths:
       operationId: listAuditEvents
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Tenant audit events
@@ -149,6 +207,7 @@ paths:
       operationId: listScanJobs
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Existing scan jobs
@@ -167,6 +226,7 @@ paths:
       operationId: createScanJob
       security:
         - BearerToken: []
+        - SessionCookie: []
       requestBody:
         required: true
         content:
@@ -191,6 +251,7 @@ paths:
       operationId: getScanJob
       security:
         - BearerToken: []
+        - SessionCookie: []
       parameters:
         - name: jobId
           in: path
@@ -265,6 +326,7 @@ paths:
       operationId: listFindings
       security:
         - BearerToken: []
+        - SessionCookie: []
       responses:
         "200":
           description: Canonical findings
@@ -279,12 +341,124 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CanonicalFinding"
+  /v1/assets:
+    get:
+      operationId: listAssets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant asset summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AssetSummary"
+  /v1/policies:
+    get:
+      operationId: listPolicies
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant and global policies
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Policy"
+    post:
+      operationId: createPolicy
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePolicyRequest"
+      responses:
+        "201":
+          description: Policy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/remediations:
+    get:
+      operationId: listRemediations
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant remediation actions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationAction"
+    post:
+      operationId: createRemediation
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationRequest"
+      responses:
+        "201":
+          description: Remediation action created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAction"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   securitySchemes:
     BearerToken:
       type: http
       scheme: bearer
       bearerFormat: API Token
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: uss_session
   schemas:
     AuthPrincipal:
       type: object
@@ -535,6 +709,142 @@ components:
           type: integer
         worker_heartbeat_ttl_seconds:
           type: integer
+    AssetSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_id
+        - asset_type
+        - last_scanned_at
+        - scan_count
+        - finding_count
+      properties:
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        last_scanned_at:
+          type: string
+          format: date-time
+        scan_count:
+          type: integer
+        finding_count:
+          type: integer
+    Policy:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - scope
+        - mode
+        - enabled
+        - rules
+        - updated_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        scope:
+          type: string
+        mode:
+          type: string
+        enabled:
+          type: boolean
+        rules:
+          type: array
+          items:
+            type: string
+        updated_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreatePolicyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        scope:
+          type: string
+        mode:
+          type: string
+        enabled:
+          type: boolean
+        rules:
+          type: array
+          items:
+            type: string
+        updated_by:
+          type: string
+    RemediationAction:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - finding_id
+        - title
+        - status
+        - owner
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        finding_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateRemediationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - finding_id
+        - title
+      properties:
+        finding_id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+        owner:
+          type: string
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
     WorkerCapability:
       type: object
       additionalProperties: false

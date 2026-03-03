@@ -31,6 +31,9 @@ var (
 type Store struct {
 	pool               *pgxpool.Pool
 	workerHeartbeatTTL time.Duration
+	bootstrapOrgID     string
+	bootstrapOrgName   string
+	oidcDefaultRole    string
 }
 
 func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
@@ -56,6 +59,9 @@ func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
 	store := &Store{
 		pool:               pool,
 		workerHeartbeatTTL: cfg.WorkerHeartbeatTTL,
+		bootstrapOrgID:     "bootstrap-org-" + normalizeSlug(cfg.BootstrapOrgSlug, "local"),
+		bootstrapOrgName:   strings.TrimSpace(cfg.BootstrapOrgName),
+		oidcDefaultRole:    normalizeRole(cfg.OIDCDefaultRole),
 	}
 
 	if err := store.EnsureBootstrap(ctx, cfg); err != nil {

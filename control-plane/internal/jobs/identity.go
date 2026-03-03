@@ -246,6 +246,113 @@ func (s *Store) CreateAPIToken(ctx context.Context, principal models.AuthPrincip
 	}, nil
 }
 
+func (s *Store) CreateOIDCSession(ctx context.Context, provider string, subject string, email string, displayName string) (models.CreatedAPIToken, error) {
+	provider = strings.TrimSpace(provider)
+	subject = strings.TrimSpace(subject)
+	email = strings.TrimSpace(strings.ToLower(email))
+	displayName = strings.TrimSpace(displayName)
+
+	if provider == "" || subject == "" || email == "" {
+		return models.CreatedAPIToken{}, fmt.Errorf("provider, subject, and email are required")
+	}
+	if displayName == "" {
+		displayName = email
+	}
+
+	now := time.Now().UTC()
+	userID := "oidc-user-" + normalizeSlug(provider+"-"+subject, "user")
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO organizations (id, slug, name, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			updated_at = EXCLUDED.updated_at
+	`, s.bootstrapOrgID, normalizeSlug(strings.TrimPrefix(s.bootstrapOrgID, "bootstrap-org-"), "local"), s.bootstrapOrgName, now)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("ensure oidc organization: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO users (id, email, display_name, auth_provider, provider_subject, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $6)
+		ON CONFLICT (id) DO UPDATE SET
+			email = EXCLUDED.email,
+			display_name = EXCLUDED.display_name,
+			auth_provider = EXCLUDED.auth_provider,
+			provider_subject = EXCLUDED.provider_subject,
+			updated_at = EXCLUDED.updated_at
+	`, userID, email, displayName, provider, subject, now)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("upsert oidc user: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO memberships (user_id, organization_id, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4)
+		ON CONFLICT (user_id, organization_id) DO NOTHING
+	`, userID, s.bootstrapOrgID, s.oidcDefaultRole, now)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("ensure oidc membership: %w", err)
+	}
+
+	var role string
+	err = s.pool.QueryRow(ctx, `
+		SELECT role
+		FROM memberships
+		WHERE user_id = $1
+		  AND organization_id = $2
+	`, userID, s.bootstrapOrgID).Scan(&role)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("load oidc membership role: %w", err)
+	}
+
+	scopes := auth.DefaultScopesForRole(role)
+	if len(scopes) == 0 {
+		scopes = auth.DefaultScopesForRole(auth.RoleViewer)
+	}
+	scopesJSON, err := json.Marshal(scopes)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("marshal oidc scopes: %w", err)
+	}
+
+	plaintextToken, err := generatePlaintextToken()
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("generate oidc api token: %w", err)
+	}
+
+	expiresAt := now.Add(12 * time.Hour)
+	token := models.APIToken{
+		ID:             nextAPITokenID(),
+		OrganizationID: s.bootstrapOrgID,
+		UserID:         userID,
+		TokenName:      "oidc-session",
+		Scopes:         scopes,
+		Disabled:       false,
+		ExpiresAt:      &expiresAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO api_tokens (
+			id, organization_id, user_id, token_name, token_hash, scopes_json,
+			disabled, expires_at, last_used_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			FALSE, $7, NULL, $8, $8
+		)
+	`, token.ID, token.OrganizationID, token.UserID, token.TokenName, auth.TokenHash(plaintextToken), scopesJSON, token.ExpiresAt, now)
+	if err != nil {
+		return models.CreatedAPIToken{}, fmt.Errorf("insert oidc api token: %w", err)
+	}
+
+	return models.CreatedAPIToken{
+		Token:          token,
+		PlaintextToken: plaintextToken,
+	}, nil
+}
+
 func (s *Store) DisableAPIToken(ctx context.Context, organizationID string, tokenID string) (models.APIToken, bool, error) {
 	if strings.HasPrefix(strings.TrimSpace(tokenID), "bootstrap-token-") {
 		return models.APIToken{}, false, ErrProtectedToken

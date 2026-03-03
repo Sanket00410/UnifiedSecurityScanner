@@ -6,17 +6,21 @@ function currentToken() {
 
 async function loadJSON(url) {
   const token = currentToken();
-  if (!token) {
-    throw new Error("No API token configured. Use the token panel above.");
+  const headers = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
 
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
+    credentials: "same-origin",
+    headers
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !token) {
+      throw new Error("Sign in with SSO or use an API token.");
+    }
+
     let message = `Request failed for ${url}`;
     try {
       const payload = await response.json();
@@ -192,8 +196,10 @@ function bindTokenControls() {
   const input = document.getElementById("token-input");
   const saveButton = document.getElementById("token-save");
   const clearButton = document.getElementById("token-clear");
+  const ssoButton = document.getElementById("sso-start");
+  const logoutButton = document.getElementById("session-logout");
 
-  if (!input || !saveButton || !clearButton) {
+  if (!input || !saveButton || !clearButton || !ssoButton || !logoutButton) {
     return;
   }
 
@@ -220,6 +226,16 @@ function bindTokenControls() {
       org.textContent = "Paste an API token to load tenant data.";
     }
     boot();
+  });
+
+  ssoButton.addEventListener("click", () => {
+    window.location.href = "/auth/oidc/start";
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    input.value = "";
+    window.location.href = "/auth/logout";
   });
 }
 

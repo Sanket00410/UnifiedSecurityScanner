@@ -28,6 +28,7 @@ type Server struct {
 type apiStore interface {
 	Ping(ctx context.Context) error
 	AuthenticateToken(ctx context.Context, rawToken string) (models.AuthPrincipal, bool, error)
+	CreateOIDCSession(ctx context.Context, provider string, subject string, email string, displayName string) (models.CreatedAPIToken, error)
 	RecordAuditEvent(ctx context.Context, event models.AuditEvent) error
 	ListAuditEvents(ctx context.Context, organizationID string, limit int) ([]models.AuditEvent, error)
 	ListAPITokens(ctx context.Context, organizationID string, limit int) ([]models.APIToken, error)
@@ -60,6 +61,9 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
+	mux.HandleFunc("/auth/oidc/start", server.handleOIDCStart)
+	mux.HandleFunc("/auth/oidc/callback", server.handleOIDCCallback)
+	mux.HandleFunc("/auth/logout", server.handleLogout)
 	mux.HandleFunc("/v1/meta", server.withUserAuth(auth.PermissionMetaRead, "meta.read", "service", server.handleMeta))
 	mux.HandleFunc("/v1/auth/me", server.withUserAuth(auth.PermissionSessionRead, "session.read", "session", server.handleSession))
 	mux.HandleFunc("/v1/auth/tokens", server.withUserAuthForMethod(map[string]auth.Permission{
@@ -163,7 +167,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, models.AuthSession{
 		Principal:      principal,
-		SSOEnabled:     s.cfg.OIDCIssuerURL != "" && s.cfg.OIDCClientID != "",
+		SSOEnabled:     s.oidcConfigured(),
 		OIDCIssuerURL:  s.cfg.OIDCIssuerURL,
 		OIDCClientID:   s.cfg.OIDCClientID,
 		BootstrapToken: auth.IsBootstrapToken(principal),
@@ -591,9 +595,9 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) withUserAuth(permission auth.Permission, action string, resourceType string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := auth.ParseBearerToken(r.Header.Get("Authorization"))
+		token := s.extractAuthToken(r)
 		if token == "" {
-			s.writeError(w, http.StatusUnauthorized, "missing_bearer_token", "authorization bearer token is required")
+			s.writeError(w, http.StatusUnauthorized, "authentication_required", "an api token or browser session is required")
 			return
 		}
 
@@ -691,6 +695,31 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 	default:
 		return ""
 	}
+}
+
+func (s *Server) extractAuthToken(r *http.Request) string {
+	if token := auth.ParseBearerToken(r.Header.Get("Authorization")); token != "" {
+		return token
+	}
+
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(cookie.Value)
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
 }
 
 func (s *Server) writeMethodNotAllowed(w http.ResponseWriter) {

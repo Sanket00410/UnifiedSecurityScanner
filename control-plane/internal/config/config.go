@@ -25,7 +25,9 @@ type Config struct {
 	BootstrapAdminToken string
 	OIDCIssuerURL       string
 	OIDCClientID        string
+	OIDCClientSecret    string
 	OIDCRedirectURL     string
+	OIDCDefaultRole     string
 }
 
 func Load() Config {
@@ -48,7 +50,9 @@ func Load() Config {
 		BootstrapAdminToken: getEnv("USS_BOOTSTRAP_ADMIN_TOKEN", "uss-local-admin-token"),
 		OIDCIssuerURL:       getEnv("USS_OIDC_ISSUER_URL", ""),
 		OIDCClientID:        getEnv("USS_OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:    getEnv("USS_OIDC_CLIENT_SECRET", ""),
 		OIDCRedirectURL:     getEnv("USS_OIDC_REDIRECT_URL", ""),
+		OIDCDefaultRole:     getEnv("USS_OIDC_DEFAULT_ROLE", "viewer"),
 	}
 }
 

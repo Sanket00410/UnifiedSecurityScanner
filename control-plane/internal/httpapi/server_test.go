@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,11 @@ type stubAPIStore struct {
 	authErr          error
 	auditEvents      []models.AuditEvent
 	apiTokens        []models.APIToken
+	createdOIDC      models.CreatedAPIToken
+	oidcProvider     string
+	oidcSubject      string
+	oidcEmail        string
+	oidcDisplayName  string
 	registerResponse models.WorkerRegistrationResponse
 }
 
@@ -28,6 +34,14 @@ func (s *stubAPIStore) Ping(context.Context) error {
 
 func (s *stubAPIStore) AuthenticateToken(context.Context, string) (models.AuthPrincipal, bool, error) {
 	return s.authPrincipal, s.authenticated, s.authErr
+}
+
+func (s *stubAPIStore) CreateOIDCSession(_ context.Context, provider string, subject string, email string, displayName string) (models.CreatedAPIToken, error) {
+	s.oidcProvider = provider
+	s.oidcSubject = subject
+	s.oidcEmail = email
+	s.oidcDisplayName = displayName
+	return s.createdOIDC, nil
 }
 
 func (s *stubAPIStore) RecordAuditEvent(_ context.Context, event models.AuditEvent) error {
@@ -112,7 +126,7 @@ func TestAuthSessionRequiresBearerToken(t *testing.T) {
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatalf("decode api error: %v", err)
 	}
-	if response.Code != "missing_bearer_token" {
+	if response.Code != "authentication_required" {
 		t.Fatalf("unexpected error code: %s", response.Code)
 	}
 }
@@ -138,6 +152,8 @@ func TestAuthSessionReturnsPrincipal(t *testing.T) {
 	cfg := config.Load()
 	cfg.OIDCIssuerURL = "https://issuer.example.com"
 	cfg.OIDCClientID = "uss-control-plane"
+	cfg.OIDCClientSecret = "test-secret"
+	cfg.OIDCRedirectURL = "http://127.0.0.1:18083/auth/oidc/callback"
 
 	server := New(cfg, store)
 	recorder := httptest.NewRecorder()
@@ -281,5 +297,147 @@ func TestAuthTokenCreateRejectsExpiredTimestamp(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", recorder.Code)
+	}
+}
+
+func TestOIDCStartRedirectsToProvider(t *testing.T) {
+	t.Parallel()
+
+	var provider *httptest.Server
+	provider = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"authorization_endpoint": provider.URL + "/authorize",
+				"token_endpoint":         provider.URL + "/token",
+				"userinfo_endpoint":      provider.URL + "/userinfo",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer provider.Close()
+
+	cfg := config.Load()
+	cfg.OIDCIssuerURL = provider.URL
+	cfg.OIDCClientID = "uss-client"
+	cfg.OIDCClientSecret = "secret"
+	cfg.OIDCRedirectURL = "http://127.0.0.1:18083/auth/oidc/callback"
+
+	server := New(cfg, &stubAPIStore{})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/auth/oidc/start", nil)
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", recorder.Code)
+	}
+
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	if location.Path != "/authorize" {
+		t.Fatalf("unexpected redirect path: %s", location.Path)
+	}
+	if location.Query().Get("client_id") != "uss-client" {
+		t.Fatalf("unexpected client_id: %s", location.Query().Get("client_id"))
+	}
+	if location.Query().Get("code_challenge") == "" {
+		t.Fatal("expected pkce challenge in redirect url")
+	}
+
+	cookies := recorder.Result().Cookies()
+	if len(cookies) < 2 {
+		t.Fatalf("expected oidc cookies to be set, got %d", len(cookies))
+	}
+}
+
+func TestOIDCCallbackCreatesSessionCookie(t *testing.T) {
+	t.Parallel()
+
+	var provider *httptest.Server
+	provider = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"authorization_endpoint": provider.URL + "/authorize",
+				"token_endpoint":         provider.URL + "/token",
+				"userinfo_endpoint":      provider.URL + "/userinfo",
+			})
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse token form: %v", err)
+			}
+			if r.Form.Get("code_verifier") != "verifier-value" {
+				t.Fatalf("unexpected code verifier: %s", r.Form.Get("code_verifier"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"access_token": "provider-access-token",
+				"token_type":   "Bearer",
+			})
+		case "/userinfo":
+			if r.Header.Get("Authorization") != "Bearer provider-access-token" {
+				t.Fatalf("unexpected authorization header: %s", r.Header.Get("Authorization"))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"sub":   "provider-user-1",
+				"email": "oidc-user@example.com",
+				"name":  "OIDC User",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer provider.Close()
+
+	store := &stubAPIStore{
+		createdOIDC: models.CreatedAPIToken{
+			Token: models.APIToken{
+				ID:        "token-oidc-1",
+				CreatedAt: time.Now().UTC(),
+				UpdatedAt: time.Now().UTC(),
+			},
+			PlaintextToken: "uss_oidc_session_token",
+		},
+	}
+
+	cfg := config.Load()
+	cfg.OIDCIssuerURL = provider.URL
+	cfg.OIDCClientID = "uss-client"
+	cfg.OIDCClientSecret = "secret"
+	cfg.OIDCRedirectURL = "http://127.0.0.1:18083/auth/oidc/callback"
+
+	server := New(cfg, store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?code=test-code&state=test-state", nil)
+	request.AddCookie(&http.Cookie{Name: oidcStateCookieName, Value: "test-state"})
+	request.AddCookie(&http.Cookie{Name: oidcVerifierCookieName, Value: "verifier-value"})
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", recorder.Code)
+	}
+	if recorder.Header().Get("Location") != "/app/" {
+		t.Fatalf("unexpected redirect location: %s", recorder.Header().Get("Location"))
+	}
+	if store.oidcEmail != "oidc-user@example.com" {
+		t.Fatalf("unexpected oidc email: %s", store.oidcEmail)
+	}
+	if store.oidcSubject != "provider-user-1" {
+		t.Fatalf("unexpected oidc subject: %s", store.oidcSubject)
+	}
+
+	foundSessionCookie := false
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == sessionCookieName && cookie.Value == "uss_oidc_session_token" {
+			foundSessionCookie = true
+			break
+		}
+	}
+	if !foundSessionCookie {
+		t.Fatal("expected session cookie to be set")
 	}
 }

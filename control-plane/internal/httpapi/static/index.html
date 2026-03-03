@@ -15,15 +15,17 @@
       <div class="auth-strip">
         <div class="auth-copy">
           <strong id="session-user">Signed out</strong>
-          <span id="session-org" class="meta-line">Paste an API token to load tenant data.</span>
+          <span id="session-org" class="meta-line">Sign in with SSO or paste an API token to load tenant data.</span>
         </div>
         <label class="token-entry">
           <span>API Token</span>
           <input id="token-input" type="password" placeholder="uss-local-admin-token">
         </label>
         <div class="auth-actions">
+          <button id="sso-start" type="button" class="ghost">Use SSO</button>
           <button id="token-save" type="button">Use Token</button>
           <button id="token-clear" type="button" class="ghost">Clear</button>
+          <button id="session-logout" type="button" class="ghost">Sign Out</button>
         </div>
       </div>
     </header>
