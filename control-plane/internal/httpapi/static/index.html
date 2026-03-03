@@ -12,6 +12,20 @@
       <div class="eyebrow">Unified Security Scanner</div>
       <h1>Findings, Assets, Policies, and Remediation</h1>
       <p class="subtitle">A live control-plane view over normalized findings and operational policy.</p>
+      <div class="auth-strip">
+        <div class="auth-copy">
+          <strong id="session-user">Signed out</strong>
+          <span id="session-org" class="meta-line">Paste an API token to load tenant data.</span>
+        </div>
+        <label class="token-entry">
+          <span>API Token</span>
+          <input id="token-input" type="password" placeholder="uss-local-admin-token">
+        </label>
+        <div class="auth-actions">
+          <button id="token-save" type="button">Use Token</button>
+          <button id="token-clear" type="button" class="ghost">Clear</button>
+        </div>
+      </div>
     </header>
 
     <section class="metrics" id="metrics">

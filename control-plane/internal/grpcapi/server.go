@@ -11,8 +11,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"unifiedsecurityscanner/control-plane/internal/auth"
 	workerv1 "unifiedsecurityscanner/control-plane/internal/gen/workerv1"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
@@ -20,11 +22,12 @@ import (
 )
 
 type Server struct {
-	logger     *log.Logger
-	bind       string
-	grpcServer *grpc.Server
-	listener   net.Listener
-	store      workerStore
+	logger             *log.Logger
+	bind               string
+	grpcServer         *grpc.Server
+	listener           net.Listener
+	store              workerStore
+	workerSharedSecret string
 }
 
 type workerStore interface {
@@ -35,17 +38,19 @@ type workerStore interface {
 	FinalizeTask(ctx context.Context, submission models.TaskResultSubmission) error
 }
 
-func New(bind string, store *jobs.Store, logger *log.Logger) *Server {
+func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret string) *Server {
 	server := &Server{
-		logger: logger,
-		bind:   bind,
-		store:  store,
+		logger:             logger,
+		bind:               bind,
+		store:              store,
+		workerSharedSecret: strings.TrimSpace(workerSharedSecret),
 	}
 
 	server.grpcServer = grpc.NewServer()
 	workerv1.RegisterWorkerControlPlaneServer(server.grpcServer, &workerService{
-		store:  store,
-		logger: logger,
+		store:              store,
+		logger:             logger,
+		workerSharedSecret: strings.TrimSpace(workerSharedSecret),
 	})
 
 	return server
@@ -71,11 +76,15 @@ func (s *Server) Shutdown(_ context.Context) error {
 
 type workerService struct {
 	workerv1.UnimplementedWorkerControlPlaneServer
-	store  workerStore
-	logger *log.Logger
+	store              workerStore
+	logger             *log.Logger
+	workerSharedSecret string
 }
 
 func (s *workerService) RegisterWorker(ctx context.Context, req *workerv1.WorkerRegistrationRequest) (*workerv1.WorkerRegistrationResponse, error) {
+	if err := s.validateWorkerSecret(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetWorkerId() == "" || req.GetWorkerVersion() == "" || req.GetOperatingSystem() == "" || req.GetHostname() == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker_id, worker_version, operating_system, and hostname are required")
 	}
@@ -99,6 +108,9 @@ func (s *workerService) RegisterWorker(ctx context.Context, req *workerv1.Worker
 }
 
 func (s *workerService) Heartbeat(ctx context.Context, req *workerv1.HeartbeatRequest) (*workerv1.HeartbeatResponse, error) {
+	if err := s.validateWorkerSecret(ctx); err != nil {
+		return nil, err
+	}
 	if req.GetWorkerId() == "" || req.GetLeaseId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker_id and lease_id are required")
 	}
@@ -138,6 +150,9 @@ func (s *workerService) Heartbeat(ctx context.Context, req *workerv1.HeartbeatRe
 }
 
 func (s *workerService) PublishJobStatus(stream grpc.ClientStreamingServer[workerv1.JobStatusEvent, workerv1.Ack]) error {
+	if err := s.validateWorkerSecret(stream.Context()); err != nil {
+		return err
+	}
 	processed := 0
 	for {
 		event, err := stream.Recv()
@@ -164,6 +179,9 @@ func (s *workerService) PublishJobStatus(stream grpc.ClientStreamingServer[worke
 }
 
 func (s *workerService) PublishJobResult(ctx context.Context, req *workerv1.JobResult) (*workerv1.Ack, error) {
+	if err := s.validateWorkerSecret(ctx); err != nil {
+		return nil, err
+	}
 	taskCtx, err := s.store.GetTaskContext(ctx, req.GetJobId())
 	if err != nil {
 		if err == jobs.ErrTaskNotFound {
@@ -207,6 +225,24 @@ func (s *workerService) PublishJobResult(ctx context.Context, req *workerv1.JobR
 		Accepted: true,
 		Message:  fmt.Sprintf("stored %d normalized findings", len(findings)),
 	}, nil
+}
+
+func (s *workerService) validateWorkerSecret(ctx context.Context) error {
+	if s.workerSharedSecret == "" {
+		return nil
+	}
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "worker secret metadata is required")
+	}
+
+	values := md.Get(auth.WorkerSecretMetadata)
+	if len(values) == 0 || values[0] != s.workerSharedSecret {
+		return status.Error(codes.Unauthenticated, "worker secret is invalid")
+	}
+
+	return nil
 }
 
 func mapCapabilities(items []*workerv1.WorkerCapability) []models.WorkerCapability {

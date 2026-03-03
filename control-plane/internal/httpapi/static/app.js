@@ -1,8 +1,34 @@
+const TOKEN_STORAGE_KEY = "uss_api_token";
+
+function currentToken() {
+  return window.localStorage.getItem(TOKEN_STORAGE_KEY) || "";
+}
+
 async function loadJSON(url) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Request failed for ${url}`);
+  const token = currentToken();
+  if (!token) {
+    throw new Error("No API token configured. Use the token panel above.");
   }
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  if (!response.ok) {
+    let message = `Request failed for ${url}`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.message) {
+        message = payload.message;
+      }
+    } catch (_) {
+      // ignore response decoding errors
+    }
+    throw new Error(message);
+  }
+
   return response.json();
 }
 
@@ -58,14 +84,47 @@ function makeCard(title, body, meta, severity) {
   return card;
 }
 
+function updateSession(session) {
+  const user = document.getElementById("session-user");
+  const org = document.getElementById("session-org");
+  if (!user || !org) {
+    return;
+  }
+
+  user.textContent = `${session.principal.display_name} (${session.principal.role})`;
+
+  const extras = [
+    session.principal.organization_name,
+    session.principal.email
+  ];
+  if (session.bootstrap_token) {
+    extras.push("bootstrap token");
+  }
+  if (session.sso_enabled) {
+    extras.push("oidc-ready");
+  }
+
+  org.textContent = extras.join(" | ");
+}
+
+function renderError(message) {
+  const findings = document.getElementById("findings");
+  if (findings) {
+    findings.innerHTML = `<article class="empty">${message}</article>`;
+  }
+}
+
 async function boot() {
   try {
-    const [findingsData, assetsData, policiesData, remediationsData] = await Promise.all([
+    const [session, findingsData, assetsData, policiesData, remediationsData] = await Promise.all([
+      loadJSON("/v1/auth/me"),
       loadJSON("/v1/findings"),
       loadJSON("/v1/assets"),
       loadJSON("/v1/policies"),
       loadJSON("/v1/remediations")
     ]);
+
+    updateSession(session);
 
     const findings = findingsData.items || [];
     const assets = assetsData.items || [];
@@ -117,12 +176,52 @@ async function boot() {
       )
     );
   } catch (error) {
+    setMetric("metric-findings", 0);
+    setMetric("metric-assets", 0);
+    setMetric("metric-policies", 0);
+    setMetric("metric-remediations", 0);
     renderList("findings", [], () => document.createElement("div"));
-    const findings = document.getElementById("findings");
-    if (findings) {
-      findings.innerHTML = `<article class="empty">${error.message}</article>`;
-    }
+    renderList("assets", [], () => document.createElement("div"));
+    renderList("policies", [], () => document.createElement("div"));
+    renderList("remediations", [], () => document.createElement("div"));
+    renderError(error.message);
   }
 }
 
+function bindTokenControls() {
+  const input = document.getElementById("token-input");
+  const saveButton = document.getElementById("token-save");
+  const clearButton = document.getElementById("token-clear");
+
+  if (!input || !saveButton || !clearButton) {
+    return;
+  }
+
+  input.value = currentToken();
+
+  saveButton.addEventListener("click", () => {
+    const value = input.value.trim();
+    if (!value) {
+      return;
+    }
+    window.localStorage.setItem(TOKEN_STORAGE_KEY, value);
+    boot();
+  });
+
+  clearButton.addEventListener("click", () => {
+    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    input.value = "";
+    const user = document.getElementById("session-user");
+    const org = document.getElementById("session-org");
+    if (user) {
+      user.textContent = "Signed out";
+    }
+    if (org) {
+      org.textContent = "Paste an API token to load tenant data.";
+    }
+    boot();
+  });
+}
+
+bindTokenControls();
 boot();

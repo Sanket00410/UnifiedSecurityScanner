@@ -6,8 +6,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Builder;
 use tokio::time::sleep;
 use tokio_stream::iter;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Channel;
 use tonic::transport::Endpoint;
+use tonic::Request;
 use uss_worker::adapter::{AdapterRequest, AdapterResult, ExecutionMode};
 use uss_worker::executors;
 use uss_worker::proto;
@@ -30,6 +32,7 @@ struct Config {
     heartbeat_interval: Duration,
     daemon_mode: bool,
     evidence_root: String,
+    worker_shared_secret: String,
 }
 
 fn main() {
@@ -71,6 +74,7 @@ impl Config {
             daemon_mode: parse_bool("USS_WORKER_DAEMON", false),
             evidence_root: env::var("USS_EVIDENCE_ROOT")
                 .unwrap_or_else(|_| "./evidence".to_string()),
+            worker_shared_secret: env::var("USS_WORKER_SHARED_SECRET").unwrap_or_default(),
         }
     }
 }
@@ -91,13 +95,16 @@ async fn run_worker() -> Result<(), String> {
     let mut client = WorkerControlPlaneClient::new(channel);
 
     let registration = client
-        .register_worker(WorkerRegistrationRequest {
-            worker_id: cfg.worker_id.clone(),
-            worker_version: cfg.worker_version.clone(),
-            operating_system: cfg.operating_system.clone(),
-            hostname: cfg.hostname.clone(),
-            capabilities: default_capabilities(),
-        })
+        .register_worker(worker_request(
+            WorkerRegistrationRequest {
+                worker_id: cfg.worker_id.clone(),
+                worker_version: cfg.worker_version.clone(),
+                operating_system: cfg.operating_system.clone(),
+                hostname: cfg.hostname.clone(),
+                capabilities: default_capabilities(),
+            },
+            &cfg.worker_shared_secret,
+        ))
         .await
         .map_err(|err| format!("register worker: {err}"))?
         .into_inner();
@@ -121,12 +128,15 @@ async fn run_worker() -> Result<(), String> {
 
     loop {
         let heartbeat = client
-            .heartbeat(proto::HeartbeatRequest {
-                worker_id: cfg.worker_id.clone(),
-                lease_id: lease_id.clone(),
-                timestamp_unix: current_unix_timestamp() as i64,
-                metrics: default_metrics(),
-            })
+            .heartbeat(worker_request(
+                proto::HeartbeatRequest {
+                    worker_id: cfg.worker_id.clone(),
+                    lease_id: lease_id.clone(),
+                    timestamp_unix: current_unix_timestamp() as i64,
+                    metrics: default_metrics(),
+                },
+                &cfg.worker_shared_secret,
+            ))
             .await
             .map_err(|err| format!("worker heartbeat: {err}"))?
             .into_inner();
@@ -190,6 +200,7 @@ async fn execute_assignment(
         &job_id,
         JobState::Running,
         format!("starting {adapter_id}"),
+        &cfg.worker_shared_secret,
     )
     .await?;
 
@@ -207,14 +218,17 @@ async fn execute_assignment(
     };
 
     client
-        .publish_job_result(JobResult {
-            worker_id: cfg.worker_id.clone(),
-            job_id,
-            final_state: final_state as i32,
-            findings: Vec::new(),
-            evidence_paths,
-            error_message: error_message.unwrap_or_default(),
-        })
+        .publish_job_result(worker_request(
+            JobResult {
+                worker_id: cfg.worker_id.clone(),
+                job_id,
+                final_state: final_state as i32,
+                findings: Vec::new(),
+                evidence_paths,
+                error_message: error_message.unwrap_or_default(),
+            },
+            &cfg.worker_shared_secret,
+        ))
         .await
         .map_err(|err| format!("publish job result: {err}"))?;
 
@@ -228,15 +242,19 @@ async fn publish_status(
     job_id: &str,
     state: JobState,
     detail: String,
+    worker_shared_secret: &str,
 ) -> Result<(), String> {
     client
-        .publish_job_status(iter(vec![JobStatusEvent {
-            worker_id: worker_id.to_string(),
-            job_id: job_id.to_string(),
-            state: state as i32,
-            detail,
-            timestamp_unix: current_unix_timestamp() as i64,
-        }]))
+        .publish_job_status(worker_request(
+            iter(vec![JobStatusEvent {
+                worker_id: worker_id.to_string(),
+                job_id: job_id.to_string(),
+                state: state as i32,
+                detail,
+                timestamp_unix: current_unix_timestamp() as i64,
+            }]),
+            worker_shared_secret,
+        ))
         .await
         .map_err(|err| format!("publish job status: {err}"))?;
 
@@ -299,6 +317,17 @@ fn normalize_grpc_endpoint(value: &str) -> String {
     } else {
         format!("http://{trimmed}")
     }
+}
+
+fn worker_request<T>(message: T, worker_shared_secret: &str) -> Request<T> {
+    let mut request = Request::new(message);
+    let secret = worker_shared_secret.trim();
+    if !secret.is_empty() {
+        let value =
+            MetadataValue::try_from(secret).expect("worker shared secret must be valid metadata");
+        request.metadata_mut().insert("x-uss-worker-secret", value);
+    }
+    request
 }
 
 fn default_metrics() -> HashMap<String, String> {

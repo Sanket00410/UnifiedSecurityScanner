@@ -7,28 +7,48 @@ import (
 )
 
 type Config struct {
-	APIBindAddress     string
-	GRPCBindAddress    string
-	DatabaseURL        string
-	DatabaseMaxConns   int32
-	DatabaseMinConns   int32
-	DatabaseConnTTL    time.Duration
-	SchedulerInterval  time.Duration
-	WorkerHeartbeatTTL time.Duration
-	BuildVersion       string
+	APIBindAddress      string
+	GRPCBindAddress     string
+	DatabaseURL         string
+	DatabaseMaxConns    int32
+	DatabaseMinConns    int32
+	DatabaseConnTTL     time.Duration
+	SchedulerInterval   time.Duration
+	WorkerHeartbeatTTL  time.Duration
+	BuildVersion        string
+	WorkerSharedSecret  string
+	BootstrapOrgSlug    string
+	BootstrapOrgName    string
+	BootstrapAdminName  string
+	BootstrapAdminEmail string
+	BootstrapAdminRole  string
+	BootstrapAdminToken string
+	OIDCIssuerURL       string
+	OIDCClientID        string
+	OIDCRedirectURL     string
 }
 
 func Load() Config {
 	return Config{
-		APIBindAddress:     getEnv("USS_API_BIND_ADDRESS", ":8080"),
-		GRPCBindAddress:    getEnv("USS_GRPC_BIND_ADDRESS", ":9090"),
-		DatabaseURL:        getEnv("USS_DATABASE_URL", "postgres://postgres:postgres@localhost:5432/unified_security_scanner?sslmode=disable"),
-		DatabaseMaxConns:   getInt32("USS_DATABASE_MAX_CONNS", 4),
-		DatabaseMinConns:   getInt32("USS_DATABASE_MIN_CONNS", 1),
-		DatabaseConnTTL:    getDuration("USS_DATABASE_CONN_TTL", 30*time.Minute),
-		SchedulerInterval:  getDuration("USS_SCHEDULER_INTERVAL", 15*time.Second),
-		WorkerHeartbeatTTL: getDuration("USS_WORKER_HEARTBEAT_TTL", 2*time.Minute),
-		BuildVersion:       getEnv("USS_BUILD_VERSION", "dev"),
+		APIBindAddress:      getEnv("USS_API_BIND_ADDRESS", ":8080"),
+		GRPCBindAddress:     getEnv("USS_GRPC_BIND_ADDRESS", ":9090"),
+		DatabaseURL:         getEnv("USS_DATABASE_URL", "postgres://postgres:postgres@localhost:5432/unified_security_scanner?sslmode=disable"),
+		DatabaseMaxConns:    getInt32("USS_DATABASE_MAX_CONNS", 4),
+		DatabaseMinConns:    getInt32("USS_DATABASE_MIN_CONNS", 1),
+		DatabaseConnTTL:     getDuration("USS_DATABASE_CONN_TTL", 30*time.Minute),
+		SchedulerInterval:   getDuration("USS_SCHEDULER_INTERVAL", 15*time.Second),
+		WorkerHeartbeatTTL:  getDuration("USS_WORKER_HEARTBEAT_TTL", 2*time.Minute),
+		BuildVersion:        getEnv("USS_BUILD_VERSION", "dev"),
+		WorkerSharedSecret:  getEnv("USS_WORKER_SHARED_SECRET", ""),
+		BootstrapOrgSlug:    getEnv("USS_BOOTSTRAP_ORG_SLUG", "local"),
+		BootstrapOrgName:    getEnv("USS_BOOTSTRAP_ORG_NAME", "Local Organization"),
+		BootstrapAdminName:  getEnv("USS_BOOTSTRAP_ADMIN_NAME", "Local Admin"),
+		BootstrapAdminEmail: getEnv("USS_BOOTSTRAP_ADMIN_EMAIL", "admin@local"),
+		BootstrapAdminRole:  getEnv("USS_BOOTSTRAP_ADMIN_ROLE", "platform_admin"),
+		BootstrapAdminToken: getEnv("USS_BOOTSTRAP_ADMIN_TOKEN", "uss-local-admin-token"),
+		OIDCIssuerURL:       getEnv("USS_OIDC_ISSUER_URL", ""),
+		OIDCClientID:        getEnv("USS_OIDC_CLIENT_ID", ""),
+		OIDCRedirectURL:     getEnv("USS_OIDC_REDIRECT_URL", ""),
 	}
 }
 

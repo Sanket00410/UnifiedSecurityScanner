@@ -12,9 +12,13 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"unifiedsecurityscanner/control-plane/internal/auth"
 	workerv1 "unifiedsecurityscanner/control-plane/internal/gen/workerv1"
 	"unifiedsecurityscanner/control-plane/internal/models"
 )
@@ -126,7 +130,7 @@ func TestWorkerFlowOverGRPC(t *testing.T) {
 		},
 	}
 
-	client := newTestWorkerClient(t, store)
+	client := newTestWorkerClient(t, store, "")
 	ctx := context.Background()
 
 	registration, err := client.RegisterWorker(ctx, &workerv1.WorkerRegistrationRequest{
@@ -253,14 +257,56 @@ func TestWorkerFlowOverGRPC(t *testing.T) {
 	}
 }
 
-func newTestWorkerClient(t *testing.T, store workerStore) workerv1.WorkerControlPlaneClient {
+func TestWorkerSecretValidation(t *testing.T) {
+	t.Parallel()
+
+	store := &stubWorkerStore{
+		registrationResponse: models.WorkerRegistrationResponse{
+			Accepted:                 true,
+			LeaseID:                  "lease-test-2",
+			HeartbeatIntervalSeconds: 30,
+		},
+	}
+
+	client := newTestWorkerClient(t, store, "expected-secret")
+
+	_, err := client.RegisterWorker(context.Background(), &workerv1.WorkerRegistrationRequest{
+		WorkerId:        "worker-test-2",
+		WorkerVersion:   "0.2.0",
+		OperatingSystem: "windows",
+		Hostname:        "worker-test-host",
+	})
+	if err == nil {
+		t.Fatal("expected register worker without metadata to fail")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unexpected grpc status: %v", status.Code(err))
+	}
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(), auth.WorkerSecretMetadata, "expected-secret")
+	response, err := client.RegisterWorker(ctx, &workerv1.WorkerRegistrationRequest{
+		WorkerId:        "worker-test-2",
+		WorkerVersion:   "0.2.0",
+		OperatingSystem: "windows",
+		Hostname:        "worker-test-host",
+	})
+	if err != nil {
+		t.Fatalf("register worker with metadata: %v", err)
+	}
+	if !response.GetAccepted() {
+		t.Fatal("expected authenticated register worker call to succeed")
+	}
+}
+
+func newTestWorkerClient(t *testing.T, store workerStore, workerSharedSecret string) workerv1.WorkerControlPlaneClient {
 	t.Helper()
 
 	listener := bufconn.Listen(testBufSize)
 	server := grpc.NewServer()
 	workerv1.RegisterWorkerControlPlaneServer(server, &workerService{
-		store:  store,
-		logger: log.New(io.Discard, "", 0),
+		store:              store,
+		logger:             log.New(io.Discard, "", 0),
+		workerSharedSecret: workerSharedSecret,
 	})
 
 	go func() {

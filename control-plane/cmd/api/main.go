@@ -30,7 +30,7 @@ func main() {
 	defer store.Close()
 
 	httpServer := httpapi.New(cfg, store)
-	grpcServer := grpcapi.New(cfg.GRPCBindAddress, store, logger)
+	grpcServer := grpcapi.New(cfg.GRPCBindAddress, store, logger, cfg.WorkerSharedSecret)
 	errCh := make(chan error, 2)
 
 	go func() {

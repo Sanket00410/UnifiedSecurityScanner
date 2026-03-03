@@ -12,6 +12,7 @@ type AssetSummary struct {
 
 type Policy struct {
 	ID        string    `json:"id"`
+	TenantID  string    `json:"tenant_id,omitempty"`
 	Name      string    `json:"name"`
 	Scope     string    `json:"scope"`
 	Mode      string    `json:"mode"`
@@ -33,6 +34,7 @@ type CreatePolicyRequest struct {
 
 type RemediationAction struct {
 	ID        string     `json:"id"`
+	TenantID  string     `json:"tenant_id,omitempty"`
 	FindingID string     `json:"finding_id"`
 	Title     string     `json:"title"`
 	Status    string     `json:"status"`

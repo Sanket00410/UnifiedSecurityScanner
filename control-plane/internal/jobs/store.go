@@ -25,6 +25,7 @@ var (
 	remediationSequence    uint64
 	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
 	ErrTaskNotFound        = errors.New("task not found")
+	ErrProtectedToken      = errors.New("protected token")
 )
 
 type Store struct {
@@ -52,10 +53,17 @@ func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{
+	store := &Store{
 		pool:               pool,
 		workerHeartbeatTTL: cfg.WorkerHeartbeatTTL,
-	}, nil
+	}
+
+	if err := store.EnsureBootstrap(ctx, cfg); err != nil {
+		pool.Close()
+		return nil, err
+	}
+
+	return store, nil
 }
 
 func (s *Store) Close() {

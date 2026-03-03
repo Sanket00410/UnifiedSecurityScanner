@@ -26,6 +26,8 @@ paths:
   /v1/meta:
     get:
       operationId: getMetadata
+      security:
+        - BearerToken: []
       responses:
         "200":
           description: Control plane metadata
@@ -33,9 +35,120 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceMetadata"
+  /v1/auth/me:
+    get:
+      operationId: getAuthSession
+      security:
+        - BearerToken: []
+      responses:
+        "200":
+          description: Current authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/auth/tokens:
+    get:
+      operationId: listApiTokens
+      security:
+        - BearerToken: []
+      responses:
+        "200":
+          description: Tenant API tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiToken"
+    post:
+      operationId: createApiToken
+      security:
+        - BearerToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateApiTokenRequest"
+      responses:
+        "201":
+          description: API token created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedApiToken"
+        "400":
+          description: Validation or scope error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/auth/tokens/{tokenId}/disable:
+    post:
+      operationId: disableApiToken
+      security:
+        - BearerToken: []
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: API token disabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiToken"
+        "404":
+          description: Token not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: Protected token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/audit-events:
+    get:
+      operationId: listAuditEvents
+      security:
+        - BearerToken: []
+      responses:
+        "200":
+          description: Tenant audit events
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEvent"
   /v1/scan-jobs:
     get:
       operationId: listScanJobs
+      security:
+        - BearerToken: []
       responses:
         "200":
           description: Existing scan jobs
@@ -52,6 +165,8 @@ paths:
                       $ref: "#/components/schemas/ScanJob"
     post:
       operationId: createScanJob
+      security:
+        - BearerToken: []
       requestBody:
         required: true
         content:
@@ -74,6 +189,8 @@ paths:
   /v1/scan-jobs/{jobId}:
     get:
       operationId: getScanJob
+      security:
+        - BearerToken: []
       parameters:
         - name: jobId
           in: path
@@ -96,6 +213,12 @@ paths:
   /v1/workers/register:
     post:
       operationId: registerWorker
+      parameters:
+        - name: X-USS-Worker-Secret
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -112,6 +235,12 @@ paths:
   /v1/workers/heartbeat:
     post:
       operationId: recordWorkerHeartbeat
+      parameters:
+        - name: X-USS-Worker-Secret
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -134,23 +263,8 @@ paths:
   /v1/findings:
     get:
       operationId: listFindings
-      parameters:
-        - name: tenant_id
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: status
-          in: query
-          required: false
-          schema:
-            type: string
-            enum:
-              - open
-              - triaged
-              - suppressed
-              - accepted
-              - resolved
+      security:
+        - BearerToken: []
       responses:
         "200":
           description: Canonical findings
@@ -166,16 +280,176 @@ paths:
                     items:
                       $ref: "#/components/schemas/CanonicalFinding"
 components:
+  securitySchemes:
+    BearerToken:
+      type: http
+      scheme: bearer
+      bearerFormat: API Token
   schemas:
+    AuthPrincipal:
+      type: object
+      additionalProperties: false
+      required:
+        - user_id
+        - organization_id
+        - organization_slug
+        - organization_name
+        - email
+        - display_name
+        - role
+        - auth_provider
+      properties:
+        user_id:
+          type: string
+        organization_id:
+          type: string
+        organization_slug:
+          type: string
+        organization_name:
+          type: string
+        email:
+          type: string
+        display_name:
+          type: string
+        role:
+          type: string
+        auth_provider:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+    AuthSession:
+      type: object
+      additionalProperties: false
+      required:
+        - principal
+        - sso_enabled
+        - bootstrap_token
+      properties:
+        principal:
+          $ref: "#/components/schemas/AuthPrincipal"
+        sso_enabled:
+          type: boolean
+        oidc_issuer_url:
+          type: string
+        oidc_client_id:
+          type: string
+        bootstrap_token:
+          type: boolean
+    ApiToken:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - organization_id
+        - user_id
+        - token_name
+        - disabled
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        user_id:
+          type: string
+        token_name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        disabled:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateApiTokenRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - token_name
+      properties:
+        token_name:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreatedApiToken:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+        - plaintext_token
+      properties:
+        token:
+          $ref: "#/components/schemas/ApiToken"
+        plaintext_token:
+          type: string
+    AuditEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - organization_id
+        - action
+        - resource_type
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+        organization_id:
+          type: string
+        actor_user_id:
+          type: string
+        actor_email:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        status:
+          type: string
+        request_method:
+          type: string
+        request_path:
+          type: string
+        remote_addr:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
     CreateScanJobRequest:
       type: object
       additionalProperties: false
       required:
-        - tenant_id
         - target_kind
         - target
         - profile
-        - requested_by
       properties:
         tenant_id:
           type: string

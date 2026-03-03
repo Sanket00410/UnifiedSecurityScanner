@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"unifiedsecurityscanner/control-plane/internal/auth"
 	"unifiedsecurityscanner/control-plane/internal/config"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
@@ -21,10 +22,31 @@ var staticAssets embed.FS
 type Server struct {
 	cfg        config.Config
 	httpServer *http.Server
-	store      *jobs.Store
+	store      apiStore
 }
 
-func New(cfg config.Config, store *jobs.Store) *Server {
+type apiStore interface {
+	Ping(ctx context.Context) error
+	AuthenticateToken(ctx context.Context, rawToken string) (models.AuthPrincipal, bool, error)
+	RecordAuditEvent(ctx context.Context, event models.AuditEvent) error
+	ListAuditEvents(ctx context.Context, organizationID string, limit int) ([]models.AuditEvent, error)
+	ListAPITokens(ctx context.Context, organizationID string, limit int) ([]models.APIToken, error)
+	CreateAPIToken(ctx context.Context, principal models.AuthPrincipal, request models.CreateAPITokenRequest) (models.CreatedAPIToken, error)
+	DisableAPIToken(ctx context.Context, organizationID string, tokenID string) (models.APIToken, bool, error)
+	ListForTenant(ctx context.Context, tenantID string, limit int) ([]models.ScanJob, error)
+	CreateForTenant(ctx context.Context, tenantID string, request models.CreateScanJobRequest) (models.ScanJob, error)
+	GetForTenant(ctx context.Context, tenantID string, id string) (models.ScanJob, bool, error)
+	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
+	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
+	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
+	ListAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.AssetSummary, error)
+	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
+	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
+	ListRemediationsForTenant(ctx context.Context, tenantID string, limit int) ([]models.RemediationAction, error)
+	CreateRemediationForTenant(ctx context.Context, tenantID string, request models.CreateRemediationRequest) (models.RemediationAction, error)
+}
+
+func New(cfg config.Config, store apiStore) *Server {
 	server := &Server{
 		cfg:   cfg,
 		store: store,
@@ -38,15 +60,31 @@ func New(cfg config.Config, store *jobs.Store) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
-	mux.HandleFunc("/v1/meta", server.handleMeta)
-	mux.HandleFunc("/v1/scan-jobs", server.handleScanJobs)
-	mux.HandleFunc("/v1/scan-jobs/", server.handleScanJobByID)
-	mux.HandleFunc("/v1/findings", server.handleFindings)
-	mux.HandleFunc("/v1/assets", server.handleAssets)
-	mux.HandleFunc("/v1/policies", server.handlePolicies)
-	mux.HandleFunc("/v1/remediations", server.handleRemediations)
-	mux.HandleFunc("/v1/workers/register", server.handleWorkerRegister)
-	mux.HandleFunc("/v1/workers/heartbeat", server.handleWorkerHeartbeat)
+	mux.HandleFunc("/v1/meta", server.withUserAuth(auth.PermissionMetaRead, "meta.read", "service", server.handleMeta))
+	mux.HandleFunc("/v1/auth/me", server.withUserAuth(auth.PermissionSessionRead, "session.read", "session", server.handleSession))
+	mux.HandleFunc("/v1/auth/tokens", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionTokensRead,
+		http.MethodPost: auth.PermissionTokensWrite,
+	}, "auth_tokens", "api_token", server.handleAuthTokens))
+	mux.HandleFunc("/v1/auth/tokens/", server.withUserAuth(auth.PermissionTokensWrite, "auth_token.disable", "api_token", server.handleAuthTokenByID))
+	mux.HandleFunc("/v1/audit-events", server.withUserAuth(auth.PermissionAuditRead, "audit.list", "audit_event", server.handleAuditEvents))
+	mux.HandleFunc("/v1/scan-jobs", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionScanJobsRead,
+		http.MethodPost: auth.PermissionScanJobsWrite,
+	}, "scan_jobs", "scan_job", server.handleScanJobs))
+	mux.HandleFunc("/v1/scan-jobs/", server.withUserAuth(auth.PermissionScanJobsRead, "scan_job.read", "scan_job", server.handleScanJobByID))
+	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
+	mux.HandleFunc("/v1/assets", server.withUserAuth(auth.PermissionAssetsRead, "assets.list", "asset", server.handleAssets))
+	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "policies", "policy", server.handlePolicies))
+	mux.HandleFunc("/v1/remediations", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionRemediationsRead,
+		http.MethodPost: auth.PermissionRemediationsWrite,
+	}, "remediations", "remediation", server.handleRemediations))
+	mux.HandleFunc("/v1/workers/register", server.withWorkerAuth(server.handleWorkerRegister))
+	mux.HandleFunc("/v1/workers/heartbeat", server.withWorkerAuth(server.handleWorkerHeartbeat))
 	mux.HandleFunc("/app", server.handleAppRoot)
 	mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.FS(webFS))))
 	mux.HandleFunc("/", server.handleRoot)
@@ -111,10 +149,150 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleScanJobs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, models.AuthSession{
+		Principal:      principal,
+		SSOEnabled:     s.cfg.OIDCIssuerURL != "" && s.cfg.OIDCClientID != "",
+		OIDCIssuerURL:  s.cfg.OIDCIssuerURL,
+		OIDCClientID:   s.cfg.OIDCClientID,
+		BootstrapToken: auth.IsBootstrapToken(principal),
+	})
+}
+
+func (s *Server) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	events, err := s.store.ListAuditEvents(r.Context(), principal.OrganizationID, 200)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_audit_events_failed", "audit events could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": events,
+	})
+}
+
+func (s *Server) handleAuthTokens(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		jobsList, err := s.store.List(r.Context(), 100)
+		tokens, err := s.store.ListAPITokens(r.Context(), principal.OrganizationID, 200)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_api_tokens_failed", "api tokens could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": tokens,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateAPITokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		if strings.TrimSpace(request.TokenName) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "token_name is required")
+			return
+		}
+		if request.ExpiresAt != nil && !request.ExpiresAt.After(time.Now().UTC()) {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "expires_at must be in the future")
+			return
+		}
+
+		createdToken, err := s.store.CreateAPIToken(r.Context(), principal, request)
+		if err != nil {
+			if errors.Is(err, auth.ErrInvalidScope) {
+				s.writeError(w, http.StatusBadRequest, "invalid_scope", "the requested token scopes are not allowed for the current role")
+				return
+			}
+
+			s.writeError(w, http.StatusInternalServerError, "create_api_token_failed", "api token could not be created")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, createdToken)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleAuthTokenByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/auth/tokens/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "disable" {
+		s.writeError(w, http.StatusNotFound, "auth_token_route_not_found", "the requested api token route was not found")
+		return
+	}
+
+	token, found, err := s.store.DisableAPIToken(r.Context(), principal.OrganizationID, parts[0])
+	if err != nil {
+		if errors.Is(err, jobs.ErrProtectedToken) {
+			s.writeError(w, http.StatusConflict, "protected_api_token", "the bootstrap token cannot be disabled while it is the only guaranteed access path")
+			return
+		}
+
+		s.writeError(w, http.StatusInternalServerError, "disable_api_token_failed", "api token could not be disabled")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "api_token_not_found", "api token was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, token)
+}
+
+func (s *Server) handleScanJobs(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		jobsList, err := s.store.ListForTenant(r.Context(), principal.OrganizationID, 100)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "list_scan_jobs_failed", "scan jobs could not be loaded")
 			return
@@ -124,7 +302,7 @@ func (s *Server) handleScanJobs(w http.ResponseWriter, r *http.Request) {
 			"items": jobsList,
 		})
 	case http.MethodPost:
-		s.createScanJob(w, r)
+		s.createScanJob(w, r, principal)
 	default:
 		s.writeMethodNotAllowed(w)
 	}
@@ -142,12 +320,18 @@ func (s *Server) handleScanJobByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, ok, err := s.store.Get(r.Context(), jobID)
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	job, found, err := s.store.GetForTenant(r.Context(), principal.OrganizationID, jobID)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "get_scan_job_failed", "scan job could not be loaded")
 		return
 	}
-	if !ok {
+	if !found {
 		s.writeError(w, http.StatusNotFound, "scan_job_not_found", "scan job was not found")
 		return
 	}
@@ -225,7 +409,13 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	findings, err := s.store.ListFindings(r.Context(), 200)
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	findings, err := s.store.ListFindingsForTenant(r.Context(), principal.OrganizationID, 200)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "list_findings_failed", "findings could not be loaded")
 		return
@@ -242,7 +432,13 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assets, err := s.store.ListAssets(r.Context(), 200)
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	assets, err := s.store.ListAssetsForTenant(r.Context(), principal.OrganizationID, 200)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "list_assets_failed", "assets could not be loaded")
 		return
@@ -254,9 +450,15 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		policies, err := s.store.ListPolicies(r.Context(), 200)
+		policies, err := s.store.ListPoliciesForTenant(r.Context(), principal.OrganizationID, 200)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "list_policies_failed", "policies could not be loaded")
 			return
@@ -279,7 +481,8 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		policy, err := s.store.CreatePolicy(r.Context(), request)
+		request.UpdatedBy = principal.Email
+		policy, err := s.store.CreatePolicyForTenant(r.Context(), principal.OrganizationID, request)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "create_policy_failed", "policy could not be created")
 			return
@@ -292,9 +495,15 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		items, err := s.store.ListRemediations(r.Context(), 200)
+		items, err := s.store.ListRemediationsForTenant(r.Context(), principal.OrganizationID, 200)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "list_remediations_failed", "remediation actions could not be loaded")
 			return
@@ -317,7 +526,7 @@ func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		item, err := s.store.CreateRemediation(r.Context(), request)
+		item, err := s.store.CreateRemediationForTenant(r.Context(), principal.OrganizationID, request)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "create_remediation_failed", "remediation action could not be created")
 			return
@@ -329,7 +538,7 @@ func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal) {
 	defer r.Body.Close()
 
 	var request models.CreateScanJobRequest
@@ -338,16 +547,22 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(request.TenantID) == "" ||
-		strings.TrimSpace(request.TargetKind) == "" ||
+	if strings.TrimSpace(request.TargetKind) == "" ||
 		strings.TrimSpace(request.Target) == "" ||
-		strings.TrimSpace(request.Profile) == "" ||
-		strings.TrimSpace(request.RequestedBy) == "" {
-		s.writeError(w, http.StatusBadRequest, "validation_error", "tenant_id, target_kind, target, profile, and requested_by are required")
+		strings.TrimSpace(request.Profile) == "" {
+		s.writeError(w, http.StatusBadRequest, "validation_error", "target_kind, target, and profile are required")
 		return
 	}
 
-	job, err := s.store.Create(r.Context(), request)
+	if request.TenantID != "" && strings.TrimSpace(request.TenantID) != principal.OrganizationID {
+		s.writeError(w, http.StatusForbidden, "tenant_scope_violation", "scan jobs can only be created in the authenticated tenant")
+		return
+	}
+
+	request.TenantID = principal.OrganizationID
+	request.RequestedBy = principal.Email
+
+	job, err := s.store.CreateForTenant(r.Context(), principal.OrganizationID, request)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "create_scan_job_failed", "scan job could not be created")
 		return
@@ -374,6 +589,110 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
 }
 
+func (s *Server) withUserAuth(permission auth.Permission, action string, resourceType string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := auth.ParseBearerToken(r.Header.Get("Authorization"))
+		if token == "" {
+			s.writeError(w, http.StatusUnauthorized, "missing_bearer_token", "authorization bearer token is required")
+			return
+		}
+
+		principal, ok, err := s.store.AuthenticateToken(r.Context(), token)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "authentication_failed", "authentication could not be completed")
+			return
+		}
+		if !ok {
+			s.writeError(w, http.StatusUnauthorized, "invalid_bearer_token", "the supplied bearer token is invalid")
+			return
+		}
+		if !auth.Allowed(principal.Role, permission) {
+			s.recordAuditEvent(r.Context(), principal, action, resourceType, "", "denied", r, map[string]any{
+				"permission": string(permission),
+				"reason":     "role",
+			})
+			s.writeError(w, http.StatusForbidden, "permission_denied", "the current identity is not allowed to perform this action")
+			return
+		}
+		if !auth.ScopeAllows(principal.Scopes, permission) {
+			s.recordAuditEvent(r.Context(), principal, action, resourceType, "", "denied", r, map[string]any{
+				"permission": string(permission),
+				"reason":     "scope",
+			})
+			s.writeError(w, http.StatusForbidden, "permission_denied", "the current identity is not allowed to perform this action")
+			return
+		}
+
+		recorder := &auditedResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next(recorder, r.WithContext(auth.WithPrincipal(r.Context(), principal)))
+		s.recordAuditEvent(r.Context(), principal, action, resourceType, s.resourceIDFromRequest(r), http.StatusText(recorder.status), r, map[string]any{
+			"permission":  string(permission),
+			"status_code": recorder.status,
+		})
+	}
+}
+
+func (s *Server) withUserAuthForMethod(permissions map[string]auth.Permission, actionPrefix string, resourceType string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		permission, ok := permissions[r.Method]
+		if !ok {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		action := actionPrefix + "." + strings.ToLower(r.Method)
+		s.withUserAuth(permission, action, resourceType, next)(w, r)
+	}
+}
+
+func (s *Server) withWorkerAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg.WorkerSharedSecret != "" && r.Header.Get(auth.WorkerSecretHeader) != s.cfg.WorkerSharedSecret {
+			s.writeError(w, http.StatusUnauthorized, "invalid_worker_secret", "the worker secret is invalid")
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func (s *Server) recordAuditEvent(ctx context.Context, principal models.AuthPrincipal, action string, resourceType string, resourceID string, statusText string, r *http.Request, details map[string]any) {
+	statusText = strings.ToLower(strings.TrimSpace(statusText))
+	if statusText == "" {
+		statusText = "unknown"
+	}
+
+	_ = s.store.RecordAuditEvent(ctx, models.AuditEvent{
+		OrganizationID: principal.OrganizationID,
+		ActorUserID:    principal.UserID,
+		ActorEmail:     principal.Email,
+		Action:         action,
+		ResourceType:   resourceType,
+		ResourceID:     resourceID,
+		Status:         statusText,
+		RequestMethod:  r.Method,
+		RequestPath:    r.URL.Path,
+		RemoteAddr:     r.RemoteAddr,
+		Details:        details,
+		CreatedAt:      time.Now().UTC(),
+	})
+}
+
+func (s *Server) resourceIDFromRequest(r *http.Request) string {
+	switch {
+	case strings.HasPrefix(r.URL.Path, "/v1/scan-jobs/"):
+		return strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-jobs/"))
+	case strings.HasPrefix(r.URL.Path, "/v1/auth/tokens/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/auth/tokens/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	default:
+		return ""
+	}
+}
+
 func (s *Server) writeMethodNotAllowed(w http.ResponseWriter) {
 	s.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "the requested method is not supported")
 }
@@ -389,4 +708,14 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+type auditedResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *auditedResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }
