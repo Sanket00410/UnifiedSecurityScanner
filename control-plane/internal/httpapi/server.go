@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net/http"
 	"strings"
@@ -42,7 +43,13 @@ type apiStore interface {
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
 	ListAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.AssetSummary, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
+	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
+	UpdatePolicyForTenant(ctx context.Context, tenantID string, policyID string, request models.UpdatePolicyRequest) (models.Policy, bool, error)
+	ListPolicyVersionsForTenant(ctx context.Context, tenantID string, policyID string, limit int) ([]models.PolicyVersion, error)
+	RollbackPolicyForTenant(ctx context.Context, tenantID string, policyID string, versionNumber int64, updatedBy string) (models.Policy, bool, error)
+	ListPolicyApprovalsForTenant(ctx context.Context, tenantID string, limit int) ([]models.PolicyApproval, error)
+	DecidePolicyApproval(ctx context.Context, tenantID string, approvalID string, approved bool, decidedBy string, reason string) (models.PolicyApproval, bool, error)
 	ListRemediationsForTenant(ctx context.Context, tenantID string, limit int) ([]models.RemediationAction, error)
 	CreateRemediationForTenant(ctx context.Context, tenantID string, request models.CreateRemediationRequest) (models.RemediationAction, error)
 }
@@ -83,6 +90,13 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "policies", "policy", server.handlePolicies))
+	mux.HandleFunc("/v1/policies/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPut:  auth.PermissionPoliciesWrite,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "policy", "policy", server.handlePolicyRoute))
+	mux.HandleFunc("/v1/policy-approvals", server.withUserAuth(auth.PermissionPoliciesRead, "policy_approvals.list", "policy_approval", server.handlePolicyApprovals))
+	mux.HandleFunc("/v1/policy-approvals/", server.withUserAuth(auth.PermissionPoliciesWrite, "policy_approval.decide", "policy_approval", server.handlePolicyApprovalDecision))
 	mux.HandleFunc("/v1/remediations", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionRemediationsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
@@ -486,7 +500,19 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 		}
 
 		request.UpdatedBy = principal.Email
-		policy, err := s.store.CreatePolicyForTenant(r.Context(), principal.OrganizationID, request)
+		tenantID := principal.OrganizationID
+		if request.Global {
+			if principal.Role != auth.RolePlatformAdmin {
+				s.writeError(w, http.StatusForbidden, "permission_denied", "only platform administrators can create global policies")
+				return
+			}
+			tenantID = ""
+			if strings.TrimSpace(request.Scope) == "" {
+				request.Scope = "global"
+			}
+		}
+
+		policy, err := s.store.CreatePolicyForTenant(r.Context(), tenantID, request)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, "create_policy_failed", "policy could not be created")
 			return
@@ -496,6 +522,219 @@ func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.writeMethodNotAllowed(w)
 	}
+}
+
+func (s *Server) handlePolicyRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policies/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "policy_route_not_found", "the requested policy route was not found")
+		return
+	}
+
+	policyID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			policy, found, err := s.store.GetPolicyForTenant(r.Context(), principal.OrganizationID, policyID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_policy_failed", "policy could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "policy_not_found", "policy was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, policy)
+			return
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpdatePolicyRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.Name) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "name is required")
+				return
+			}
+
+			request.UpdatedBy = principal.Email
+			targetTenantID := principal.OrganizationID
+			current, found, err := s.store.GetPolicyForTenant(r.Context(), principal.OrganizationID, policyID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_policy_failed", "policy could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "policy_not_found", "policy was not found")
+				return
+			}
+			if current.TenantID == "" {
+				if principal.Role != auth.RolePlatformAdmin {
+					s.writeError(w, http.StatusForbidden, "permission_denied", "only platform administrators can modify global policies")
+					return
+				}
+				targetTenantID = ""
+			}
+
+			updated, found, err := s.store.UpdatePolicyForTenant(r.Context(), targetTenantID, policyID, request)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "update_policy_failed", "policy could not be updated")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "policy_not_found", "policy was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, updated)
+			return
+		default:
+			s.writeMethodNotAllowed(w)
+			return
+		}
+	}
+
+	if len(parts) == 2 && parts[1] == "versions" && r.Method == http.MethodGet {
+		versions, err := s.store.ListPolicyVersionsForTenant(r.Context(), principal.OrganizationID, policyID, 200)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_policy_versions_failed", "policy versions could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": versions,
+		})
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "rollback" && r.Method == http.MethodPost {
+		defer r.Body.Close()
+
+		var request models.PolicyRollbackRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if request.VersionNumber <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "version_number must be greater than zero")
+			return
+		}
+
+		targetTenantID := principal.OrganizationID
+		current, found, err := s.store.GetPolicyForTenant(r.Context(), principal.OrganizationID, policyID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_policy_failed", "policy could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "policy_not_found", "policy was not found")
+			return
+		}
+		if current.TenantID == "" {
+			if principal.Role != auth.RolePlatformAdmin {
+				s.writeError(w, http.StatusForbidden, "permission_denied", "only platform administrators can rollback global policies")
+				return
+			}
+			targetTenantID = ""
+		}
+
+		rolledBack, found, err := s.store.RollbackPolicyForTenant(r.Context(), targetTenantID, policyID, request.VersionNumber, principal.Email)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "rollback_policy_failed", "policy could not be rolled back")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "policy_version_not_found", "policy version was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, rolledBack)
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "policy_route_not_found", "the requested policy route was not found")
+}
+
+func (s *Server) handlePolicyApprovals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	items, err := s.store.ListPolicyApprovalsForTenant(r.Context(), principal.OrganizationID, 200)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_policy_approvals_failed", "policy approvals could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handlePolicyApprovalDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policy-approvals/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "policy_approval_route_not_found", "the requested policy approval route was not found")
+		return
+	}
+
+	approved := false
+	switch parts[1] {
+	case "approve":
+		approved = true
+	case "deny":
+		approved = false
+	default:
+		s.writeError(w, http.StatusNotFound, "policy_approval_route_not_found", "the requested policy approval route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.PolicyApprovalDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, found, err := s.store.DecidePolicyApproval(r.Context(), principal.OrganizationID, parts[0], approved, principal.Email, request.Reason)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "policy_approval_decision_failed", "policy approval could not be updated")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "policy_approval_not_found", "policy approval was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
@@ -568,6 +807,16 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal
 
 	job, err := s.store.CreateForTenant(r.Context(), principal.OrganizationID, request)
 	if err != nil {
+		var denied *jobs.PolicyDeniedError
+		if errors.As(err, &denied) {
+			s.writeJSON(w, http.StatusForbidden, map[string]any{
+				"code":      "policy_denied",
+				"message":   denied.Error(),
+				"policy_id": denied.PolicyID,
+				"rule_hits": denied.RuleHits,
+			})
+			return
+		}
 		s.writeError(w, http.StatusInternalServerError, "create_scan_job_failed", "scan job could not be created")
 		return
 	}
@@ -688,6 +937,18 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-jobs/"))
 	case strings.HasPrefix(r.URL.Path, "/v1/auth/tokens/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/auth/tokens/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/policies/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policies/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/policy-approvals/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policy-approvals/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

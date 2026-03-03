@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"unifiedsecurityscanner/control-plane/internal/models"
 )
 
@@ -159,7 +161,7 @@ func (s *Store) ListPoliciesForTenant(ctx context.Context, organizationID string
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT tenant_id, id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+		SELECT tenant_id, id, version_number, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
 		FROM policies
 		WHERE tenant_id = $1 OR tenant_id = ''
 		ORDER BY updated_at DESC
@@ -178,6 +180,7 @@ func (s *Store) ListPoliciesForTenant(ctx context.Context, organizationID string
 		if err := rows.Scan(
 			&policy.TenantID,
 			&policy.ID,
+			&policy.VersionNumber,
 			&policy.Name,
 			&policy.Scope,
 			&policy.Mode,
@@ -208,16 +211,17 @@ func (s *Store) ListPoliciesForTenant(ctx context.Context, organizationID string
 func (s *Store) CreatePolicyForTenant(ctx context.Context, organizationID string, request models.CreatePolicyRequest) (models.Policy, error) {
 	now := time.Now().UTC()
 	policy := models.Policy{
-		ID:        nextPolicyID(),
-		TenantID:  strings.TrimSpace(organizationID),
-		Name:      strings.TrimSpace(request.Name),
-		Scope:     strings.TrimSpace(request.Scope),
-		Mode:      strings.TrimSpace(request.Mode),
-		Enabled:   request.Enabled,
-		Rules:     sanitizeRuleList(request.Rules),
-		UpdatedBy: strings.TrimSpace(request.UpdatedBy),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            nextPolicyID(),
+		TenantID:      strings.TrimSpace(organizationID),
+		VersionNumber: 1,
+		Name:          strings.TrimSpace(request.Name),
+		Scope:         strings.TrimSpace(request.Scope),
+		Mode:          strings.TrimSpace(request.Mode),
+		Enabled:       request.Enabled,
+		Rules:         sanitizeRuleList(request.Rules),
+		UpdatedBy:     strings.TrimSpace(request.UpdatedBy),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if policy.Scope == "" {
@@ -232,15 +236,29 @@ func (s *Store) CreatePolicyForTenant(ctx context.Context, organizationID string
 		return models.Policy{}, fmt.Errorf("marshal tenant policy rules: %w", err)
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.Policy{}, fmt.Errorf("begin tenant policy tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO policies (
-			id, tenant_id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+			id, tenant_id, version_number, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $9
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10
 		)
-	`, policy.ID, policy.TenantID, policy.Name, policy.Scope, policy.Mode, policy.Enabled, rulesJSON, policy.UpdatedBy, now)
+	`, policy.ID, policy.TenantID, policy.VersionNumber, policy.Name, policy.Scope, policy.Mode, policy.Enabled, rulesJSON, policy.UpdatedBy, now)
 	if err != nil {
 		return models.Policy{}, fmt.Errorf("insert tenant policy: %w", err)
+	}
+
+	if err := recordPolicyVersionTx(ctx, tx, policy, "created", policy.UpdatedBy); err != nil {
+		return models.Policy{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.Policy{}, fmt.Errorf("commit tenant policy tx: %w", err)
 	}
 
 	return policy, nil

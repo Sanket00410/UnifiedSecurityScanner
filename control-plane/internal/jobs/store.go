@@ -15,6 +15,7 @@ import (
 	"unifiedsecurityscanner/control-plane/internal/config"
 	"unifiedsecurityscanner/control-plane/internal/database"
 	"unifiedsecurityscanner/control-plane/internal/models"
+	policyengine "unifiedsecurityscanner/control-plane/internal/policy"
 )
 
 var (
@@ -22,11 +23,29 @@ var (
 	leaseSequence          uint64
 	taskSequence           uint64
 	policySequence         uint64
+	policyVersionSequence  uint64
+	policyApprovalSequence uint64
 	remediationSequence    uint64
 	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrProtectedToken      = errors.New("protected token")
 )
+
+type PolicyDeniedError struct {
+	PolicyID string
+	Reason   string
+	RuleHits []string
+}
+
+func (e *PolicyDeniedError) Error() string {
+	if e == nil {
+		return "policy denied the requested operation"
+	}
+	if strings.TrimSpace(e.Reason) != "" {
+		return e.Reason
+	}
+	return "policy denied the requested operation"
+}
 
 type Store struct {
 	pool               *pgxpool.Pool
@@ -87,6 +106,19 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 		tools = defaultToolsForTargetKind(request.TargetKind)
 	}
 
+	applicablePolicies, err := s.ListPoliciesForTenant(ctx, strings.TrimSpace(request.TenantID), 500)
+	if err != nil {
+		return models.ScanJob{}, fmt.Errorf("load policies for scan job: %w", err)
+	}
+	plan, rejection := policyengine.EvaluateSubmission(applicablePolicies, request, tools)
+	if rejection != nil {
+		return models.ScanJob{}, &PolicyDeniedError{
+			PolicyID: rejection.PolicyID,
+			Reason:   rejection.Reason,
+			RuleHits: rejection.RuleHits,
+		}
+	}
+
 	job := models.ScanJob{
 		ID:           nextJobID(),
 		TenantID:     strings.TrimSpace(request.TenantID),
@@ -95,7 +127,7 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 		Profile:      strings.TrimSpace(request.Profile),
 		RequestedBy:  strings.TrimSpace(request.RequestedBy),
 		Tools:        tools,
-		ApprovalMode: approvalModeForTools(tools),
+		ApprovalMode: combineApprovalMode(approvalModeForTools(tools), plan.ApprovalMode),
 		Status:       models.ScanJobStatusQueued,
 		RequestedAt:  now,
 		UpdatedAt:    now,
@@ -131,21 +163,50 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 			return models.ScanJob{}, fmt.Errorf("marshal task labels: %w", err)
 		}
 
+		decision := plan.Decisions[tool]
+		policyStatus := string(policyengine.TaskDecisionApproved)
+		policyReason := ""
+		ruleHitsJSON := []byte("[]")
+		if decision.Status != "" {
+			policyStatus = string(decision.Status)
+			policyReason = strings.TrimSpace(decision.Reason)
+			payload, err := json.Marshal(decision.RuleHits)
+			if err != nil {
+				return models.ScanJob{}, fmt.Errorf("marshal policy rule hits: %w", err)
+			}
+			ruleHitsJSON = payload
+		}
+
 		_, err = tx.Exec(ctx, `
 			INSERT INTO scan_job_tasks (
 				id, scan_job_id, tenant_id, adapter_id, target_kind, target,
 				status, approved_modules, labels_json, max_runtime_seconds,
-				evidence_upload_url, created_at, updated_at
+				evidence_upload_url, policy_status, policy_reason, policy_rule_hits_json,
+				created_at, updated_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
 				$7, $8, $9, $10,
-				$11, $12, $12
+				$11, $12, $13, $14,
+				$15, $15
 			)
 		`, taskID, job.ID, job.TenantID, tool, job.TargetKind, job.Target,
 			string(models.TaskStatusQueued), approvedModulesForTool(tool, job.TargetKind), labelsJSON, maxRuntimeForTool(tool),
-			fmt.Sprintf("local://evidence/%s", taskID), now)
+			fmt.Sprintf("local://evidence/%s", taskID), policyStatus, policyReason, ruleHitsJSON, now)
 		if err != nil {
 			return models.ScanJob{}, fmt.Errorf("insert scan job task: %w", err)
+		}
+
+		if decision.Status == policyengine.TaskDecisionPendingApproval {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO policy_approvals (
+					id, tenant_id, scan_job_id, task_id, policy_id, action, status, requested_by, created_at
+				) VALUES (
+					$1, $2, $3, $4, $5, $6, 'pending', $7, $8
+				)
+			`, nextPolicyApprovalID(), job.TenantID, job.ID, taskID, decision.PolicyID, "scan_task.dispatch", job.RequestedBy, now)
+			if err != nil {
+				return models.ScanJob{}, fmt.Errorf("insert policy approval: %w", err)
+			}
 		}
 	}
 
@@ -494,7 +555,7 @@ func (s *Store) ListPolicies(ctx context.Context, limit int) ([]models.Policy, e
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+		SELECT tenant_id, id, version_number, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
 		FROM policies
 		ORDER BY updated_at DESC
 		LIMIT $1
@@ -510,7 +571,9 @@ func (s *Store) ListPolicies(ctx context.Context, limit int) ([]models.Policy, e
 		var rulesJSON []byte
 
 		if err := rows.Scan(
+			&policy.TenantID,
 			&policy.ID,
+			&policy.VersionNumber,
 			&policy.Name,
 			&policy.Scope,
 			&policy.Mode,
@@ -542,15 +605,16 @@ func (s *Store) ListPolicies(ctx context.Context, limit int) ([]models.Policy, e
 func (s *Store) CreatePolicy(ctx context.Context, request models.CreatePolicyRequest) (models.Policy, error) {
 	now := time.Now().UTC()
 	policy := models.Policy{
-		ID:        nextPolicyID(),
-		Name:      strings.TrimSpace(request.Name),
-		Scope:     strings.TrimSpace(request.Scope),
-		Mode:      strings.TrimSpace(request.Mode),
-		Enabled:   request.Enabled,
-		Rules:     sanitizeRuleList(request.Rules),
-		UpdatedBy: strings.TrimSpace(request.UpdatedBy),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:            nextPolicyID(),
+		VersionNumber: 1,
+		Name:          strings.TrimSpace(request.Name),
+		Scope:         strings.TrimSpace(request.Scope),
+		Mode:          strings.TrimSpace(request.Mode),
+		Enabled:       request.Enabled,
+		Rules:         sanitizeRuleList(request.Rules),
+		UpdatedBy:     strings.TrimSpace(request.UpdatedBy),
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if policy.Scope == "" {
@@ -568,15 +632,29 @@ func (s *Store) CreatePolicy(ctx context.Context, request models.CreatePolicyReq
 		return models.Policy{}, fmt.Errorf("marshal policy rules: %w", err)
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.Policy{}, fmt.Errorf("begin create policy tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO policies (
-			id, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
+			id, tenant_id, version_number, name, scope, mode, enabled, rules_json, updated_by, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $8
+			$1, '', $2, $3, $4, $5, $6, $7, $8, $9, $9
 		)
-	`, policy.ID, policy.Name, policy.Scope, policy.Mode, policy.Enabled, rulesJSON, policy.UpdatedBy, now)
+	`, policy.ID, policy.VersionNumber, policy.Name, policy.Scope, policy.Mode, policy.Enabled, rulesJSON, policy.UpdatedBy, now)
 	if err != nil {
 		return models.Policy{}, fmt.Errorf("insert policy: %w", err)
+	}
+
+	if err := recordPolicyVersionTx(ctx, tx, policy, "created", policy.UpdatedBy); err != nil {
+		return models.Policy{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.Policy{}, fmt.Errorf("commit create policy tx: %w", err)
 	}
 
 	return policy, nil
@@ -683,6 +761,7 @@ func claimAssignmentsTx(
 		       approved_modules, labels_json, max_runtime_seconds, evidence_upload_url
 		FROM scan_job_tasks
 		WHERE status = 'queued'
+		  AND policy_status = 'approved'
 		  AND adapter_id = ANY($1)
 		ORDER BY created_at ASC
 		FOR UPDATE SKIP LOCKED
@@ -789,33 +868,36 @@ func claimAssignmentsTx(
 }
 
 func recomputeScanJobStatusTx(ctx context.Context, tx pgx.Tx, scanJobID string, now time.Time) error {
-	var total, completed, failed, canceled int
+	var total, queued, running, completed, failed, canceled int
 	err := tx.QueryRow(ctx, `
 		SELECT
 			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE status = 'queued') AS queued,
+			COUNT(*) FILTER (WHERE status = 'running') AS running,
 			COUNT(*) FILTER (WHERE status = 'completed') AS completed,
 			COUNT(*) FILTER (WHERE status = 'failed') AS failed,
 			COUNT(*) FILTER (WHERE status = 'canceled') AS canceled
 		FROM scan_job_tasks
 		WHERE scan_job_id = $1
-	`, scanJobID).Scan(&total, &completed, &failed, &canceled)
+	`, scanJobID).Scan(&total, &queued, &running, &completed, &failed, &canceled)
 	if err != nil {
 		return fmt.Errorf("query task aggregate: %w", err)
 	}
 
-	nextStatus := string(models.ScanJobStatusRunning)
+	nextStatus := string(models.ScanJobStatusQueued)
 	switch {
 	case total == 0:
 		nextStatus = string(models.ScanJobStatusQueued)
 	case completed == total:
 		nextStatus = string(models.ScanJobStatusCompleted)
-	case failed+canceled > 0 && completed+failed+canceled == total:
+	case failed+canceled == total:
 		nextStatus = string(models.ScanJobStatusFailed)
-	}
-
-	runningCount := total - completed - failed - canceled
-	if runningCount < 0 {
-		runningCount = 0
+	case running > 0:
+		nextStatus = string(models.ScanJobStatusRunning)
+	case queued > 0:
+		nextStatus = string(models.ScanJobStatusQueued)
+	default:
+		nextStatus = string(models.ScanJobStatusRunning)
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -824,7 +906,7 @@ func recomputeScanJobStatusTx(ctx context.Context, tx pgx.Tx, scanJobID string, 
 		    running_task_count = $2,
 		    updated_at = $3
 		WHERE id = $4
-	`, nextStatus, runningCount, now, scanJobID)
+	`, nextStatus, running, now, scanJobID)
 	if err != nil {
 		return fmt.Errorf("update recomputed scan job status: %w", err)
 	}
@@ -911,6 +993,16 @@ func nextPolicyID() string {
 	return fmt.Sprintf("policy-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
+func nextPolicyVersionID() string {
+	sequence := atomic.AddUint64(&policyVersionSequence, 1)
+	return fmt.Sprintf("policy-version-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextPolicyApprovalID() string {
+	sequence := atomic.AddUint64(&policyApprovalSequence, 1)
+	return fmt.Sprintf("policy-approval-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
 func nextRemediationID() string {
 	sequence := atomic.AddUint64(&remediationSequence, 1)
 	return fmt.Sprintf("remediation-%d-%06d", time.Now().UTC().Unix(), sequence)
@@ -974,6 +1066,13 @@ func approvalModeForTools(tools []string) string {
 	}
 
 	return "standard"
+}
+
+func combineApprovalMode(base string, policyMode string) string {
+	if strings.TrimSpace(policyMode) == "manual-approval" {
+		return "manual-approval"
+	}
+	return base
 }
 
 func supportedAdapters(capabilities []models.WorkerCapability) []string {

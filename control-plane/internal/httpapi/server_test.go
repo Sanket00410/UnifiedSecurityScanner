@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"unifiedsecurityscanner/control-plane/internal/config"
+	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
 )
 
@@ -18,8 +19,14 @@ type stubAPIStore struct {
 	authPrincipal    models.AuthPrincipal
 	authenticated    bool
 	authErr          error
+	createScanJobErr error
 	auditEvents      []models.AuditEvent
 	apiTokens        []models.APIToken
+	policy           models.Policy
+	policies         []models.Policy
+	policyVersions   []models.PolicyVersion
+	policyApprovals  []models.PolicyApproval
+	scanJob          models.ScanJob
 	createdOIDC      models.CreatedAPIToken
 	oidcProvider     string
 	oidcSubject      string
@@ -70,7 +77,10 @@ func (s *stubAPIStore) ListForTenant(context.Context, string, int) ([]models.Sca
 }
 
 func (s *stubAPIStore) CreateForTenant(context.Context, string, models.CreateScanJobRequest) (models.ScanJob, error) {
-	return models.ScanJob{}, nil
+	if s.createScanJobErr != nil {
+		return models.ScanJob{}, s.createScanJobErr
+	}
+	return s.scanJob, nil
 }
 
 func (s *stubAPIStore) GetForTenant(context.Context, string, string) (models.ScanJob, bool, error) {
@@ -94,11 +104,47 @@ func (s *stubAPIStore) ListAssetsForTenant(context.Context, string, int) ([]mode
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {
-	return nil, nil
+	return s.policies, nil
+}
+
+func (s *stubAPIStore) GetPolicyForTenant(context.Context, string, string) (models.Policy, bool, error) {
+	if s.policy.ID == "" {
+		return models.Policy{}, false, nil
+	}
+	return s.policy, true, nil
 }
 
 func (s *stubAPIStore) CreatePolicyForTenant(context.Context, string, models.CreatePolicyRequest) (models.Policy, error) {
-	return models.Policy{}, nil
+	return s.policy, nil
+}
+
+func (s *stubAPIStore) UpdatePolicyForTenant(context.Context, string, string, models.UpdatePolicyRequest) (models.Policy, bool, error) {
+	if s.policy.ID == "" {
+		return models.Policy{}, false, nil
+	}
+	return s.policy, true, nil
+}
+
+func (s *stubAPIStore) ListPolicyVersionsForTenant(context.Context, string, string, int) ([]models.PolicyVersion, error) {
+	return s.policyVersions, nil
+}
+
+func (s *stubAPIStore) RollbackPolicyForTenant(context.Context, string, string, int64, string) (models.Policy, bool, error) {
+	if s.policy.ID == "" {
+		return models.Policy{}, false, nil
+	}
+	return s.policy, true, nil
+}
+
+func (s *stubAPIStore) ListPolicyApprovalsForTenant(context.Context, string, int) ([]models.PolicyApproval, error) {
+	return s.policyApprovals, nil
+}
+
+func (s *stubAPIStore) DecidePolicyApproval(context.Context, string, string, bool, string, string) (models.PolicyApproval, bool, error) {
+	if len(s.policyApprovals) == 0 {
+		return models.PolicyApproval{}, false, nil
+	}
+	return s.policyApprovals[0], true, nil
 }
 
 func (s *stubAPIStore) ListRemediationsForTenant(context.Context, string, int) ([]models.RemediationAction, error) {
@@ -297,6 +343,83 @@ func TestAuthTokenCreateRejectsExpiredTimestamp(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", recorder.Code)
+	}
+}
+
+func TestScanJobPolicyDeniedReturnsForbidden(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		createScanJobErr: &jobs.PolicyDeniedError{
+			PolicyID: "policy-1",
+			Reason:   "requested tool is blocked by enforced policy",
+			RuleHits: []string{"block_tool:metasploit"},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/scan-jobs", strings.NewReader(`{
+		"target_kind": "domain",
+		"target": "example.com",
+		"profile": "default",
+		"tools": ["metasploit"]
+	}`))
+	request.Header.Set("Authorization", "Bearer appsec-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", recorder.Code)
+	}
+}
+
+func TestGlobalPolicyCreateRequiresPlatformAdmin(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/policies", strings.NewReader(`{
+		"name": "Global Runtime Guardrail",
+		"global": true,
+		"mode": "enforce",
+		"rules": ["require_approval:metasploit"]
+	}`))
+	request.Header.Set("Authorization", "Bearer appsec-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", recorder.Code)
 	}
 }
 

@@ -120,11 +120,12 @@ function renderError(message) {
 
 async function boot() {
   try {
-    const [session, findingsData, assetsData, policiesData, remediationsData] = await Promise.all([
+    const [session, findingsData, assetsData, policiesData, approvalsData, remediationsData] = await Promise.all([
       loadJSON("/v1/auth/me"),
       loadJSON("/v1/findings"),
       loadJSON("/v1/assets"),
       loadJSON("/v1/policies"),
+      loadJSON("/v1/policy-approvals"),
       loadJSON("/v1/remediations")
     ]);
 
@@ -133,11 +134,13 @@ async function boot() {
     const findings = findingsData.items || [];
     const assets = assetsData.items || [];
     const policies = policiesData.items || [];
+    const approvals = approvalsData.items || [];
     const remediations = remediationsData.items || [];
 
     setMetric("metric-findings", findings.length);
     setMetric("metric-assets", assets.length);
     setMetric("metric-policies", policies.length);
+    setMetric("metric-approvals", approvals.length);
     setMetric("metric-remediations", remediations.length);
 
     renderList("findings", findings, (item) =>
@@ -166,7 +169,21 @@ async function boot() {
       makeCard(
         item.name,
         item.rules?.length ? item.rules.join(", ") : "No explicit rules configured.",
-        [item.scope || "global", item.mode || "monitor", item.enabled ? "enabled" : "disabled"],
+        [
+          item.scope || "global",
+          item.mode || "monitor",
+          item.enabled ? "enabled" : "disabled",
+          `v${item.version_number || 1}`
+        ],
+        ""
+      )
+    );
+
+    renderList("policy-approvals", approvals, (item) =>
+      makeCard(
+        item.action || "Policy approval",
+        item.reason || "Awaiting decision.",
+        [item.status || "pending", item.requested_by || "unknown", item.policy_id || "no policy"],
         ""
       )
     );
@@ -183,10 +200,12 @@ async function boot() {
     setMetric("metric-findings", 0);
     setMetric("metric-assets", 0);
     setMetric("metric-policies", 0);
+    setMetric("metric-approvals", 0);
     setMetric("metric-remediations", 0);
     renderList("findings", [], () => document.createElement("div"));
     renderList("assets", [], () => document.createElement("div"));
     renderList("policies", [], () => document.createElement("div"));
+    renderList("policy-approvals", [], () => document.createElement("div"));
     renderList("remediations", [], () => document.createElement("div"));
     renderError(error.message);
   }

@@ -246,6 +246,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Policy denied the requested scan
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - code
+                  - message
+                properties:
+                  code:
+                    type: string
+                  message:
+                    type: string
+                  policy_id:
+                    type: string
+                  rule_hits:
+                    type: array
+                    items:
+                      type: string
   /v1/scan-jobs/{jobId}:
     get:
       operationId: getScanJob
@@ -405,6 +425,188 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/policies/{policyId}:
+    get:
+      operationId: getPolicy
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Single policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "404":
+          description: Policy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: updatePolicy
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePolicyRequest"
+      responses:
+        "200":
+          description: Updated policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "404":
+          description: Policy not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/policies/{policyId}/versions:
+    get:
+      operationId: listPolicyVersions
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy version history
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PolicyVersion"
+  /v1/policies/{policyId}/rollback:
+    post:
+      operationId: rollbackPolicy
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: policyId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyRollbackRequest"
+      responses:
+        "200":
+          description: Policy rolled back to a historical version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+        "404":
+          description: Policy or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/policy-approvals:
+    get:
+      operationId: listPolicyApprovals
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Pending and historical policy approvals
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PolicyApproval"
+  /v1/policy-approvals/{approvalId}/approve:
+    post:
+      operationId: approvePolicyApproval
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: approvalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyApprovalDecisionRequest"
+      responses:
+        "200":
+          description: Approval granted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyApproval"
+  /v1/policy-approvals/{approvalId}/deny:
+    post:
+      operationId: denyPolicyApproval
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: approvalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyApprovalDecisionRequest"
+      responses:
+        "200":
+          description: Approval denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyApproval"
   /v1/remediations:
     get:
       operationId: listRemediations
@@ -735,6 +937,7 @@ components:
       additionalProperties: false
       required:
         - id
+        - version_number
         - name
         - scope
         - mode
@@ -748,6 +951,8 @@ components:
           type: string
         tenant_id:
           type: string
+        version_number:
+          type: integer
         name:
           type: string
         scope:
@@ -787,6 +992,109 @@ components:
           items:
             type: string
         updated_by:
+          type: string
+        global:
+          type: boolean
+    UpdatePolicyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        scope:
+          type: string
+        mode:
+          type: string
+        enabled:
+          type: boolean
+        rules:
+          type: array
+          items:
+            type: string
+        updated_by:
+          type: string
+    PolicyVersion:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - policy_id
+        - version_number
+        - change_type
+        - snapshot
+        - created_by
+        - created_at
+      properties:
+        id:
+          type: string
+        policy_id:
+          type: string
+        version_number:
+          type: integer
+        change_type:
+          type: string
+        snapshot:
+          $ref: "#/components/schemas/Policy"
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    PolicyRollbackRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - version_number
+      properties:
+        version_number:
+          type: integer
+    PolicyApproval:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - scan_job_id
+        - task_id
+        - action
+        - status
+        - requested_by
+        - created_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        scan_job_id:
+          type: string
+        task_id:
+          type: string
+        policy_id:
+          type: string
+        action:
+          type: string
+        status:
+          type: string
+        requested_by:
+          type: string
+        decided_by:
+          type: string
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+          nullable: true
+    PolicyApprovalDecisionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
           type: string
     RemediationAction:
       type: object
