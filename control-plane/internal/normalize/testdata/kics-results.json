@@ -1,0 +1,18 @@
+{
+  "queries": [
+    {
+      "query_name": "S3 bucket should enable encryption",
+      "query_id": "8f64c38f-1111-2222-3333-444444444444",
+      "severity": "HIGH",
+      "platform": "Terraform",
+      "results": [
+        {
+          "file_name": "infra/main.tf",
+          "line": 22,
+          "resource_name": "aws_s3_bucket.logs",
+          "issue_type": "IncorrectValue"
+        }
+      ]
+    }
+  ]
+}

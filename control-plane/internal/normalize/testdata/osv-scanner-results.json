@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "source": {
+        "path": "go.mod"
+      },
+      "packages": [
+        {
+          "package": {
+            "name": "golang.org/x/crypto",
+            "ecosystem": "Go"
+          },
+          "vulnerabilities": [
+            {
+              "id": "GO-2024-0001",
+              "severity": "high",
+              "summary": "Affected package allows a weak cryptographic fallback.",
+              "details": "The dependency can negotiate an unsafe fallback mode under attacker influence.",
+              "aliases": [
+                "CVE-2024-9999"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -428,6 +428,29 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "shellcheck".to_string(),
+            supported_target_kinds: vec!["shell_script".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sast".to_string(), "shell".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "osv-scanner".to_string(),
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "go_repo".to_string(),
+                "java_repo".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec![
+                "code".to_string(),
+                "sca".to_string(),
+                "lockfile".to_string(),
+            ],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "syft".to_string(),
             supported_target_kinds: vec![
                 "repo".to_string(),
@@ -519,6 +542,19 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             supported_target_kinds: vec!["dockerfile".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["iac".to_string(), "container".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "kics".to_string(),
+            supported_target_kinds: vec![
+                "dockerfile".to_string(),
+                "terraform".to_string(),
+                "kubernetes".to_string(),
+                "repo".to_string(),
+                "filesystem".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["iac".to_string(), "cloud".to_string()],
             linux_preferred: false,
         },
         WorkerCapability {

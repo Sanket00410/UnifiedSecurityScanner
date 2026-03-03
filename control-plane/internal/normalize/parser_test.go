@@ -573,3 +573,93 @@ func TestParseTfsecFixture(t *testing.T) {
 		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
 	}
 }
+
+func TestParseShellCheckFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("shellcheck", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-shellcheck",
+		AdapterID:  "shellcheck",
+		TargetKind: "shell_script",
+		Target:     "scripts/deploy.sh",
+	}, []string{filepath.Join("testdata", "shellcheck-results.json")})
+	if err != nil {
+		t.Fatalf("parse shellcheck fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 8 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseOSVScannerFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("osv-scanner", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-osv",
+		AdapterID:  "osv-scanner",
+		TargetKind: "go_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "osv-scanner-results.json")})
+	if err != nil {
+		t.Fatalf("parse osv-scanner fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "dependency_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected osv-scanner finding to be risk-enriched")
+	}
+}
+
+func TestParseKICSFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("kics", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-kics",
+		AdapterID:  "kics",
+		TargetKind: "terraform",
+		Target:     "c:/repo/infra",
+	}, []string{filepath.Join("testdata", "kics-results.json")})
+	if err != nil {
+		t.Fatalf("parse kics fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 22 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}

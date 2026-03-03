@@ -48,6 +48,10 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parsePmd(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
+	case "shellcheck":
+		return parseShellCheck(ctx, evidencePaths)
+	case "osv-scanner":
+		return parseOSVScanner(ctx, evidencePaths)
 	case "syft":
 		return parseSyft(ctx, evidencePaths)
 	case "trivy":
@@ -66,6 +70,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseCheckov(ctx, evidencePaths)
 	case "hadolint":
 		return parseHadolint(ctx, evidencePaths)
+	case "kics":
+		return parseKICS(ctx, evidencePaths)
 	case "kube-score":
 		return parseKubeScore(ctx, evidencePaths)
 	case "tfsec":
@@ -603,6 +609,171 @@ func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding
 			}
 
 			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseShellCheck(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type shellCheckComment struct {
+		File    string `json:"file"`
+		Line    int    `json:"line"`
+		Column  int    `json:"column"`
+		Level   string `json:"level"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	type shellCheckOutput struct {
+		Comments []shellCheckComment `json:"comments"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open shellcheck evidence %s: %w", path, err)
+		}
+
+		var payload shellCheckOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode shellcheck evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Comments {
+			title := strings.TrimSpace(item.Message)
+			if title == "" {
+				title = "Shell script security issue"
+			}
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, shellCheckSeverity(item.Level), "medium", models.CanonicalLocation{
+				Kind:   "file",
+				Path:   item.File,
+				Line:   item.Line,
+				Column: item.Column,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "ShellCheck rule match",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Update the shell script to satisfy the ShellCheck rule and remove the unsafe pattern.",
+				FixAvailable: true,
+			}
+			if item.Code > 0 {
+				finding.Tags = append(finding.Tags, fmt.Sprintf("rule:SC%d", item.Code))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseOSVScanner(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type osvPackageDetails struct {
+		Name      string `json:"name"`
+		Ecosystem string `json:"ecosystem"`
+	}
+	type osvVulnerability struct {
+		ID       string   `json:"id"`
+		Severity string   `json:"severity"`
+		Summary  string   `json:"summary"`
+		Details  string   `json:"details"`
+		Aliases  []string `json:"aliases"`
+	}
+	type osvPackageResult struct {
+		Package         osvPackageDetails  `json:"package"`
+		Vulnerabilities []osvVulnerability `json:"vulnerabilities"`
+	}
+	type osvSource struct {
+		Path string `json:"path"`
+	}
+	type osvResult struct {
+		Source   osvSource          `json:"source"`
+		Packages []osvPackageResult `json:"packages"`
+	}
+	type osvOutput struct {
+		Results []osvResult `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open osv-scanner evidence %s: %w", path, err)
+		}
+
+		var payload osvOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode osv-scanner evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, result := range payload.Results {
+			for _, pkg := range result.Packages {
+				for _, vuln := range pkg.Vulnerabilities {
+					title := strings.TrimSpace(vuln.Summary)
+					if title == "" {
+						title = strings.TrimSpace(vuln.ID)
+					}
+					if title == "" {
+						title = "Dependency vulnerability"
+					}
+
+					locationPath := strings.TrimSpace(result.Source.Path)
+					if locationPath == "" {
+						locationPath = ctx.Target
+					}
+
+					finding := baseFinding(ctx, now, "dependency_vulnerability", title, osvSeverity(vuln.Severity), "high", models.CanonicalLocation{
+						Kind: "dependency",
+						Path: locationPath,
+					}, models.CanonicalEvidence{
+						Kind:    "json",
+						Ref:     path,
+						Summary: "OSV-Scanner dependency vulnerability",
+					})
+					finding.Description = firstNonEmptyString(vuln.Details, vuln.Summary)
+					finding.Remediation = &models.CanonicalRemediation{
+						Summary:      "Upgrade the affected dependency to a non-vulnerable version referenced by the advisory.",
+						FixAvailable: true,
+					}
+					if strings.TrimSpace(pkg.Package.Name) != "" {
+						finding.Tags = append(finding.Tags, "package:"+strings.TrimSpace(pkg.Package.Name))
+					}
+					if strings.TrimSpace(pkg.Package.Ecosystem) != "" {
+						finding.Tags = append(finding.Tags, "ecosystem:"+strings.ToLower(strings.TrimSpace(pkg.Package.Ecosystem)))
+					}
+					if strings.TrimSpace(vuln.ID) != "" {
+						finding.Tags = append(finding.Tags, "advisory:"+strings.TrimSpace(vuln.ID))
+					}
+					for _, alias := range vuln.Aliases {
+						trimmed := strings.TrimSpace(alias)
+						if trimmed == "" {
+							continue
+						}
+						finding.Tags = append(finding.Tags, "alias:"+trimmed)
+					}
+
+					findings = append(findings, finding)
+				}
+			}
 		}
 	}
 
@@ -1237,6 +1408,106 @@ func parseHadolint(ctx Context, evidencePaths []string) ([]models.CanonicalFindi
 	return findings, nil
 }
 
+func parseKICS(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type kicsResult struct {
+		FileName     string `json:"file_name"`
+		Line         int    `json:"line"`
+		ResourceName string `json:"resource_name"`
+		IssueType    string `json:"issue_type"`
+	}
+	type kicsQuery struct {
+		QueryName string       `json:"query_name"`
+		QueryID   string       `json:"query_id"`
+		Severity  string       `json:"severity"`
+		Platform  string       `json:"platform"`
+		Results   []kicsResult `json:"results"`
+	}
+	type kicsOutput struct {
+		Queries []kicsQuery `json:"queries"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open kics evidence %s: %w", path, err)
+		}
+
+		var payload kicsOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode kics evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, query := range payload.Queries {
+			if len(query.Results) == 0 {
+				title := firstNonEmptyString(query.QueryName, query.QueryID)
+				if title == "" {
+					title = "Infrastructure policy violation"
+				}
+
+				finding := baseFinding(ctx, now, "iac_misconfiguration", title, normalizeSeverity(query.Severity, "medium"), "high", models.CanonicalLocation{
+					Kind: "file",
+					Path: ctx.Target,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "KICS failed policy",
+				})
+				if strings.TrimSpace(query.QueryID) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(query.QueryID))
+				}
+				findings = append(findings, finding)
+				continue
+			}
+
+			for _, item := range query.Results {
+				title := firstNonEmptyString(query.QueryName, query.QueryID)
+				if title == "" {
+					title = "Infrastructure policy violation"
+				}
+
+				finding := baseFinding(ctx, now, "iac_misconfiguration", title, normalizeSeverity(query.Severity, "medium"), "high", models.CanonicalLocation{
+					Kind: "file",
+					Path: firstNonEmptyString(item.FileName, ctx.Target),
+					Line: item.Line,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "KICS failed policy",
+				})
+				finding.Description = "The infrastructure definition violates a KICS policy and should be updated to remove the insecure configuration."
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Update the infrastructure definition to satisfy the KICS rule.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(query.QueryID) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(query.QueryID))
+				}
+				if strings.TrimSpace(item.ResourceName) != "" {
+					finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.ResourceName))
+				}
+				if strings.TrimSpace(item.IssueType) != "" {
+					finding.Tags = append(finding.Tags, "issue_type:"+strings.ToLower(strings.TrimSpace(item.IssueType)))
+				}
+				if strings.TrimSpace(query.Platform) != "" {
+					finding.Tags = append(finding.Tags, "platform:"+strings.ToLower(strings.TrimSpace(query.Platform)))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
 func parseKubeScore(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type kubeScoreComment struct {
 		Path     string `json:"path"`
@@ -1591,6 +1862,30 @@ func kubeScoreSeverity(value string) string {
 		return "medium"
 	default:
 		return "low"
+	}
+}
+
+func shellCheckSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error":
+		return "high"
+	case "warning":
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func osvSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "critical":
+		return "critical"
+	case "high":
+		return "high"
+	case "low":
+		return "low"
+	default:
+		return "medium"
 	}
 }
 

@@ -1,0 +1,12 @@
+{
+  "comments": [
+    {
+      "file": "scripts/deploy.sh",
+      "line": 8,
+      "column": 7,
+      "level": "warning",
+      "code": 2086,
+      "message": "Double quote to prevent globbing and word splitting."
+    }
+  ]
+}

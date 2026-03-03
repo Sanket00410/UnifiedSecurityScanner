@@ -16,6 +16,8 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
+        "shellcheck" => ShellCheckAdapter.execute(request),
+        "osv-scanner" => OsvScannerAdapter.execute(request),
         "syft" => SyftAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
         "trivy-image" => TrivyImageAdapter.execute(request),
@@ -25,6 +27,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "gitleaks" => GitleaksAdapter.execute(request),
         "checkov" => CheckovAdapter.execute(request),
         "hadolint" => HadolintAdapter.execute(request),
+        "kics" => KicsAdapter.execute(request),
         "kube-score" => KubeScoreAdapter.execute(request),
         "tfsec" => TfsecAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
@@ -39,6 +42,8 @@ struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
 struct BanditAdapter;
+struct ShellCheckAdapter;
+struct OsvScannerAdapter;
 struct SyftAdapter;
 struct TrivyAdapter;
 struct TrivyImageAdapter;
@@ -48,6 +53,7 @@ struct GrypeAdapter;
 struct GitleaksAdapter;
 struct CheckovAdapter;
 struct HadolintAdapter;
+struct KicsAdapter;
 struct KubeScoreAdapter;
 struct TfsecAdapter;
 
@@ -370,6 +376,85 @@ impl ScannerAdapter for BanditAdapter {
             "-f".to_string(),
             "json".to_string(),
             "-o".to_string(),
+            report_path.to_string_lossy().to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for ShellCheckAdapter {
+    fn id(&self) -> &'static str {
+        "shellcheck"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "shellcheck-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "shellcheck-exec.log")?;
+        let binary = env::var("USS_SHELLCHECK_CMD").unwrap_or_else(|_| "shellcheck".to_string());
+        let args = vec![
+            "--format".to_string(),
+            "json1".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for OsvScannerAdapter {
+    fn id(&self) -> &'static str {
+        "osv-scanner"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "osv-scanner-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "osv-scanner-exec.log")?;
+        let binary = env::var("USS_OSV_SCANNER_CMD").unwrap_or_else(|_| "osv-scanner".to_string());
+        let args = vec![
+            "scan".to_string(),
+            "-r".to_string(),
+            request.target.clone(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--output".to_string(),
             report_path.to_string_lossy().to_string(),
         ];
 
@@ -786,6 +871,51 @@ impl ScannerAdapter for HadolintAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for KicsAdapter {
+    fn id(&self) -> &'static str {
+        "kics"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "kics-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "kics-exec.log")?;
+        let binary = env::var("USS_KICS_CMD").unwrap_or_else(|_| "kics".to_string());
+        let output_root = Path::new(&request.evidence_dir);
+        let args = vec![
+            "scan".to_string(),
+            "-p".to_string(),
+            request.target.clone(),
+            "--report-formats".to_string(),
+            "json".to_string(),
+            "--output-path".to_string(),
+            output_root.to_string_lossy().to_string(),
+            "--output-name".to_string(),
+            "kics-results".to_string(),
+            "--silent".to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
             None,
         )
     }

@@ -1091,17 +1091,19 @@ func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
 func defaultToolsForTargetKind(targetKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(targetKind)) {
 	case "go_repo":
-		return []string{"semgrep", "gosec", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "gosec", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "java_repo":
-		return []string{"semgrep", "spotbugs", "pmd", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "spotbugs", "pmd", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "shell_script":
+		return []string{"shellcheck"}
 	case "dockerfile":
-		return []string{"hadolint", "trivy-config"}
+		return []string{"hadolint", "kics", "trivy-config"}
 	case "terraform":
-		return []string{"tfsec", "trivy-config", "checkov"}
+		return []string{"tfsec", "kics", "trivy-config", "checkov"}
 	case "kubernetes":
-		return []string{"kube-score", "trivy-config", "checkov"}
+		return []string{"kube-score", "kics", "trivy-config", "checkov"}
 	case "repo", "repository", "codebase", "filesystem":
-		return []string{"semgrep", "bandit", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "bandit", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "image", "container_image":
 		return []string{"syft", "trivy-image", "grype", "trivy-config"}
 	default:
@@ -1148,7 +1150,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "bandit", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint", "kube-score", "tfsec":
+	case "semgrep", "gosec", "spotbugs", "pmd", "bandit", "shellcheck", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint", "kics", "kube-score", "tfsec":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1184,6 +1186,10 @@ func maxRuntimeForTool(tool string) int64 {
 		return 300
 	case "bandit":
 		return 240
+	case "shellcheck":
+		return 120
+	case "osv-scanner":
+		return 240
 	case "syft":
 		return 180
 	case "trivy":
@@ -1202,6 +1208,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 240
 	case "hadolint":
 		return 120
+	case "kics":
+		return 300
 	case "kube-score":
 		return 180
 	case "tfsec":

@@ -229,13 +229,13 @@ func normalizeLayer(current string, adapterID string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "bandit":
+	case "semgrep", "gosec", "spotbugs", "pmd", "bandit", "shellcheck":
 		return "sast"
-	case "syft", "trivy", "trivy-image", "grype":
+	case "syft", "trivy", "trivy-image", "grype", "osv-scanner":
 		return "sca"
 	case "trivy-secrets", "gitleaks":
 		return "secrets"
-	case "trivy-config", "checkov", "hadolint", "kube-score", "tfsec":
+	case "trivy-config", "checkov", "hadolint", "kics", "kube-score", "tfsec":
 		return "iac"
 	case "zap":
 		return "dast"
@@ -294,7 +294,7 @@ func normalizeAssetType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "go_repo":
 		return "repo"
-	case "java_repo", "dockerfile", "terraform", "kubernetes":
+	case "java_repo", "shell_script", "dockerfile", "terraform", "kubernetes":
 		return "repo"
 	case "container_image":
 		return "image"
