@@ -23,6 +23,7 @@ const (
 	PermissionScanJobsWrite     Permission = "scan_jobs:write"
 	PermissionFindingsRead      Permission = "findings:read"
 	PermissionAssetsRead        Permission = "assets:read"
+	PermissionAssetsWrite       Permission = "assets:write"
 	PermissionPoliciesRead      Permission = "policies:read"
 	PermissionPoliciesWrite     Permission = "policies:write"
 	PermissionRemediationsRead  Permission = "remediations:read"
@@ -60,6 +61,7 @@ var rolePermissions = map[string]map[Permission]struct{}{
 		PermissionScanJobsWrite:     {},
 		PermissionFindingsRead:      {},
 		PermissionAssetsRead:        {},
+		PermissionAssetsWrite:       {},
 		PermissionPoliciesRead:      {},
 		PermissionPoliciesWrite:     {},
 		PermissionRemediationsRead:  {},
@@ -74,6 +76,7 @@ var rolePermissions = map[string]map[Permission]struct{}{
 		PermissionScanJobsWrite:     {},
 		PermissionFindingsRead:      {},
 		PermissionAssetsRead:        {},
+		PermissionAssetsWrite:       {},
 		PermissionPoliciesRead:      {},
 		PermissionPoliciesWrite:     {},
 		PermissionRemediationsRead:  {},

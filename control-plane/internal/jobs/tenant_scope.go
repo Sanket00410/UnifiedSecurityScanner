@@ -119,13 +119,20 @@ func (s *Store) ListAssetsForTenant(ctx context.Context, organizationID string, 
 		SELECT
 			sj.target,
 			sj.target_kind,
+			COALESCE(ap.environment, ''),
+			COALESCE(ap.exposure, ''),
+			COALESCE(ap.criticality, 0),
+			COALESCE(ap.owner_team, ''),
+			COALESCE(COUNT(DISTINCT cc.id), 0) AS compensating_control_count,
 			MAX(sj.updated_at) AS last_scanned_at,
 			COUNT(DISTINCT sj.id) AS scan_count,
-			COUNT(nf.finding_id) AS finding_count
+			COUNT(DISTINCT nf.finding_id) AS finding_count
 		FROM scan_jobs sj
 		LEFT JOIN normalized_findings nf ON nf.scan_job_id = sj.id
+		LEFT JOIN asset_profiles ap ON ap.tenant_id = sj.tenant_id AND ap.asset_id = sj.target
+		LEFT JOIN compensating_controls cc ON cc.tenant_id = sj.tenant_id AND cc.asset_id = sj.target AND cc.enabled = TRUE
 		WHERE sj.tenant_id = $1
-		GROUP BY sj.target, sj.target_kind
+		GROUP BY sj.target, sj.target_kind, ap.environment, ap.exposure, ap.criticality, ap.owner_team
 		ORDER BY MAX(sj.updated_at) DESC
 		LIMIT $2
 	`, strings.TrimSpace(organizationID), limit)
@@ -140,6 +147,11 @@ func (s *Store) ListAssetsForTenant(ctx context.Context, organizationID string, 
 		if err := rows.Scan(
 			&asset.AssetID,
 			&asset.AssetType,
+			&asset.Environment,
+			&asset.Exposure,
+			&asset.Criticality,
+			&asset.OwnerTeam,
+			&asset.CompensatingControlCount,
 			&asset.LastScannedAt,
 			&asset.ScanCount,
 			&asset.FindingCount,

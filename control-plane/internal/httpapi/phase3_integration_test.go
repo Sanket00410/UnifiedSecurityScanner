@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"unifiedsecurityscanner/control-plane/internal/auth"
 	"unifiedsecurityscanner/control-plane/internal/config"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
@@ -308,6 +310,206 @@ func TestFindingsAPIIncludesRiskFieldsInResponseShape(t *testing.T) {
 	}
 	if riskPayload["sla_class"] != "24h" {
 		t.Fatalf("expected sla_class in response, got %#v", riskPayload["sla_class"])
+	}
+}
+
+func TestPhase3AssetContextAndDedupFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase3_asset_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase3-asset-secret"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+
+	profileResponse, profileBody := mustJSONRequest(t, client, http.MethodPut, testServer.URL+"/v1/assets/public.example.com", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"asset_type":  "domain",
+		"asset_name":  "public.example.com",
+		"environment": "production",
+		"exposure":    "internet",
+		"criticality": 10,
+		"owner_team":  "edge-security",
+		"tags":        []string{"internet-facing", "customer"},
+	}, http.StatusOK)
+	defer profileResponse.Body.Close()
+
+	var profile models.AssetProfile
+	decodeJSONResponse(t, profileBody, &profile)
+	if profile.OwnerTeam != "edge-security" {
+		t.Fatalf("expected owner team in asset profile, got %s", profile.OwnerTeam)
+	}
+
+	controlResponse, controlBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/assets/public.example.com/controls", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":          "Web Application Firewall",
+		"control_type":  "waf",
+		"scope_layer":   "dast",
+		"effectiveness": 8,
+		"enabled":       true,
+		"notes":         "Blocks common injection payloads",
+	}, http.StatusCreated)
+	defer controlResponse.Body.Close()
+
+	var control models.CompensatingControl
+	decodeJSONResponse(t, controlBody, &control)
+	if !control.Enabled {
+		t.Fatal("expected compensating control to be enabled")
+	}
+
+	firstTaskID := createAssignedTask(t, client, testServer.URL, cfg.BootstrapAdminToken, cfg.WorkerSharedSecret, models.CreateScanJobRequest{
+		TargetKind: "domain",
+		Target:     "public.example.com",
+		Profile:    "default",
+		Tools:      []string{"zap"},
+	}, models.WorkerRegistrationRequest{
+		WorkerID:        "phase3-worker-zap-1",
+		WorkerVersion:   "1.0.0",
+		OperatingSystem: "windows",
+		Hostname:        "phase3-host-zap-1",
+		Capabilities: []models.WorkerCapability{
+			{
+				AdapterID:            "zap",
+				SupportedTargetKinds: []string{"domain"},
+				SupportedModes:       []models.ExecutionMode{models.ExecutionModeActiveValidation},
+				Labels:               []string{"phase3"},
+			},
+		},
+	})
+
+	firstFinding := models.CanonicalFinding{
+		SchemaVersion: "1.0.0",
+		Category:      "web_application_exposure",
+		Title:         "SQL injection",
+		Severity:      "high",
+		Confidence:    "high",
+		Status:        "open",
+		FirstSeenAt:   now,
+		LastSeenAt:    now,
+		Locations: []models.CanonicalLocation{
+			{Kind: "endpoint", Endpoint: "https://public.example.com/login"},
+		},
+	}
+	if err := store.FinalizeTask(ctx, models.TaskResultSubmission{
+		TaskID:           firstTaskID,
+		WorkerID:         "phase3-worker-zap-1",
+		FinalState:       "completed",
+		ReportedFindings: []models.CanonicalFinding{firstFinding},
+	}); err != nil {
+		t.Fatalf("finalize first finding: %v", err)
+	}
+
+	conn, err := pgx.Connect(ctx, testDatabaseURL)
+	if err != nil {
+		t.Fatalf("connect to integration database: %v", err)
+	}
+	_, err = conn.Exec(ctx, `
+		UPDATE normalized_findings
+		SET current_status = 'resolved',
+		    finding_json = jsonb_set(finding_json, '{status}', '"resolved"'::jsonb),
+		    updated_at = NOW()
+		WHERE tenant_id = $1
+	`, "bootstrap-org-local")
+	_ = conn.Close(ctx)
+	if err != nil {
+		t.Fatalf("mark finding resolved: %v", err)
+	}
+
+	secondTaskID := createAssignedTask(t, client, testServer.URL, cfg.BootstrapAdminToken, cfg.WorkerSharedSecret, models.CreateScanJobRequest{
+		TargetKind: "domain",
+		Target:     "public.example.com",
+		Profile:    "default",
+		Tools:      []string{"zap"},
+	}, models.WorkerRegistrationRequest{
+		WorkerID:        "phase3-worker-zap-2",
+		WorkerVersion:   "1.0.0",
+		OperatingSystem: "windows",
+		Hostname:        "phase3-host-zap-2",
+		Capabilities: []models.WorkerCapability{
+			{
+				AdapterID:            "zap",
+				SupportedTargetKinds: []string{"domain"},
+				SupportedModes:       []models.ExecutionMode{models.ExecutionModeActiveValidation},
+				Labels:               []string{"phase3"},
+			},
+		},
+	})
+
+	if err := store.FinalizeTask(ctx, models.TaskResultSubmission{
+		TaskID:           secondTaskID,
+		WorkerID:         "phase3-worker-zap-2",
+		FinalState:       "completed",
+		ReportedFindings: []models.CanonicalFinding{firstFinding},
+	}); err != nil {
+		t.Fatalf("finalize second finding: %v", err)
+	}
+
+	findingsResponse, findingsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/findings", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer findingsResponse.Body.Close()
+
+	var findingsPayload struct {
+		Items []models.CanonicalFinding `json:"items"`
+	}
+	decodeJSONResponse(t, findingsBody, &findingsPayload)
+
+	if len(findingsPayload.Items) != 1 {
+		t.Fatalf("expected deduplicated single finding, got %d", len(findingsPayload.Items))
+	}
+
+	finding := findingsPayload.Items[0]
+	if finding.OccurrenceCount != 2 {
+		t.Fatalf("expected occurrence_count 2, got %d", finding.OccurrenceCount)
+	}
+	if finding.ReopenedCount != 1 {
+		t.Fatalf("expected reopened_count 1, got %d", finding.ReopenedCount)
+	}
+	if finding.Asset.OwnerTeam != "edge-security" {
+		t.Fatalf("expected owner team from asset profile, got %s", finding.Asset.OwnerTeam)
+	}
+	if finding.Risk.CompensatingControlReduction <= 0 {
+		t.Fatalf("expected compensating control reduction, got %.2f", finding.Risk.CompensatingControlReduction)
+	}
+
+	assetsResponse, assetsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/assets", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer assetsResponse.Body.Close()
+
+	var assetsPayload struct {
+		Items []models.AssetSummary `json:"items"`
+	}
+	decodeJSONResponse(t, assetsBody, &assetsPayload)
+	if len(assetsPayload.Items) != 1 {
+		t.Fatalf("expected 1 asset summary, got %d", len(assetsPayload.Items))
+	}
+	if assetsPayload.Items[0].CompensatingControlCount != 1 {
+		t.Fatalf("expected compensating control count 1, got %d", assetsPayload.Items[0].CompensatingControlCount)
+	}
+	if assetsPayload.Items[0].Criticality != 10 {
+		t.Fatalf("expected criticality 10, got %.2f", assetsPayload.Items[0].Criticality)
 	}
 }
 

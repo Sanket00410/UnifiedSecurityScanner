@@ -202,8 +202,13 @@ async function boot() {
     renderList("assets", assets, (item) =>
       makeCard(
         item.asset_id,
-        `${item.scan_count} scans, ${item.finding_count} findings`,
-        [item.asset_type, new Date(item.last_scanned_at).toLocaleString()],
+        `${item.scan_count} scans, ${item.finding_count} findings, criticality ${item.criticality || "n/a"}`,
+        [
+          item.asset_type,
+          item.exposure || "unknown exposure",
+          `${item.compensating_control_count || 0} controls`,
+          new Date(item.last_scanned_at).toLocaleString()
+        ],
         ""
       )
     );

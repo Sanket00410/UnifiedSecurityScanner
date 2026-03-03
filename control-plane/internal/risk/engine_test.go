@@ -1,6 +1,7 @@
 package risk
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -117,5 +118,90 @@ func TestLayerForAdapterNormalizesCodeAndRuntimeTools(t *testing.T) {
 	}
 	if got := LayerForAdapter("zap"); got != "dast" {
 		t.Fatalf("expected zap layer dast, got %s", got)
+	}
+}
+
+func TestEnrichWithInputsAppliesAssetOverridesAndControls(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+	finding := EnrichWithInputs(models.CanonicalFinding{
+		SchemaVersion: "1.0.0",
+		TenantID:      "tenant-1",
+		Scanner: models.CanonicalScannerInfo{
+			AdapterID: "zap",
+		},
+		Source: models.CanonicalSourceInfo{
+			Tool: "zap",
+		},
+		Category:    "web_application_exposure",
+		Title:       "SQL injection",
+		Severity:    "high",
+		Confidence:  "high",
+		Status:      "open",
+		FirstSeenAt: now,
+		LastSeenAt:  now,
+		Asset: models.CanonicalAssetInfo{
+			AssetID:   "public.example.com",
+			AssetType: "domain",
+			AssetName: "public.example.com",
+		},
+	}, Inputs{
+		EnvironmentOverride:          "production",
+		ExposureOverride:             "internet",
+		AssetCriticalityOverride:     9.5,
+		OwnerTeam:                    "edge-security",
+		CompensatingControlReduction: 4,
+	})
+
+	if finding.Asset.OwnerTeam != "edge-security" {
+		t.Fatalf("expected owner team override, got %s", finding.Asset.OwnerTeam)
+	}
+	if finding.Risk.AssetCriticality != 9.5 {
+		t.Fatalf("expected criticality override, got %.2f", finding.Risk.AssetCriticality)
+	}
+	if finding.Risk.CompensatingControlReduction != 4 {
+		t.Fatalf("expected control reduction, got %.2f", finding.Risk.CompensatingControlReduction)
+	}
+	if finding.Risk.OverallScore >= 90 {
+		t.Fatalf("expected controls to reduce score below p0 threshold, got %.2f", finding.Risk.OverallScore)
+	}
+}
+
+func TestFingerprintIsStableForEquivalentFindings(t *testing.T) {
+	t.Parallel()
+
+	findingA := models.CanonicalFinding{
+		Source:   models.CanonicalSourceInfo{Tool: "semgrep"},
+		Category: "sast_rule_match",
+		Title:    "Unsafe sink",
+		Asset: models.CanonicalAssetInfo{
+			AssetID:   "C:/repo",
+			AssetType: "repository",
+		},
+		Locations: []models.CanonicalLocation{
+			{Path: "main.go", Line: 42},
+		},
+		Tags: []string{"rule:x", "lang:go"},
+	}
+	findingB := models.CanonicalFinding{
+		Source:   models.CanonicalSourceInfo{Tool: "semgrep"},
+		Category: "sast_rule_match",
+		Title:    "Unsafe sink",
+		Asset: models.CanonicalAssetInfo{
+			AssetID:   "C:/repo",
+			AssetType: "repository",
+		},
+		Locations: []models.CanonicalLocation{
+			{Path: "main.go", Line: 42},
+		},
+		Tags: []string{"lang:go", "rule:x"},
+	}
+
+	if Fingerprint(findingA) != Fingerprint(findingB) {
+		t.Fatal("expected equivalent findings to have the same fingerprint")
+	}
+	if !strings.HasPrefix(StableFindingID(Fingerprint(findingA)), "finding-") {
+		t.Fatal("expected stable finding id prefix")
 	}
 }

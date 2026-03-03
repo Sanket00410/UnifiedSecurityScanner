@@ -1,27 +1,57 @@
 package risk
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"unifiedsecurityscanner/control-plane/internal/models"
 )
 
+type Inputs struct {
+	EnvironmentOverride          string
+	ExposureOverride             string
+	AssetCriticalityOverride     float64
+	OwnerTeam                    string
+	CompensatingControlReduction float64
+}
+
 func Enrich(finding models.CanonicalFinding) models.CanonicalFinding {
+	return EnrichWithInputs(finding, Inputs{})
+}
+
+func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.CanonicalFinding {
 	finding.Source.Layer = normalizeLayer(finding.Source.Layer, finding.Scanner.AdapterID)
+	if strings.TrimSpace(inputs.OwnerTeam) != "" {
+		finding.Asset.OwnerTeam = strings.TrimSpace(inputs.OwnerTeam)
+	}
+	if strings.TrimSpace(inputs.EnvironmentOverride) != "" {
+		finding.Asset.Environment = strings.TrimSpace(inputs.EnvironmentOverride)
+	}
+	if strings.TrimSpace(inputs.ExposureOverride) != "" {
+		finding.Asset.Exposure = strings.TrimSpace(inputs.ExposureOverride)
+	}
 	finding.Asset.Environment = normalizeEnvironment(finding.Asset.Environment, finding.Asset.AssetType, finding.Asset.AssetName)
 	finding.Asset.Exposure = normalizeExposure(finding.Asset.Exposure, finding.Asset.AssetType, finding.Asset.AssetName)
 
 	assetCriticality := clamp10(calculateAssetCriticality(finding))
+	if inputs.AssetCriticalityOverride > 0 {
+		assetCriticality = clamp10(inputs.AssetCriticalityOverride)
+	}
 	businessImpact := clamp10(calculateBusinessImpact(finding, assetCriticality))
 	exploitability := clamp10(calculateExploitability(finding))
 	reachability := clamp10(calculateReachability(finding))
 	exposure := clamp10(exposureScore(finding.Asset.Exposure))
 	policyImpact := clamp10(calculatePolicyImpact(finding))
 
-	overallScore := clamp100((businessImpact*0.35 + exploitability*0.20 + reachability*0.20 + exposure*0.15 + policyImpact*0.10) * confidenceMultiplier(finding.Confidence) * 10)
+	baseScore := clamp100((businessImpact*0.35 + exploitability*0.20 + reachability*0.20 + exposure*0.15 + policyImpact*0.10) * confidenceMultiplier(finding.Confidence) * 10)
+	controlReduction := clamp10(inputs.CompensatingControlReduction)
+	overallScore := clamp100(baseScore - (controlReduction * 4))
 	priority := priorityForScore(overallScore)
 	slaClass, slaDuration := slaForPriority(priority)
 
@@ -32,16 +62,21 @@ func Enrich(finding models.CanonicalFinding) models.CanonicalFinding {
 	slaDueAt := referenceTime.Add(slaDuration)
 
 	finding.Risk = models.CanonicalRisk{
-		Priority:         priority,
-		OverallScore:     overallScore,
-		BusinessImpact:   businessImpact,
-		Exploitability:   exploitability,
-		Reachability:     reachability,
-		Exposure:         exposure,
-		AssetCriticality: assetCriticality,
-		PolicyImpact:     policyImpact,
-		SLAClass:         slaClass,
-		SLADueAt:         &slaDueAt,
+		Priority:                     priority,
+		OverallScore:                 overallScore,
+		BusinessImpact:               businessImpact,
+		Exploitability:               exploitability,
+		Reachability:                 reachability,
+		Exposure:                     exposure,
+		AssetCriticality:             assetCriticality,
+		PolicyImpact:                 policyImpact,
+		CompensatingControlReduction: controlReduction,
+		SLAClass:                     slaClass,
+		SLADueAt:                     &slaDueAt,
+	}
+
+	if strings.TrimSpace(finding.Fingerprint) == "" {
+		finding.Fingerprint = Fingerprint(finding)
 	}
 
 	return finding
@@ -49,6 +84,58 @@ func Enrich(finding models.CanonicalFinding) models.CanonicalFinding {
 
 func LayerForAdapter(adapterID string) string {
 	return normalizeLayer("", adapterID)
+}
+
+func Fingerprint(finding models.CanonicalFinding) string {
+	parts := []string{
+		strings.ToLower(strings.TrimSpace(firstNonEmpty(finding.Source.Tool, finding.Scanner.AdapterID))),
+		strings.ToLower(strings.TrimSpace(finding.Category)),
+		strings.ToLower(strings.TrimSpace(finding.Title)),
+		strings.ToLower(strings.TrimSpace(finding.Asset.AssetID)),
+		strings.ToLower(strings.TrimSpace(finding.Asset.AssetType)),
+	}
+
+	if len(finding.Locations) > 0 {
+		parts = append(parts,
+			strings.ToLower(strings.TrimSpace(finding.Locations[0].Path)),
+			strings.ToLower(strings.TrimSpace(finding.Locations[0].Endpoint)),
+			strconv.Itoa(finding.Locations[0].Line),
+		)
+	} else {
+		parts = append(parts, "", "", "0")
+	}
+
+	tags := append([]string(nil), finding.Tags...)
+	for index := range tags {
+		tags[index] = strings.ToLower(strings.TrimSpace(tags[index]))
+	}
+	sort.Strings(tags)
+	parts = append(parts, strings.Join(tags, "|"))
+
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:16])
+}
+
+func StableFindingID(fingerprint string) string {
+	fingerprint = strings.ToLower(strings.TrimSpace(fingerprint))
+	if fingerprint == "" {
+		return ""
+	}
+
+	if len(fingerprint) > 24 {
+		fingerprint = fingerprint[:24]
+	}
+	return "finding-" + fingerprint
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizeLayer(current string, adapterID string) string {

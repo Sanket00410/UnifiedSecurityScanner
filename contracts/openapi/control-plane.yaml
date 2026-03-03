@@ -381,6 +381,117 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AssetSummary"
+  /v1/assets/{assetId}:
+    get:
+      operationId: getAssetProfile
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: assetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Asset profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetProfile"
+        "404":
+          description: Asset profile not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: upsertAssetProfile
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: assetId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertAssetProfileRequest"
+      responses:
+        "200":
+          description: Asset profile saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetProfile"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/assets/{assetId}/controls:
+    get:
+      operationId: listAssetCompensatingControls
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: assetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Asset compensating controls
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CompensatingControl"
+    post:
+      operationId: createAssetCompensatingControl
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: assetId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCompensatingControlRequest"
+      responses:
+        "201":
+          description: Compensating control created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompensatingControl"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/policies:
     get:
       operationId: listPolicies
@@ -925,6 +1036,16 @@ components:
           type: string
         asset_type:
           type: string
+        environment:
+          type: string
+        exposure:
+          type: string
+        criticality:
+          type: number
+        owner_team:
+          type: string
+        compensating_control_count:
+          type: integer
         last_scanned_at:
           type: string
           format: date-time
@@ -932,6 +1053,123 @@ components:
           type: integer
         finding_count:
           type: integer
+    AssetProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_id
+        - asset_type
+        - asset_name
+        - environment
+        - exposure
+        - criticality
+        - created_at
+        - updated_at
+      properties:
+        tenant_id:
+          type: string
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        asset_name:
+          type: string
+        environment:
+          type: string
+        exposure:
+          type: string
+        criticality:
+          type: number
+        owner_team:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpsertAssetProfileRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_type
+      properties:
+        asset_type:
+          type: string
+        asset_name:
+          type: string
+        environment:
+          type: string
+        exposure:
+          type: string
+        criticality:
+          type: number
+        owner_team:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+    CompensatingControl:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - asset_id
+        - name
+        - control_type
+        - scope_layer
+        - effectiveness
+        - enabled
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        asset_id:
+          type: string
+        name:
+          type: string
+        control_type:
+          type: string
+        scope_layer:
+          type: string
+        effectiveness:
+          type: number
+        enabled:
+          type: boolean
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateCompensatingControlRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        control_type:
+          type: string
+        scope_layer:
+          type: string
+        effectiveness:
+          type: number
+        enabled:
+          type: boolean
+        notes:
+          type: string
     Policy:
       type: object
       additionalProperties: false
@@ -1369,6 +1607,8 @@ components:
           type: string
         finding_id:
           type: string
+        fingerprint:
+          type: string
         tenant_id:
           type: string
         scanner:
@@ -1423,6 +1663,8 @@ components:
               type: string
             exposure:
               type: string
+            owner_team:
+              type: string
         risk:
           type: object
           additionalProperties: false
@@ -1443,11 +1685,17 @@ components:
               type: number
             policy_impact:
               type: number
+            compensating_control_reduction:
+              type: number
             sla_class:
               type: string
             sla_due_at:
               type: string
               format: date-time
+        occurrence_count:
+          type: integer
+        reopened_count:
+          type: integer
     ApiError:
       type: object
       additionalProperties: false

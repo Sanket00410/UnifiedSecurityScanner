@@ -22,6 +22,9 @@ type stubAPIStore struct {
 	createScanJobErr error
 	auditEvents      []models.AuditEvent
 	apiTokens        []models.APIToken
+	assetProfile     models.AssetProfile
+	assetSummaries   []models.AssetSummary
+	assetControls    []models.CompensatingControl
 	policy           models.Policy
 	policies         []models.Policy
 	policyVersions   []models.PolicyVersion
@@ -100,7 +103,29 @@ func (s *stubAPIStore) ListFindingsForTenant(context.Context, string, int) ([]mo
 }
 
 func (s *stubAPIStore) ListAssetsForTenant(context.Context, string, int) ([]models.AssetSummary, error) {
-	return nil, nil
+	return s.assetSummaries, nil
+}
+
+func (s *stubAPIStore) GetAssetProfileForTenant(context.Context, string, string) (models.AssetProfile, bool, error) {
+	if s.assetProfile.AssetID == "" {
+		return models.AssetProfile{}, false, nil
+	}
+	return s.assetProfile, true, nil
+}
+
+func (s *stubAPIStore) UpsertAssetProfileForTenant(context.Context, string, string, models.UpsertAssetProfileRequest) (models.AssetProfile, error) {
+	return s.assetProfile, nil
+}
+
+func (s *stubAPIStore) ListCompensatingControlsForTenant(context.Context, string, string, int) ([]models.CompensatingControl, error) {
+	return s.assetControls, nil
+}
+
+func (s *stubAPIStore) CreateCompensatingControlForTenant(context.Context, string, string, models.CreateCompensatingControlRequest) (models.CompensatingControl, error) {
+	if len(s.assetControls) == 0 {
+		return models.CompensatingControl{}, nil
+	}
+	return s.assetControls[0], nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {
@@ -420,6 +445,79 @@ func TestGlobalPolicyCreateRequiresPlatformAdmin(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", recorder.Code)
+	}
+}
+
+func TestAssetRouteSupportsProfilesAndControls(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		assetProfile: models.AssetProfile{
+			TenantID:    "org-1",
+			AssetID:     "public.example.com",
+			AssetType:   "domain",
+			AssetName:   "public.example.com",
+			Environment: "production",
+			Exposure:    "internet",
+			Criticality: 9,
+			OwnerTeam:   "edge",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		assetControls: []models.CompensatingControl{
+			{
+				ID:            "control-1",
+				AssetID:       "public.example.com",
+				Name:          "WAF",
+				ControlType:   "waf",
+				ScopeLayer:    "dast",
+				Effectiveness: 8,
+				Enabled:       true,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	profileRecorder := httptest.NewRecorder()
+	profileRequest := httptest.NewRequest(http.MethodPut, "/v1/assets/public.example.com", strings.NewReader(`{
+		"asset_type": "domain",
+		"asset_name": "public.example.com",
+		"environment": "production",
+		"exposure": "internet",
+		"criticality": 9,
+		"owner_team": "edge"
+	}`))
+	profileRequest.Header.Set("Authorization", "Bearer appsec-token")
+	profileRequest.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(profileRecorder, profileRequest)
+	if profileRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for asset profile upsert, got %d", profileRecorder.Code)
+	}
+
+	controlsRecorder := httptest.NewRecorder()
+	controlsRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/public.example.com/controls", nil)
+	controlsRequest.Header.Set("Authorization", "Bearer appsec-token")
+
+	server.httpServer.Handler.ServeHTTP(controlsRecorder, controlsRequest)
+	if controlsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for control list, got %d", controlsRecorder.Code)
 	}
 }
 

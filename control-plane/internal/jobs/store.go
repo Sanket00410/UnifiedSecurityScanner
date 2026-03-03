@@ -16,7 +16,6 @@ import (
 	"unifiedsecurityscanner/control-plane/internal/database"
 	"unifiedsecurityscanner/control-plane/internal/models"
 	policyengine "unifiedsecurityscanner/control-plane/internal/policy"
-	"unifiedsecurityscanner/control-plane/internal/risk"
 )
 
 var (
@@ -27,6 +26,7 @@ var (
 	policyVersionSequence  uint64
 	policyApprovalSequence uint64
 	remediationSequence    uint64
+	controlSequence        uint64
 	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrProtectedToken      = errors.New("protected token")
@@ -434,59 +434,14 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 		return fmt.Errorf("finalize task: %w", err)
 	}
 
+	envelope, err := loadAssetRiskEnvelopeTx(ctx, tx, task.TenantID, task.Target)
+	if err != nil {
+		return err
+	}
+
 	for _, finding := range submission.ReportedFindings {
-		if strings.TrimSpace(finding.SchemaVersion) == "" {
-			finding.SchemaVersion = "1.0.0"
-		}
-		if strings.TrimSpace(finding.TenantID) == "" {
-			finding.TenantID = task.TenantID
-		}
-		if strings.TrimSpace(finding.Scanner.Engine) == "" {
-			finding.Scanner.Engine = task.AdapterID
-		}
-		if strings.TrimSpace(finding.Scanner.AdapterID) == "" {
-			finding.Scanner.AdapterID = task.AdapterID
-		}
-		if strings.TrimSpace(finding.Scanner.ScanJobID) == "" {
-			finding.Scanner.ScanJobID = task.ScanJobID
-		}
-		if strings.TrimSpace(finding.Source.Tool) == "" {
-			finding.Source.Tool = task.AdapterID
-		}
-		if strings.TrimSpace(finding.Asset.AssetID) == "" {
-			finding.Asset.AssetID = task.Target
-		}
-		if strings.TrimSpace(finding.Asset.AssetType) == "" {
-			finding.Asset.AssetType = task.TargetKind
-		}
-		if strings.TrimSpace(finding.Asset.AssetName) == "" {
-			finding.Asset.AssetName = task.Target
-		}
-		if finding.FirstSeenAt.IsZero() {
-			finding.FirstSeenAt = now
-		}
-		if finding.LastSeenAt.IsZero() {
-			finding.LastSeenAt = now
-		}
-
-		finding = risk.Enrich(finding)
-		payload, err := json.Marshal(finding)
-		if err != nil {
-			return fmt.Errorf("marshal normalized finding: %w", err)
-		}
-
-		_, err = tx.Exec(ctx, `
-			INSERT INTO normalized_findings (
-				finding_id, scan_job_id, task_id, tenant_id, adapter_id, finding_json, created_at, updated_at
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $7
-			)
-			ON CONFLICT (finding_id) DO UPDATE SET
-				finding_json = EXCLUDED.finding_json,
-				updated_at = EXCLUDED.updated_at
-		`, finding.FindingID, task.ScanJobID, submission.TaskID, task.TenantID, task.AdapterID, payload, now)
-		if err != nil {
-			return fmt.Errorf("insert normalized finding: %w", err)
+		if err := persistFindingTx(ctx, tx, task, finding, now, envelope); err != nil {
+			return err
 		}
 	}
 
@@ -1043,6 +998,11 @@ func nextPolicyApprovalID() string {
 func nextRemediationID() string {
 	sequence := atomic.AddUint64(&remediationSequence, 1)
 	return fmt.Sprintf("remediation-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextControlID() string {
+	sequence := atomic.AddUint64(&controlSequence, 1)
+	return fmt.Sprintf("control-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
 func sanitizeTools(tools []string) []string {

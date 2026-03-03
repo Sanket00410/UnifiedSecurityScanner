@@ -9,11 +9,63 @@ import (
 )
 
 type AssetSummary struct {
+	AssetID                  string    `json:"asset_id"`
+	AssetType                string    `json:"asset_type"`
+	Environment              string    `json:"environment,omitempty"`
+	Exposure                 string    `json:"exposure,omitempty"`
+	Criticality              float64   `json:"criticality,omitempty"`
+	OwnerTeam                string    `json:"owner_team,omitempty"`
+	CompensatingControlCount int64     `json:"compensating_control_count,omitempty"`
+	LastScannedAt            time.Time `json:"last_scanned_at"`
+	ScanCount                int64     `json:"scan_count"`
+	FindingCount             int64     `json:"finding_count"`
+}
+
+type AssetProfile struct {
+	TenantID    string    `json:"tenant_id,omitempty"`
+	AssetID     string    `json:"asset_id"`
+	AssetType   string    `json:"asset_type"`
+	AssetName   string    `json:"asset_name"`
+	Environment string    `json:"environment"`
+	Exposure    string    `json:"exposure"`
+	Criticality float64   `json:"criticality"`
+	OwnerTeam   string    `json:"owner_team,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type UpsertAssetProfileRequest struct {
+	AssetType   string   `json:"asset_type"`
+	AssetName   string   `json:"asset_name"`
+	Environment string   `json:"environment"`
+	Exposure    string   `json:"exposure"`
+	Criticality float64  `json:"criticality"`
+	OwnerTeam   string   `json:"owner_team"`
+	Tags        []string `json:"tags"`
+}
+
+type CompensatingControl struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id,omitempty"`
 	AssetID       string    `json:"asset_id"`
-	AssetType     string    `json:"asset_type"`
-	LastScannedAt time.Time `json:"last_scanned_at"`
-	ScanCount     int64     `json:"scan_count"`
-	FindingCount  int64     `json:"finding_count"`
+	Name          string    `json:"name"`
+	ControlType   string    `json:"control_type"`
+	ScopeLayer    string    `json:"scope_layer"`
+	Effectiveness float64   `json:"effectiveness"`
+	Enabled       bool      `json:"enabled"`
+	Notes         string    `json:"notes,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type CreateCompensatingControlRequest struct {
+	Name          string  `json:"name"`
+	ControlType   string  `json:"control_type"`
+	ScopeLayer    string  `json:"scope_layer"`
+	Effectiveness float64 `json:"effectiveness"`
+	Enabled       bool    `json:"enabled"`
+	Notes         string  `json:"notes"`
 }
 
 type Policy struct {

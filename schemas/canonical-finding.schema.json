@@ -29,6 +29,9 @@
       "type": "string",
       "minLength": 1
     },
+    "fingerprint": {
+      "type": "string"
+    },
     "tenant_id": {
       "type": "string",
       "minLength": 1
@@ -158,6 +161,9 @@
             "partner",
             "internet"
           ]
+        },
+        "owner_team": {
+          "type": "string"
         }
       }
     },
@@ -287,6 +293,11 @@
           "minimum": 0,
           "maximum": 10
         },
+        "compensating_control_reduction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
         "sla_class": {
           "type": "string"
         },
@@ -319,6 +330,14 @@
       "items": {
         "type": "string"
       }
+    },
+    "occurrence_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reopened_count": {
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -42,6 +43,10 @@ type apiStore interface {
 	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
 	ListAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.AssetSummary, error)
+	GetAssetProfileForTenant(ctx context.Context, tenantID string, assetID string) (models.AssetProfile, bool, error)
+	UpsertAssetProfileForTenant(ctx context.Context, tenantID string, assetID string, request models.UpsertAssetProfileRequest) (models.AssetProfile, error)
+	ListCompensatingControlsForTenant(ctx context.Context, tenantID string, assetID string, limit int) ([]models.CompensatingControl, error)
+	CreateCompensatingControlForTenant(ctx context.Context, tenantID string, assetID string, request models.CreateCompensatingControlRequest) (models.CompensatingControl, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -86,6 +91,11 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/v1/scan-jobs/", server.withUserAuth(auth.PermissionScanJobsRead, "scan_job.read", "scan_job", server.handleScanJobByID))
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/assets", server.withUserAuth(auth.PermissionAssetsRead, "assets.list", "asset", server.handleAssets))
+	mux.HandleFunc("/v1/assets/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPut:  auth.PermissionAssetsWrite,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "asset", "asset", server.handleAssetRoute))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -465,6 +475,109 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items": assets,
 	})
+}
+
+func (s *Server) handleAssetRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/assets/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "asset_route_not_found", "the requested asset route was not found")
+		return
+	}
+
+	assetID, err := url.PathUnescape(strings.TrimSpace(parts[0]))
+	if err != nil || strings.TrimSpace(assetID) == "" {
+		s.writeError(w, http.StatusBadRequest, "invalid_asset_id", "asset id is invalid")
+		return
+	}
+
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			profile, found, err := s.store.GetAssetProfileForTenant(r.Context(), principal.OrganizationID, assetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_asset_profile_failed", "asset profile could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "asset_profile_not_found", "asset profile was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, profile)
+			return
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpsertAssetProfileRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.AssetType) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "asset_type is required")
+				return
+			}
+
+			profile, err := s.store.UpsertAssetProfileForTenant(r.Context(), principal.OrganizationID, assetID, request)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "upsert_asset_profile_failed", "asset profile could not be saved")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, profile)
+			return
+		default:
+			s.writeMethodNotAllowed(w)
+			return
+		}
+	}
+
+	if len(parts) == 2 && parts[1] == "controls" {
+		switch r.Method {
+		case http.MethodGet:
+			controls, err := s.store.ListCompensatingControlsForTenant(r.Context(), principal.OrganizationID, assetID, 200)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "list_compensating_controls_failed", "compensating controls could not be loaded")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]any{
+				"items": controls,
+			})
+			return
+		case http.MethodPost:
+			defer r.Body.Close()
+
+			var request models.CreateCompensatingControlRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.Name) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "name is required")
+				return
+			}
+
+			control, err := s.store.CreateCompensatingControlForTenant(r.Context(), principal.OrganizationID, assetID, request)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "create_compensating_control_failed", "compensating control could not be created")
+				return
+			}
+
+			s.writeJSON(w, http.StatusCreated, control)
+			return
+		default:
+			s.writeMethodNotAllowed(w)
+			return
+		}
+	}
+
+	s.writeError(w, http.StatusNotFound, "asset_route_not_found", "the requested asset route was not found")
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
@@ -953,6 +1066,16 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 			return strings.TrimSpace(path[:idx])
 		}
 		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/assets/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/assets/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			path = strings.TrimSpace(path[:idx])
+		}
+		assetID, err := url.PathUnescape(path)
+		if err != nil {
+			return path
+		}
+		return strings.TrimSpace(assetID)
 	default:
 		return ""
 	}
