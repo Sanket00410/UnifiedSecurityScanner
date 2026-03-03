@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "rule_id": "AWS017",
+      "long_id": "aws-s3-enable-bucket-encryption",
+      "rule_description": "S3 bucket encryption should be enabled.",
+      "severity": "HIGH",
+      "description": "The S3 bucket does not enable default encryption.",
+      "impact": "Data stored in the bucket can be exposed without encryption at rest.",
+      "resolution": "Enable default server-side encryption on the bucket.",
+      "resource": "aws_s3_bucket.logs",
+      "location": {
+        "filename": "infra/main.tf",
+        "start_line": 14
+      }
+    }
+  ]
+}

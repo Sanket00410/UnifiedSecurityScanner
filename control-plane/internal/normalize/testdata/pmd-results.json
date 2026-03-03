@@ -1,0 +1,18 @@
+{
+  "formatVersion": 0,
+  "files": [
+    {
+      "filename": "src/main/java/com/acme/App.java",
+      "violations": [
+        {
+          "beginline": 12,
+          "begincolumn": 9,
+          "description": "Avoid using System.out in production code.",
+          "rule": "SystemPrintln",
+          "ruleset": "Best Practices",
+          "priority": 2
+        }
+      ]
+    }
+  ]
+}

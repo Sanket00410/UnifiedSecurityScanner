@@ -13,7 +13,10 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "metasploit" => MetasploitAdapter.execute(request),
         "semgrep" => SemgrepAdapter.execute(request),
         "gosec" => GosecAdapter.execute(request),
+        "spotbugs" => SpotBugsAdapter.execute(request),
+        "pmd" => PmdAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
+        "syft" => SyftAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
         "trivy-image" => TrivyImageAdapter.execute(request),
         "trivy-config" => TrivyConfigAdapter.execute(request),
@@ -22,6 +25,8 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "gitleaks" => GitleaksAdapter.execute(request),
         "checkov" => CheckovAdapter.execute(request),
         "hadolint" => HadolintAdapter.execute(request),
+        "kube-score" => KubeScoreAdapter.execute(request),
+        "tfsec" => TfsecAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
     }
 }
@@ -31,7 +36,10 @@ struct NmapAdapter;
 struct MetasploitAdapter;
 struct SemgrepAdapter;
 struct GosecAdapter;
+struct SpotBugsAdapter;
+struct PmdAdapter;
 struct BanditAdapter;
+struct SyftAdapter;
 struct TrivyAdapter;
 struct TrivyImageAdapter;
 struct TrivyConfigAdapter;
@@ -40,6 +48,8 @@ struct GrypeAdapter;
 struct GitleaksAdapter;
 struct CheckovAdapter;
 struct HadolintAdapter;
+struct KubeScoreAdapter;
+struct TfsecAdapter;
 
 impl ScannerAdapter for ZapAdapter {
     fn id(&self) -> &'static str {
@@ -253,6 +263,88 @@ impl ScannerAdapter for GosecAdapter {
     }
 }
 
+impl ScannerAdapter for SpotBugsAdapter {
+    fn id(&self) -> &'static str {
+        "spotbugs"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "spotbugs-results.xml")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "spotbugs-exec.log")?;
+        let binary = env::var("USS_SPOTBUGS_CMD").unwrap_or_else(|_| "spotbugs".to_string());
+        let args = vec![
+            "-textui".to_string(),
+            "-xml:withMessages".to_string(),
+            "-output".to_string(),
+            report_path.to_string_lossy().to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for PmdAdapter {
+    fn id(&self) -> &'static str {
+        "pmd"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "pmd-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "pmd-exec.log")?;
+        let binary = env::var("USS_PMD_CMD").unwrap_or_else(|_| "pmd".to_string());
+        let args = vec![
+            "check".to_string(),
+            "-R".to_string(),
+            "category/java/bestpractices.xml".to_string(),
+            "-f".to_string(),
+            "json".to_string(),
+            "-d".to_string(),
+            request.target.clone(),
+            "--report-file".to_string(),
+            report_path.to_string_lossy().to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for BanditAdapter {
     fn id(&self) -> &'static str {
         "bandit"
@@ -290,6 +382,25 @@ impl ScannerAdapter for BanditAdapter {
             vec![report_path],
             None,
         )
+    }
+}
+
+impl ScannerAdapter for SyftAdapter {
+    fn id(&self) -> &'static str {
+        "syft"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+        run_syft_adapter(self.id(), request, "syft-results.json", "syft-exec.log")
     }
 }
 
@@ -448,12 +559,107 @@ impl ScannerAdapter for GrypeAdapter {
         let report_path = ensure_evidence_path(&request.evidence_dir, "grype-results.json")?;
         let log_path = ensure_evidence_path(&request.evidence_dir, "grype-exec.log")?;
         let binary = env::var("USS_GRYPE_CMD").unwrap_or_else(|_| "grype".to_string());
-        let normalized_target_kind = request.target_kind.trim().to_ascii_lowercase();
+        let normalized_target_kind = canonical_target_kind(&request.target_kind);
         let scan_target = match normalized_target_kind.as_str() {
-            "repo" | "repository" | "codebase" | "filesystem" => format!("dir:{}", request.target),
+            "repo" | "repository" | "codebase" | "filesystem" => {
+                if let Some(sbom_path) =
+                    try_prepare_syft_sbom(request, "grype-sbom.cdx.json", "grype-syft-exec.log")
+                {
+                    format!("sbom:{}", sbom_path.to_string_lossy())
+                } else {
+                    format!("dir:{}", request.target)
+                }
+            }
+            "image" => {
+                if let Some(sbom_path) =
+                    try_prepare_syft_sbom(request, "grype-sbom.cdx.json", "grype-syft-exec.log")
+                {
+                    format!("sbom:{}", sbom_path.to_string_lossy())
+                } else {
+                    request.target.clone()
+                }
+            }
             _ => request.target.clone(),
         };
         let args = vec![scan_target, "-o".to_string(), "json".to_string()];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for KubeScoreAdapter {
+    fn id(&self) -> &'static str {
+        "kube-score"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "kube-score-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "kube-score-exec.log")?;
+        let binary = env::var("USS_KUBE_SCORE_CMD").unwrap_or_else(|_| "kube-score".to_string());
+        let args = vec![
+            "score".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for TfsecAdapter {
+    fn id(&self) -> &'static str {
+        "tfsec"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "tfsec-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "tfsec-exec.log")?;
+        let binary = env::var("USS_TFSEC_CMD").unwrap_or_else(|_| "tfsec".to_string());
+        let args = vec![
+            request.target.clone(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--no-color".to_string(),
+        ];
 
         run_process_with_stdout_report(
             self.id(),
@@ -645,6 +851,63 @@ fn run_trivy_adapter(
         vec![report_path],
         None,
     )
+}
+
+fn run_syft_adapter(
+    adapter_id: &str,
+    request: &AdapterRequest,
+    report_filename: &str,
+    log_filename: &str,
+) -> Result<AdapterResult, String> {
+    let report_path = ensure_evidence_path(&request.evidence_dir, report_filename)?;
+    let log_path = ensure_evidence_path(&request.evidence_dir, log_filename)?;
+    let binary = env::var("USS_SYFT_CMD").unwrap_or_else(|_| "syft".to_string());
+    let args = vec![
+        syft_scan_target(&request.target_kind, &request.target),
+        "-o".to_string(),
+        "cyclonedx-json".to_string(),
+    ];
+
+    run_process_with_stdout_report(
+        adapter_id,
+        &binary,
+        &args,
+        &report_path,
+        &log_path,
+        request.max_runtime_seconds,
+        vec![report_path.clone()],
+        None,
+    )
+}
+
+fn try_prepare_syft_sbom(
+    request: &AdapterRequest,
+    report_filename: &str,
+    log_filename: &str,
+) -> Option<PathBuf> {
+    let report_path = ensure_evidence_path(&request.evidence_dir, report_filename).ok()?;
+    let result = run_syft_adapter("syft", request, report_filename, log_filename).ok()?;
+    if result.success {
+        Some(report_path)
+    } else {
+        None
+    }
+}
+
+fn syft_scan_target(target_kind: &str, target: &str) -> String {
+    match canonical_target_kind(target_kind).as_str() {
+        "repo" | "repository" | "codebase" | "filesystem" => target.to_string(),
+        "image" => target.to_string(),
+        _ => target.to_string(),
+    }
+}
+
+fn canonical_target_kind(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "go_repo" | "java_repo" | "dockerfile" | "terraform" | "kubernetes" => "repo".to_string(),
+        "container_image" => "image".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn run_process(

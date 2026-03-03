@@ -1,0 +1,11 @@
+{
+  "artifacts": [
+    {
+      "id": "pkg:maven/org.apache.commons/commons-lang3@3.12.0",
+      "name": "commons-lang3",
+      "version": "3.12.0",
+      "type": "java-archive"
+    }
+  ],
+  "artifactRelationships": []
+}

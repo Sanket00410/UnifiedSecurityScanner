@@ -1091,13 +1091,19 @@ func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
 func defaultToolsForTargetKind(targetKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(targetKind)) {
 	case "go_repo":
-		return []string{"gosec"}
+		return []string{"semgrep", "gosec", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "java_repo":
+		return []string{"semgrep", "spotbugs", "pmd", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "dockerfile":
-		return []string{"hadolint"}
+		return []string{"hadolint", "trivy-config"}
+	case "terraform":
+		return []string{"tfsec", "trivy-config", "checkov"}
+	case "kubernetes":
+		return []string{"kube-score", "trivy-config", "checkov"}
 	case "repo", "repository", "codebase", "filesystem":
-		return []string{"semgrep", "bandit", "trivy", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "bandit", "trivy", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "image", "container_image":
-		return []string{"trivy-image", "grype", "trivy-config"}
+		return []string{"syft", "trivy-image", "grype", "trivy-config"}
 	default:
 		return []string{"zap"}
 	}
@@ -1142,7 +1148,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "bandit", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint":
+	case "semgrep", "gosec", "spotbugs", "pmd", "bandit", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint", "kube-score", "tfsec":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1172,8 +1178,14 @@ func maxRuntimeForTool(tool string) int64 {
 		return 300
 	case "gosec":
 		return 240
+	case "spotbugs":
+		return 360
+	case "pmd":
+		return 300
 	case "bandit":
 		return 240
+	case "syft":
+		return 180
 	case "trivy":
 		return 300
 	case "trivy-image":
@@ -1190,6 +1202,10 @@ func maxRuntimeForTool(tool string) int64 {
 		return 240
 	case "hadolint":
 		return 120
+	case "kube-score":
+		return 180
+	case "tfsec":
+		return 240
 	case "zap":
 		return 600
 	case "metasploit":

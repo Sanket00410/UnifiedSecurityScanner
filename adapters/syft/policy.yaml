@@ -1,0 +1,17 @@
+adapter_id: syft
+display_name: Syft SBOM Generator
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - repo
+  - filesystem
+  - go_repo
+  - java_repo
+  - image
+  - container_image
+default_timeout_seconds: 180
+evidence_requirements:
+  - cyclonedx_json
+  - inventory_manifest

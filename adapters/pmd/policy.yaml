@@ -1,0 +1,15 @@
+adapter_id: pmd
+display_name: PMD Java SAST Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - repo
+  - filesystem
+  - java_repo
+default_timeout_seconds: 300
+evidence_requirements:
+  - json_report
+  - rule_match_summary
+  - source_location

@@ -427,10 +427,149 @@ func TestParseHadolintFixture(t *testing.T) {
 	if finding.Category != "container_misconfiguration" {
 		t.Fatalf("unexpected finding category: %s", finding.Category)
 	}
-	if finding.Risk.Priority != "p2" {
-		t.Fatalf("expected p2 priority for hadolint finding, got %s", finding.Risk.Priority)
+	if finding.Risk.Priority != "p3" {
+		t.Fatalf("expected p3 priority for hadolint finding, got %s", finding.Risk.Priority)
 	}
 	if finding.Locations[0].Line != 4 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseSpotBugsFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("spotbugs", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-spotbugs",
+		AdapterID:  "spotbugs",
+		TargetKind: "java_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "spotbugs-results.xml")})
+	if err != nil {
+		t.Fatalf("parse spotbugs fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 27 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParsePmdFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("pmd", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-pmd",
+		AdapterID:  "pmd",
+		TargetKind: "java_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "pmd-results.json")})
+	if err != nil {
+		t.Fatalf("parse pmd fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Locations[0].Line != 12 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected pmd finding to be risk-enriched")
+	}
+}
+
+func TestParseSyftFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("syft", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-syft",
+		AdapterID:  "syft",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "syft-results.json")})
+	if err != nil {
+		t.Fatalf("parse syft fixture: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected 0 findings, got %d", len(findings))
+	}
+}
+
+func TestParseKubeScoreFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("kube-score", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-kube-score",
+		AdapterID:  "kube-score",
+		TargetKind: "kubernetes",
+		Target:     "c:/repo/manifests",
+	}, []string{filepath.Join("testdata", "kube-score-results.json")})
+	if err != nil {
+		t.Fatalf("parse kube-score fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 18 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseTfsecFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("tfsec", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-tfsec",
+		AdapterID:  "tfsec",
+		TargetKind: "terraform",
+		Target:     "c:/repo/infra",
+	}, []string{filepath.Join("testdata", "tfsec-results.json")})
+	if err != nil {
+		t.Fatalf("parse tfsec fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 14 {
 		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
 	}
 }

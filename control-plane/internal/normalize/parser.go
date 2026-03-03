@@ -3,6 +3,7 @@ package normalize
 import (
 	"bufio"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,8 +42,14 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseSemgrep(ctx, evidencePaths)
 	case "gosec":
 		return parseGosec(ctx, evidencePaths)
+	case "spotbugs":
+		return parseSpotBugs(ctx, evidencePaths)
+	case "pmd":
+		return parsePmd(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
+	case "syft":
+		return parseSyft(ctx, evidencePaths)
 	case "trivy":
 		return parseTrivy(ctx, evidencePaths)
 	case "trivy-image":
@@ -59,6 +66,10 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseCheckov(ctx, evidencePaths)
 	case "hadolint":
 		return parseHadolint(ctx, evidencePaths)
+	case "kube-score":
+		return parseKubeScore(ctx, evidencePaths)
+	case "tfsec":
+		return parseTfsec(ctx, evidencePaths)
 	default:
 		return nil, fmt.Errorf("unsupported parser for adapter %s", adapterID)
 	}
@@ -361,6 +372,166 @@ func parseGosec(ctx Context, evidencePaths []string) ([]models.CanonicalFinding,
 	return findings, nil
 }
 
+func parseSpotBugs(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type spotBugsSourceLine struct {
+		SourcePath string `xml:"sourcepath,attr"`
+		SourceFile string `xml:"sourcefile,attr"`
+		Start      int    `xml:"start,attr"`
+	}
+	type spotBugsClass struct {
+		SourceLine spotBugsSourceLine `xml:"SourceLine"`
+	}
+	type spotBugsBugInstance struct {
+		Type         string             `xml:"type,attr"`
+		Priority     int                `xml:"priority,attr"`
+		Rank         int                `xml:"rank,attr"`
+		Category     string             `xml:"category,attr"`
+		ShortMessage string             `xml:"ShortMessage"`
+		LongMessage  string             `xml:"LongMessage"`
+		SourceLine   spotBugsSourceLine `xml:"SourceLine"`
+		Class        spotBugsClass      `xml:"Class"`
+	}
+	type spotBugsOutput struct {
+		BugInstances []spotBugsBugInstance `xml:"BugInstance"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open spotbugs evidence %s: %w", path, err)
+		}
+
+		var payload spotBugsOutput
+		if err := xml.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode spotbugs evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.BugInstances {
+			title := strings.TrimSpace(item.ShortMessage)
+			if title == "" {
+				title = strings.TrimSpace(item.LongMessage)
+			}
+			if title == "" {
+				title = strings.TrimSpace(item.Type)
+			}
+
+			location := firstNonEmptyString(
+				item.SourceLine.SourcePath,
+				item.Class.SourceLine.SourcePath,
+				item.SourceLine.SourceFile,
+				item.Class.SourceLine.SourceFile,
+			)
+			line := firstPositiveInt(item.SourceLine.Start, item.Class.SourceLine.Start)
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, spotBugsSeverity(item.Priority, item.Rank), "medium", models.CanonicalLocation{
+				Kind: "file",
+				Path: location,
+				Line: line,
+			}, models.CanonicalEvidence{
+				Kind:    "xml",
+				Ref:     path,
+				Summary: "SpotBugs Java static analysis finding",
+			})
+			finding.Description = strings.TrimSpace(item.LongMessage)
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Refactor the Java code path to satisfy the static analysis rule and remove the unsafe pattern.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.Type) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Type))
+			}
+			if strings.TrimSpace(item.Category) != "" {
+				finding.Tags = append(finding.Tags, "category:"+strings.ToLower(strings.TrimSpace(item.Category)))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parsePmd(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type pmdViolation struct {
+		BeginLine   int    `json:"beginline"`
+		BeginColumn int    `json:"begincolumn"`
+		Description string `json:"description"`
+		Rule        string `json:"rule"`
+		Ruleset     string `json:"ruleset"`
+		Priority    int    `json:"priority"`
+	}
+	type pmdFile struct {
+		Filename   string         `json:"filename"`
+		Violations []pmdViolation `json:"violations"`
+	}
+	type pmdOutput struct {
+		Files []pmdFile `json:"files"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open pmd evidence %s: %w", path, err)
+		}
+
+		var payload pmdOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode pmd evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, fileEntry := range payload.Files {
+			for _, item := range fileEntry.Violations {
+				title := strings.TrimSpace(item.Description)
+				if title == "" {
+					title = strings.TrimSpace(item.Rule)
+				}
+
+				finding := baseFinding(ctx, now, "sast_rule_match", title, pmdSeverity(item.Priority), "medium", models.CanonicalLocation{
+					Kind:   "file",
+					Path:   fileEntry.Filename,
+					Line:   item.BeginLine,
+					Column: item.BeginColumn,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "PMD Java static analysis finding",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Refactor the Java implementation to comply with the PMD rule and remove the unsafe construct.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(item.Rule) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Rule))
+				}
+				if strings.TrimSpace(item.Ruleset) != "" {
+					finding.Tags = append(finding.Tags, "ruleset:"+strings.ToLower(strings.TrimSpace(item.Ruleset)))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
 func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type banditResult struct {
 		Filename      string `json:"filename"`
@@ -436,6 +607,27 @@ func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding
 	}
 
 	return findings, nil
+}
+
+func parseSyft(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open syft evidence %s: %w", path, err)
+		}
+
+		var payload any
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode syft evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+	}
+
+	return make([]models.CanonicalFinding, 0), nil
 }
 
 func parseTrivy(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
@@ -1045,6 +1237,193 @@ func parseHadolint(ctx Context, evidencePaths []string) ([]models.CanonicalFindi
 	return findings, nil
 }
 
+func parseKubeScore(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type kubeScoreComment struct {
+		Path     string `json:"path"`
+		Line     int    `json:"line"`
+		Severity string `json:"severity"`
+		Summary  string `json:"summary"`
+	}
+	type kubeScoreCheck struct {
+		Check    string             `json:"check"`
+		Grade    string             `json:"grade"`
+		Target   string             `json:"target"`
+		File     string             `json:"file"`
+		Comments []kubeScoreComment `json:"comments"`
+	}
+	type kubeScoreWrapped struct {
+		Checks []kubeScoreCheck `json:"checks"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read kube-score evidence %s: %w", path, err)
+		}
+
+		payload := make([]kubeScoreCheck, 0)
+		if err := json.Unmarshal(content, &payload); err != nil {
+			var wrapped kubeScoreWrapped
+			if err := json.Unmarshal(content, &wrapped); err != nil {
+				return nil, fmt.Errorf("decode kube-score evidence %s: %w", path, err)
+			}
+			payload = wrapped.Checks
+		}
+
+		for _, item := range payload {
+			if len(item.Comments) == 0 {
+				title := strings.TrimSpace(item.Check)
+				if title == "" {
+					title = "Kubernetes workload misconfiguration"
+				}
+
+				finding := baseFinding(ctx, now, "iac_misconfiguration", title, kubeScoreSeverity(item.Grade), "medium", models.CanonicalLocation{
+					Kind: "file",
+					Path: firstNonEmptyString(item.File, item.Target),
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Kube-score policy violation",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Update the Kubernetes manifest to satisfy the kube-score control.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(item.Check) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Check))
+				}
+				if strings.TrimSpace(item.Target) != "" {
+					finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.Target))
+				}
+				findings = append(findings, finding)
+				continue
+			}
+
+			for _, comment := range item.Comments {
+				title := strings.TrimSpace(comment.Summary)
+				if title == "" {
+					title = strings.TrimSpace(item.Check)
+				}
+				if title == "" {
+					title = "Kubernetes workload misconfiguration"
+				}
+
+				finding := baseFinding(ctx, now, "iac_misconfiguration", title, kubeScoreSeverity(firstNonEmptyString(comment.Severity, item.Grade)), "medium", models.CanonicalLocation{
+					Kind: "file",
+					Path: firstNonEmptyString(comment.Path, item.File, item.Target),
+					Line: comment.Line,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Kube-score policy violation",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Update the Kubernetes manifest to satisfy the kube-score control.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(item.Check) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Check))
+				}
+				if strings.TrimSpace(item.Target) != "" {
+					finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.Target))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parseTfsec(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type tfsecLocation struct {
+		Filename  string `json:"filename"`
+		StartLine int    `json:"start_line"`
+	}
+	type tfsecResult struct {
+		RuleID          string        `json:"rule_id"`
+		LongID          string        `json:"long_id"`
+		RuleDescription string        `json:"rule_description"`
+		Severity        string        `json:"severity"`
+		Description     string        `json:"description"`
+		Impact          string        `json:"impact"`
+		Resolution      string        `json:"resolution"`
+		Resource        string        `json:"resource"`
+		Location        tfsecLocation `json:"location"`
+	}
+	type tfsecOutput struct {
+		Results []tfsecResult `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open tfsec evidence %s: %w", path, err)
+		}
+
+		var payload tfsecOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode tfsec evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results {
+			title := strings.TrimSpace(item.RuleDescription)
+			if title == "" {
+				title = firstNonEmptyString(item.LongID, item.RuleID)
+			}
+
+			finding := baseFinding(ctx, now, "iac_misconfiguration", title, normalizeSeverity(item.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: "file",
+				Path: item.Location.Filename,
+				Line: item.Location.StartLine,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "tfsec failed policy",
+			})
+			description := strings.TrimSpace(item.Description)
+			if description == "" {
+				description = strings.TrimSpace(item.Impact)
+			}
+			finding.Description = description
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      strings.TrimSpace(item.Resolution),
+				FixAvailable: strings.TrimSpace(item.Resolution) != "",
+			}
+			if strings.TrimSpace(item.RuleID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+			}
+			if strings.TrimSpace(item.LongID) != "" {
+				finding.Tags = append(finding.Tags, "policy:"+strings.TrimSpace(item.LongID))
+			}
+			if strings.TrimSpace(item.Resource) != "" {
+				finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.Resource))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func zapSeverity(line string) (severity string, category string, ok bool) {
 	lower := strings.ToLower(line)
 	switch {
@@ -1159,6 +1538,60 @@ func parseStringInt(value string) int {
 		return 0
 	}
 	return parsed
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func spotBugsSeverity(priority int, rank int) string {
+	switch {
+	case priority <= 1 || (rank > 0 && rank <= 4):
+		return "high"
+	case priority == 2 || (rank > 0 && rank <= 9):
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func pmdSeverity(priority int) string {
+	switch {
+	case priority <= 2:
+		return "high"
+	case priority == 3:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func kubeScoreSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "critical":
+		return "critical"
+	case "error", "fail", "failed":
+		return "high"
+	case "warning", "warn":
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func fixedVersionSummary(value string) string {

@@ -1,0 +1,16 @@
+[
+  {
+    "check": "container-security-context-readonly-root-filesystem",
+    "grade": "warning",
+    "target": "Deployment/payments-api",
+    "file": "k8s/deployment.yaml",
+    "comments": [
+      {
+        "path": "k8s/deployment.yaml",
+        "line": 18,
+        "severity": "warning",
+        "summary": "Container should set readOnlyRootFilesystem to true."
+      }
+    ]
+  }
+]

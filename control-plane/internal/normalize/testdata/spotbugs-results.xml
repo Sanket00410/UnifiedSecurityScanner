@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<BugCollection version="4.9.0">
+  <BugInstance type="DMI_RANDOM_USED_ONLY_ONCE" priority="1" rank="7" category="BAD_PRACTICE">
+    <ShortMessage>Random object created and used only once</ShortMessage>
+    <LongMessage>Random object created and used only once; use ThreadLocalRandom or reuse the instance.</LongMessage>
+    <Class classname="com.acme.App">
+      <SourceLine classname="com.acme.App" sourcepath="src/main/java/com/acme/App.java" sourcefile="App.java" start="27" end="27" />
+    </Class>
+  </BugInstance>
+</BugCollection>

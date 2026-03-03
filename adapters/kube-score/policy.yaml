@@ -1,0 +1,15 @@
+adapter_id: kube-score
+display_name: Kube-score Kubernetes Analyzer
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - kubernetes
+  - repo
+  - filesystem
+default_timeout_seconds: 180
+evidence_requirements:
+  - json_report
+  - policy_match_summary
+  - source_location
