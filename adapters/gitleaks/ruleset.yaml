@@ -1,0 +1,10 @@
+adapter_id: gitleaks
+default_profile: enterprise-core
+profiles:
+  - name: enterprise-core
+    version: 2026.03
+    detectors:
+      - api_keys
+      - cloud_credentials
+      - private_keys
+      - oauth_tokens

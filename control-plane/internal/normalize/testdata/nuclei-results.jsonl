@@ -1,0 +1,1 @@
+{"template-id":"cves/2025/CVE-2025-0001","type":"http","host":"https://app.acme.example","matched-at":"https://app.acme.example/admin","info":{"name":"Exposed admin endpoint","severity":"high","description":"A sensitive administrative endpoint is exposed without additional access controls."},"extracted-results":["/admin returned 200 OK"]}

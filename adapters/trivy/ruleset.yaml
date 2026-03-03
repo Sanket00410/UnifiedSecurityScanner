@@ -1,0 +1,12 @@
+adapter_id: trivy
+default_profile: vuln-and-license
+profiles:
+  - name: vuln-and-license
+    version: 2026.03
+    scanners:
+      - vuln
+      - license
+  - name: vuln-only
+    version: 2026.03
+    scanners:
+      - vuln

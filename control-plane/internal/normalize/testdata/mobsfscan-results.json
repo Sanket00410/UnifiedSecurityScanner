@@ -1,0 +1,11 @@
+{
+  "results": [
+    {
+      "rule_id": "android-exported-activity",
+      "description": "An exported activity is accessible without an explicit permission guard.",
+      "severity": "HIGH",
+      "path": "app/src/main/AndroidManifest.xml",
+      "line": 18
+    }
+  ]
+}

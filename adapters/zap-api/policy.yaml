@@ -1,0 +1,15 @@
+adapter_id: zap-api
+display_name: OWASP ZAP API Schema Adapter
+execution_modes:
+  - passive
+  - active_validation
+requires_human_approval: false
+supports_authenticated_sessions: true
+supports_target_kinds:
+  - api
+  - api_schema
+default_timeout_seconds: 600
+evidence_requirements:
+  - schema_log
+  - finding_export
+  - request_response_summary

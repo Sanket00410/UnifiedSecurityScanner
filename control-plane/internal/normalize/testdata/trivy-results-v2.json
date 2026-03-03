@@ -1,0 +1,20 @@
+{
+  "Results": [
+    {
+      "Target": "package-lock.json",
+      "Type": "npm",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-2000",
+          "PkgName": "left-pad",
+          "InstalledVersion": "1.0.0",
+          "FixedVersion": "1.0.2",
+          "Severity": "CRITICAL",
+          "Title": "Critical package issue",
+          "Description": "A sample critical dependency issue.",
+          "PrimaryURL": "https://example.com/CVE-2026-2000"
+        }
+      ]
+    }
+  ]
+}

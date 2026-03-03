@@ -32,14 +32,18 @@ type Context struct {
 
 func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
-	case "zap":
+	case "zap", "zap-api":
 		return parseZap(ctx, evidencePaths)
 	case "nmap":
 		return parseNmap(ctx, evidencePaths)
+	case "nuclei":
+		return parseNuclei(ctx, evidencePaths)
 	case "metasploit":
 		return parseMetasploit(ctx, evidencePaths)
 	case "semgrep":
 		return parseSemgrep(ctx, evidencePaths)
+	case "mobsfscan":
+		return parseMobSFScan(ctx, evidencePaths)
 	case "gosec":
 		return parseGosec(ctx, evidencePaths)
 	case "spotbugs":
@@ -58,6 +62,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseESLint(ctx, evidencePaths)
 	case "phpstan":
 		return parsePHPStan(ctx, evidencePaths)
+	case "detect-secrets":
+		return parseDetectSecrets(ctx, evidencePaths)
 	case "shellcheck":
 		return parseShellCheck(ctx, evidencePaths)
 	case "dotnet-audit":
@@ -204,6 +210,82 @@ func parseNmap(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, 
 	return findings, nil
 }
 
+func parseNuclei(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type nucleiInfo struct {
+		Name        string `json:"name"`
+		Severity    string `json:"severity"`
+		Description string `json:"description"`
+	}
+	type nucleiFinding struct {
+		TemplateID       string     `json:"template-id"`
+		Type             string     `json:"type"`
+		Host             string     `json:"host"`
+		MatchedAt        string     `json:"matched-at"`
+		ExtractedResults []string   `json:"extracted-results"`
+		Info             nucleiInfo `json:"info"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open nuclei evidence %s: %w", path, err)
+		}
+
+		scanner := bufio.NewScanner(file)
+		lineNumber := 0
+		for scanner.Scan() {
+			lineNumber++
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+
+			var payload nucleiFinding
+			if err := json.Unmarshal([]byte(line), &payload); err != nil {
+				continue
+			}
+
+			title := firstNonEmptyString(payload.Info.Name, payload.TemplateID, "Nuclei detection")
+			endpoint := firstNonEmptyString(payload.MatchedAt, payload.Host, ctx.Target)
+			finding := baseFinding(ctx, now, "web_application_exposure", title, normalizeSeverity(payload.Info.Severity, "medium"), "medium", models.CanonicalLocation{
+				Kind:     "endpoint",
+				Path:     filepath.Base(path),
+				Line:     lineNumber,
+				Endpoint: endpoint,
+			}, models.CanonicalEvidence{
+				Kind:    "jsonl",
+				Ref:     path,
+				Summary: "Nuclei template match",
+			})
+			finding.Description = strings.TrimSpace(payload.Info.Description)
+			if strings.TrimSpace(payload.TemplateID) != "" {
+				finding.Tags = append(finding.Tags, "template:"+strings.TrimSpace(payload.TemplateID))
+			}
+			if strings.TrimSpace(payload.Type) != "" {
+				finding.Tags = append(finding.Tags, "protocol:"+strings.ToLower(strings.TrimSpace(payload.Type)))
+			}
+			if len(payload.ExtractedResults) > 0 && strings.TrimSpace(payload.ExtractedResults[0]) != "" {
+				finding.Evidence[0].Summary = "Nuclei template match: " + strings.TrimSpace(payload.ExtractedResults[0])
+			}
+
+			findings = append(findings, finding)
+		}
+		if err := scanner.Err(); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("scan nuclei evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+	}
+
+	return findings, nil
+}
+
 func parseMetasploit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	findings := make([]models.CanonicalFinding, 0)
 	now := time.Now().UTC()
@@ -318,6 +400,62 @@ func parseSemgrep(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 				Ref:     path,
 				Summary: "Semgrep rule match",
 			}))
+		}
+	}
+
+	return findings, nil
+}
+
+func parseMobSFScan(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type mobsfFinding struct {
+		RuleID      string `json:"rule_id"`
+		Rule        string `json:"rule"`
+		Description string `json:"description"`
+		Severity    string `json:"severity"`
+		Path        string `json:"path"`
+		File        string `json:"file"`
+		Line        int    `json:"line"`
+	}
+	type mobsfOutput struct {
+		Results []mobsfFinding `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open mobsfscan evidence %s: %w", path, err)
+		}
+
+		var payload mobsfOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode mobsfscan evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results {
+			title := firstNonEmptyString(item.Description, item.Rule, item.RuleID, "Mobile security issue")
+			locationPath := firstNonEmptyString(item.Path, item.File)
+			finding := baseFinding(ctx, now, "sast_rule_match", title, normalizeSeverity(item.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: "file",
+				Path: locationPath,
+				Line: item.Line,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "MobSFScan static analysis finding",
+			})
+			if ruleID := firstNonEmptyString(item.RuleID, item.Rule); ruleID != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(ruleID))
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 
@@ -1390,6 +1528,23 @@ func parseOSVScanner(ctx Context, evidencePaths []string) ([]models.CanonicalFin
 }
 
 func parseSyft(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type syftLicense struct {
+		Value string `json:"value"`
+	}
+	type syftArtifact struct {
+		ID       string        `json:"id"`
+		Name     string        `json:"name"`
+		Version  string        `json:"version"`
+		Type     string        `json:"type"`
+		Licenses []syftLicense `json:"licenses"`
+	}
+	type syftOutput struct {
+		Artifacts []syftArtifact `json:"artifacts"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
 	for _, path := range evidencePaths {
 		file, err := os.Open(path)
 		if err != nil {
@@ -1399,15 +1554,52 @@ func parseSyft(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, 
 			return nil, fmt.Errorf("open syft evidence %s: %w", path, err)
 		}
 
-		var payload any
+		var payload syftOutput
 		if err := json.NewDecoder(file).Decode(&payload); err != nil {
 			_ = file.Close()
 			return nil, fmt.Errorf("decode syft evidence %s: %w", path, err)
 		}
 		_ = file.Close()
+
+		for _, artifact := range payload.Artifacts {
+			for _, license := range artifact.Licenses {
+				licenseValue := strings.TrimSpace(license.Value)
+				severity := licenseRiskSeverity(licenseValue)
+				if severity == "" {
+					continue
+				}
+
+				title := fmt.Sprintf("Potential %s license risk in %s", licenseValue, firstNonEmptyString(artifact.Name, artifact.ID, "dependency"))
+				finding := baseFinding(ctx, now, "dependency_license_risk", title, severity, "medium", models.CanonicalLocation{
+					Kind: "dependency",
+					Path: firstNonEmptyString(artifact.Name, artifact.ID),
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Syft SBOM license signal",
+				})
+				finding.Description = "The dependency uses a reciprocal or otherwise restricted license that may require legal review before release."
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Review the license obligations and replace or explicitly approve the dependency if required.",
+					FixAvailable: false,
+				}
+				if strings.TrimSpace(artifact.Name) != "" {
+					finding.Tags = append(finding.Tags, "package:"+strings.TrimSpace(artifact.Name))
+				}
+				if strings.TrimSpace(artifact.Version) != "" {
+					finding.Tags = append(finding.Tags, "version:"+strings.TrimSpace(artifact.Version))
+				}
+				finding.Tags = append(finding.Tags, "license:"+licenseValue)
+				if strings.TrimSpace(artifact.Type) != "" {
+					finding.Tags = append(finding.Tags, "artifact_type:"+strings.ToLower(strings.TrimSpace(artifact.Type)))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
 	}
 
-	return make([]models.CanonicalFinding, 0), nil
+	return findings, nil
 }
 
 func parseTrivy(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
@@ -1827,6 +2019,77 @@ func parseGrype(ctx Context, evidencePaths []string) ([]models.CanonicalFinding,
 			}
 
 			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseDetectSecrets(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type detectSecretsFinding struct {
+		Type         string `json:"type"`
+		LineNumber   int    `json:"line_number"`
+		HashedSecret string `json:"hashed_secret"`
+		IsVerified   bool   `json:"is_verified"`
+	}
+	type detectSecretsOutput struct {
+		Results map[string][]detectSecretsFinding `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open detect-secrets evidence %s: %w", path, err)
+		}
+
+		var payload detectSecretsOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode detect-secrets evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for filePath, matches := range payload.Results {
+			for _, item := range matches {
+				secretType := firstNonEmptyString(item.Type, "Potential secret")
+				confidence := "medium"
+				if item.IsVerified {
+					confidence = "high"
+				}
+
+				finding := baseFinding(ctx, now, "secret_exposure", "Potential secret exposure ("+secretType+")", "high", confidence, models.CanonicalLocation{
+					Kind: "file",
+					Path: filePath,
+					Line: item.LineNumber,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Detect-secrets detector match",
+				})
+				finding.Description = "A structured secret detector matched likely credential material. Remove the secret from source control and rotate the credential."
+				finding.Tags = append(finding.Tags, "secret_type:"+secretType)
+				if item.IsVerified {
+					finding.Tags = append(finding.Tags, "verified:true")
+				}
+				if hashed := strings.TrimSpace(item.HashedSecret); hashed != "" {
+					if len(hashed) > 12 {
+						hashed = hashed[:12]
+					}
+					finding.Tags = append(finding.Tags, "secret_hash:"+hashed)
+				}
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Rotate the exposed secret and replace it with a managed secret reference.",
+					FixAvailable: true,
+				}
+
+				findings = append(findings, finding)
+			}
 		}
 	}
 
@@ -2764,6 +3027,22 @@ func osvSeverity(value string) string {
 		return "low"
 	default:
 		return "medium"
+	}
+}
+
+func licenseRiskSeverity(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch {
+	case normalized == "":
+		return ""
+	case strings.Contains(normalized, "agpl"), strings.Contains(normalized, "sspl"):
+		return "high"
+	case strings.Contains(normalized, "gpl"):
+		return "medium"
+	case strings.Contains(normalized, "lgpl"), strings.Contains(normalized, "mpl"):
+		return "low"
+	default:
+		return ""
 	}
 }
 

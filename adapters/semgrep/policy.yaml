@@ -1,0 +1,22 @@
+adapter_id: semgrep
+display_name: Semgrep Core SAST Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+supports_target_kinds:
+  - repo
+  - filesystem
+  - go_repo
+  - java_repo
+  - node_repo
+  - dotnet_repo
+  - ruby_repo
+  - php_repo
+  - mobile_repo
+  - android_repo
+  - ios_repo
+default_timeout_seconds: 300
+evidence_requirements:
+  - json_report
+  - source_location
+  - rule_summary

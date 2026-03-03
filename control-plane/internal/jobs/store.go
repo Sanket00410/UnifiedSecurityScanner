@@ -1091,23 +1091,27 @@ func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
 func defaultToolsForTargetKind(targetKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(targetKind)) {
 	case "go_repo":
-		return []string{"semgrep", "gosec", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "gosec", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "java_repo":
-		return []string{"semgrep", "spotbugs", "pmd", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "spotbugs", "pmd", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "node_repo":
-		return []string{"semgrep", "eslint", "trivy", "npm-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "eslint", "trivy", "npm-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "dotnet_repo":
-		return []string{"semgrep", "devskim", "trivy", "dotnet-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "devskim", "trivy", "dotnet-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "ruby_repo":
-		return []string{"semgrep", "brakeman", "trivy", "bundler-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "brakeman", "trivy", "bundler-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "php_repo":
-		return []string{"semgrep", "phpstan", "trivy", "composer-audit", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "phpstan", "trivy", "composer-audit", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
+	case "mobile_repo", "android_repo", "ios_repo":
+		return []string{"mobsfscan", "semgrep", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "aws_account":
 		return []string{"prowler"}
 	case "gcp_project":
 		return []string{"prowler"}
 	case "azure_subscription":
 		return []string{"prowler"}
+	case "api_schema":
+		return []string{"zap-api"}
 	case "shell_script":
 		return []string{"shellcheck"}
 	case "dockerfile":
@@ -1118,8 +1122,14 @@ func defaultToolsForTargetKind(targetKind string) []string {
 		return []string{"kube-score", "kubesec", "kics", "trivy-config", "checkov"}
 	case "cloudformation":
 		return []string{"cfn-lint", "kics", "trivy-config", "checkov"}
+	case "domain":
+		return []string{"zap", "nuclei"}
+	case "host", "ip":
+		return []string{"nmap", "nuclei"}
+	case "api", "url":
+		return []string{"zap", "nuclei"}
 	case "repo", "repository", "codebase", "filesystem":
-		return []string{"semgrep", "bandit", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "bandit", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "image", "container_image":
 		return []string{"syft", "trivy-image", "grype", "trivy-config"}
 	default:
@@ -1166,8 +1176,10 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "bundler-audit", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
+	case "semgrep", "gosec", "spotbugs", "pmd", "bundler-audit", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "mobsfscan", "detect-secrets", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
 		return models.ExecutionModePassive
+	case "zap-api", "nuclei":
+		return models.ExecutionModeActiveValidation
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
 	case "zap":
@@ -1214,6 +1226,10 @@ func maxRuntimeForTool(tool string) int64 {
 		return 240
 	case "shellcheck":
 		return 120
+	case "mobsfscan":
+		return 300
+	case "detect-secrets":
+		return 180
 	case "npm-audit":
 		return 180
 	case "composer-audit":
@@ -1246,12 +1262,16 @@ func maxRuntimeForTool(tool string) int64 {
 		return 300
 	case "prowler":
 		return 900
+	case "nuclei":
+		return 300
 	case "kubesec":
 		return 180
 	case "kube-score":
 		return 180
 	case "tfsec":
 		return 240
+	case "zap-api":
+		return 600
 	case "zap":
 		return 600
 	case "metasploit":

@@ -1050,3 +1050,241 @@ func TestParseProwlerAzureFixture(t *testing.T) {
 		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
 	}
 }
+
+func TestParseZapAPIFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("zap-api", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-zap-api",
+		AdapterID:  "zap-api",
+		TargetKind: "api_schema",
+		Target:     "https://api.acme.example/openapi.json",
+	}, []string{filepath.Join("testdata", "zap-api-output.log")})
+	if err != nil {
+		t.Fatalf("parse zap-api fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "dast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "web_application_exposure" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Endpoint != "https://api.acme.example/openapi.json" {
+		t.Fatalf("unexpected endpoint: %s", finding.Locations[0].Endpoint)
+	}
+}
+
+func TestParseNucleiFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("nuclei", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-nuclei",
+		AdapterID:  "nuclei",
+		TargetKind: "url",
+		Target:     "https://app.acme.example",
+	}, []string{filepath.Join("testdata", "nuclei-results.jsonl")})
+	if err != nil {
+		t.Fatalf("parse nuclei fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "pentest" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "web_application_exposure" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if !strings.Contains(strings.Join(finding.Tags, ","), "template:cves/2025/CVE-2025-0001") {
+		t.Fatalf("expected nuclei template tag, got %v", finding.Tags)
+	}
+}
+
+func TestParseDetectSecretsFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("detect-secrets", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-detect-secrets",
+		AdapterID:  "detect-secrets",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "detect-secrets-results.json")})
+	if err != nil {
+		t.Fatalf("parse detect-secrets fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "secrets" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Confidence != "high" {
+		t.Fatalf("expected high confidence for verified secret, got %s", finding.Confidence)
+	}
+	if !strings.Contains(strings.Join(finding.Tags, ","), "secret_type:AWS Access Key") {
+		t.Fatalf("expected secret type tag, got %v", finding.Tags)
+	}
+}
+
+func TestParseMobSFScanFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("mobsfscan", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-mobsfscan",
+		AdapterID:  "mobsfscan",
+		TargetKind: "mobile_repo",
+		Target:     "c:/mobile",
+	}, []string{filepath.Join("testdata", "mobsfscan-results.json")})
+	if err != nil {
+		t.Fatalf("parse mobsfscan fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Asset.AssetType != "mobile_repo" {
+		t.Fatalf("unexpected asset type: %s", finding.Asset.AssetType)
+	}
+	if finding.Locations[0].Line != 18 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseSemgrepFixtureV2(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("semgrep", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-semgrep-v2",
+		AdapterID:  "semgrep",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "semgrep-results-v2.json")})
+	if err != nil {
+		t.Fatalf("parse semgrep v2 fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Locations[0].Line != 64 {
+		t.Fatalf("unexpected semgrep v2 finding line: %d", findings[0].Locations[0].Line)
+	}
+}
+
+func TestParseTrivyFixtureV2(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("trivy", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-trivy-v2",
+		AdapterID:  "trivy",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "trivy-results-v2.json")})
+	if err != nil {
+		t.Fatalf("parse trivy v2 fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Severity != "critical" {
+		t.Fatalf("unexpected trivy v2 severity: %s", findings[0].Severity)
+	}
+}
+
+func TestParseGitleaksFixtureV2(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("gitleaks", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-gitleaks-v2",
+		AdapterID:  "gitleaks",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "gitleaks-results-v2.json")})
+	if err != nil {
+		t.Fatalf("parse gitleaks v2 fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Locations[0].Line != 27 {
+		t.Fatalf("unexpected gitleaks v2 line: %d", findings[0].Locations[0].Line)
+	}
+}
+
+func TestParseCheckovFixtureV2(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("checkov", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-checkov-v2",
+		AdapterID:  "checkov",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "checkov-results-v2.json")})
+	if err != nil {
+		t.Fatalf("parse checkov v2 fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Severity != "high" {
+		t.Fatalf("unexpected checkov v2 severity: %s", findings[0].Severity)
+	}
+}
+
+func TestParseSyftLicenseFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("syft", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-syft-license",
+		AdapterID:  "syft",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "syft-results-v2.json")})
+	if err != nil {
+		t.Fatalf("parse syft v2 fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Category != "dependency_license_risk" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Severity != "high" {
+		t.Fatalf("unexpected syft v2 severity: %s", finding.Severity)
+	}
+}

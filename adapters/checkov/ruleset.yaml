@@ -1,0 +1,10 @@
+adapter_id: checkov
+default_profile: platform-baseline
+profiles:
+  - name: platform-baseline
+    version: 2026.03
+    frameworks:
+      - terraform
+      - kubernetes
+      - cloudformation
+      - dockerfile

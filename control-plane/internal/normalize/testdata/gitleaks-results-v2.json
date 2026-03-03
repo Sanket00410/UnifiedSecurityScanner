@@ -1,0 +1,8 @@
+[
+  {
+    "RuleID": "aws-secret-access-key",
+    "Description": "AWS secret access key detected",
+    "File": "terraform/prod.tfvars",
+    "StartLine": 27
+  }
+]

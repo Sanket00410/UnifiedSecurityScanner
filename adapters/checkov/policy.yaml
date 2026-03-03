@@ -1,0 +1,25 @@
+adapter_id: checkov
+display_name: Checkov Core IaC Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+supports_target_kinds:
+  - repo
+  - filesystem
+  - go_repo
+  - java_repo
+  - node_repo
+  - dotnet_repo
+  - ruby_repo
+  - php_repo
+  - mobile_repo
+  - android_repo
+  - ios_repo
+  - terraform
+  - kubernetes
+  - cloudformation
+default_timeout_seconds: 240
+evidence_requirements:
+  - json_report
+  - policy_summary
+  - source_location

@@ -9,9 +9,12 @@ use std::time::{Duration, Instant};
 pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
     match request.adapter_id.as_str() {
         "zap" => ZapAdapter.execute(request),
+        "zap-api" => ZapAPIAdapter.execute(request),
         "nmap" => NmapAdapter.execute(request),
+        "nuclei" => NucleiAdapter.execute(request),
         "metasploit" => MetasploitAdapter.execute(request),
         "semgrep" => SemgrepAdapter.execute(request),
+        "mobsfscan" => MobSFScanAdapter.execute(request),
         "gosec" => GosecAdapter.execute(request),
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
@@ -21,6 +24,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "bandit" => BanditAdapter.execute(request),
         "eslint" => EslintAdapter.execute(request),
         "phpstan" => PhpStanAdapter.execute(request),
+        "detect-secrets" => DetectSecretsAdapter.execute(request),
         "shellcheck" => ShellCheckAdapter.execute(request),
         "dotnet-audit" => DotnetAuditAdapter.execute(request),
         "npm-audit" => NpmAuditAdapter.execute(request),
@@ -46,9 +50,12 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
 }
 
 struct ZapAdapter;
+struct ZapAPIAdapter;
 struct NmapAdapter;
+struct NucleiAdapter;
 struct MetasploitAdapter;
 struct SemgrepAdapter;
+struct MobSFScanAdapter;
 struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
@@ -58,6 +65,7 @@ struct DevSkimAdapter;
 struct BanditAdapter;
 struct EslintAdapter;
 struct PhpStanAdapter;
+struct DetectSecretsAdapter;
 struct ShellCheckAdapter;
 struct DotnetAuditAdapter;
 struct NpmAuditAdapter;
@@ -126,6 +134,55 @@ impl ScannerAdapter for ZapAdapter {
     }
 }
 
+impl ScannerAdapter for ZapAPIAdapter {
+    fn id(&self) -> &'static str {
+        "zap-api"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(
+            mode,
+            ExecutionMode::Passive | ExecutionMode::ActiveValidation
+        )
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "zap-api-output.log")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "zap-api-exec.log")?;
+        let binary =
+            env::var("USS_ZAP_API_CMD").unwrap_or_else(|_| default_zap_binary().to_string());
+
+        let mut args = vec![
+            "-cmd".to_string(),
+            "-openapiurl".to_string(),
+            request.target.clone(),
+            "-quickout".to_string(),
+            report_path.to_string_lossy().to_string(),
+            "-quickprogress".to_string(),
+        ];
+
+        if matches!(request.execution_mode, ExecutionMode::Passive) {
+            args.push("-silent".to_string());
+        }
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for NmapAdapter {
     fn id(&self) -> &'static str {
         "nmap"
@@ -152,6 +209,45 @@ impl ScannerAdapter for NmapAdapter {
             "-oN".to_string(),
             report_path.to_string_lossy().to_string(),
             request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for NucleiAdapter {
+    fn id(&self) -> &'static str {
+        "nuclei"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::ActiveValidation)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "nuclei-results.jsonl")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "nuclei-exec.log")?;
+        let binary = env::var("USS_NUCLEI_CMD").unwrap_or_else(|_| "nuclei".to_string());
+        let args = vec![
+            "-u".to_string(),
+            request.target.clone(),
+            "-jsonl".to_string(),
+            "-o".to_string(),
+            report_path.to_string_lossy().to_string(),
         ];
 
         run_process(
@@ -230,12 +326,51 @@ impl ScannerAdapter for SemgrepAdapter {
         let report_path = ensure_evidence_path(&request.evidence_dir, "semgrep-results.json")?;
         let log_path = ensure_evidence_path(&request.evidence_dir, "semgrep-exec.log")?;
         let binary = env::var("USS_SEMGREP_CMD").unwrap_or_else(|_| "semgrep".to_string());
+        let semgrep_config = env::var("USS_SEMGREP_CONFIG").unwrap_or_else(|_| "auto".to_string());
         let args = vec![
             "scan".to_string(),
             "--config".to_string(),
-            "auto".to_string(),
+            semgrep_config,
             "--json".to_string(),
             "--output".to_string(),
+            report_path.to_string_lossy().to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for MobSFScanAdapter {
+    fn id(&self) -> &'static str {
+        "mobsfscan"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "mobsfscan-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "mobsfscan-exec.log")?;
+        let binary = env::var("USS_MOBSFSCAN_CMD").unwrap_or_else(|_| "mobsfscan".to_string());
+        let args = vec![
+            "--json".to_string(),
+            "-o".to_string(),
             report_path.to_string_lossy().to_string(),
             request.target.clone(),
         ];
@@ -608,6 +743,46 @@ impl ScannerAdapter for PhpStanAdapter {
             request.max_runtime_seconds,
             vec![report_path.clone()],
             &[1],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for DetectSecretsAdapter {
+    fn id(&self) -> &'static str {
+        "detect-secrets"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path =
+            ensure_evidence_path(&request.evidence_dir, "detect-secrets-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "detect-secrets-exec.log")?;
+        let binary =
+            env::var("USS_DETECT_SECRETS_CMD").unwrap_or_else(|_| "detect-secrets".to_string());
+        let args = vec![
+            "scan".to_string(),
+            "--all-files".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
             None,
         )
     }

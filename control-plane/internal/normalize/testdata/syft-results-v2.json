@@ -1,0 +1,16 @@
+{
+  "artifacts": [
+    {
+      "id": "pkg:npm/example-app@2.3.4",
+      "name": "example-app",
+      "version": "2.3.4",
+      "type": "npm",
+      "licenses": [
+        {
+          "value": "AGPL-3.0-only"
+        }
+      ]
+    }
+  ],
+  "artifactRelationships": []
+}

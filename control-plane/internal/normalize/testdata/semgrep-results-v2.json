@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "check_id": "java.security.audit.sql-injection",
+      "path": "src/main/java/com/acme/QueryBuilder.java",
+      "start": {
+        "line": 64,
+        "col": 19
+      },
+      "extra": {
+        "message": "Unsanitized SQL query construction",
+        "severity": "HIGH",
+        "metadata": {
+          "category": "sast_rule_match"
+        }
+      }
+    }
+  ]
+}

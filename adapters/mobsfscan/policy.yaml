@@ -1,0 +1,16 @@
+adapter_id: mobsfscan
+display_name: MobSFScan Mobile Static Analysis Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+supports_target_kinds:
+  - mobile_repo
+  - android_repo
+  - ios_repo
+  - repo
+  - filesystem
+default_timeout_seconds: 300
+evidence_requirements:
+  - json_report
+  - source_location
+  - mobile_rule_summary

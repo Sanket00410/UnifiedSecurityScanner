@@ -1,0 +1,17 @@
+adapter_id: semgrep
+default_profile: enterprise-balanced
+profiles:
+  - name: enterprise-balanced
+    semgrep_config: auto
+    version: 2026.03
+    families:
+      - generic-security
+      - supply-chain
+      - secrets
+      - mobile
+  - name: high-signal
+    semgrep_config: p/security-audit
+    version: 2026.03
+    families:
+      - high-confidence
+      - dataflow-ready

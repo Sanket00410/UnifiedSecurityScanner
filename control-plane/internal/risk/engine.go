@@ -229,17 +229,17 @@ func normalizeLayer(current string, adapterID string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck":
+	case "semgrep", "mobsfscan", "gosec", "spotbugs", "pmd", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck":
 		return "sast"
 	case "syft", "trivy", "trivy-image", "grype", "bundler-audit", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner":
 		return "sca"
-	case "trivy-secrets", "gitleaks":
+	case "trivy-secrets", "gitleaks", "detect-secrets":
 		return "secrets"
 	case "trivy-config", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
 		return "iac"
-	case "zap":
+	case "zap", "zap-api":
 		return "dast"
-	case "nmap", "metasploit":
+	case "nmap", "metasploit", "nuclei":
 		return "pentest"
 	default:
 		return "pentest"
@@ -261,7 +261,7 @@ func normalizeEnvironment(current string, assetType string, assetName string) st
 	}
 
 	switch normalizeAssetType(assetType) {
-	case "repository", "repo", "codebase", "filesystem", "image":
+	case "repository", "repo", "codebase", "filesystem", "image", "mobile_app":
 		return "development"
 	default:
 		return "production"
@@ -275,7 +275,7 @@ func normalizeExposure(current string, assetType string, assetName string) strin
 	}
 
 	switch normalizeAssetType(assetType) {
-	case "repository", "repo", "codebase", "filesystem", "image":
+	case "repository", "repo", "codebase", "filesystem", "image", "mobile_app":
 		return "internal"
 	}
 
@@ -296,6 +296,10 @@ func normalizeAssetType(value string) string {
 		return "repo"
 	case "java_repo", "node_repo", "dotnet_repo", "ruby_repo", "php_repo", "shell_script", "dockerfile", "terraform", "kubernetes", "cloudformation":
 		return "repo"
+	case "api_schema":
+		return "api"
+	case "mobile_repo", "android_repo", "ios_repo":
+		return "mobile_app"
 	case "aws_account", "gcp_project", "azure_subscription":
 		return "cloud_account"
 	case "container_image":
