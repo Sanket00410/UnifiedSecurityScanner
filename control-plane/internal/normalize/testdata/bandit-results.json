@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "filename": "services/payments/views.py",
+      "issue_text": "Use of unsafe yaml load. Allows instantiation of arbitrary objects.",
+      "issue_severity": "HIGH",
+      "issue_cwe": {
+        "id": 20
+      },
+      "test_id": "B506",
+      "test_name": "yaml_load",
+      "line_number": 41,
+      "more_info": "https://bandit.readthedocs.io/en/latest/plugins/b506_yaml_load.html"
+    }
+  ]
+}

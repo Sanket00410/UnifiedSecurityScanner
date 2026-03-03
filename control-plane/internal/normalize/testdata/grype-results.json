@@ -1,0 +1,27 @@
+{
+  "matches": [
+    {
+      "artifact": {
+        "name": "openssl",
+        "version": "3.0.1-r0",
+        "type": "deb",
+        "locations": [
+          {
+            "path": "/var/lib/dpkg/status"
+          }
+        ]
+      },
+      "vulnerability": {
+        "id": "CVE-2026-2222",
+        "severity": "High",
+        "description": "A vulnerable OpenSSL package is present in the scanned artifact.",
+        "dataSource": "https://grype.example.com/advisories/CVE-2026-2222",
+        "fix": {
+          "versions": [
+            "3.0.1-r5"
+          ]
+        }
+      }
+    }
+  ]
+}

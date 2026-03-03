@@ -1,0 +1,16 @@
+adapter_id: grype
+display_name: Grype Vulnerability Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - repo
+  - filesystem
+  - image
+  - container_image
+default_timeout_seconds: 360
+evidence_requirements:
+  - json_report
+  - vulnerability_summary
+  - package_inventory_reference

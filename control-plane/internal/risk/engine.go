@@ -229,9 +229,9 @@ func normalizeLayer(current string, adapterID string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
-	case "semgrep":
+	case "semgrep", "bandit":
 		return "sast"
-	case "trivy", "trivy-image":
+	case "trivy", "trivy-image", "grype":
 		return "sca"
 	case "trivy-secrets", "gitleaks":
 		return "secrets"

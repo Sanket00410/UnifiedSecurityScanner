@@ -117,6 +117,39 @@ func TestParseSemgrepFixture(t *testing.T) {
 	}
 }
 
+func TestParseBanditFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("bandit", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-bandit",
+		AdapterID:  "bandit",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "bandit-results.json")})
+	if err != nil {
+		t.Fatalf("parse bandit fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Severity != "high" {
+		t.Fatalf("unexpected finding severity: %s", finding.Severity)
+	}
+	if finding.Locations[0].Line != 41 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
 func TestParseTrivyFixture(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +273,39 @@ func TestParseTrivySecretsFixture(t *testing.T) {
 	}
 	if finding.Risk.Priority != "p2" {
 		t.Fatalf("expected p2 priority for trivy secret finding, got %s", finding.Risk.Priority)
+	}
+}
+
+func TestParseGrypeFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("grype", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-grype",
+		AdapterID:  "grype",
+		TargetKind: "image",
+		Target:     "ghcr.io/acme/payments:1.4.2",
+	}, []string{filepath.Join("testdata", "grype-results.json")})
+	if err != nil {
+		t.Fatalf("parse grype fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "container_image_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Remediation == nil || !finding.Remediation.FixAvailable {
+		t.Fatal("expected grype finding to include a fixable remediation")
+	}
+	if finding.Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for grype image finding, got %s", finding.Risk.Priority)
 	}
 }
 

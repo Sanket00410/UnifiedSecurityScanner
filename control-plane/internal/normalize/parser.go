@@ -38,6 +38,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseMetasploit(ctx, evidencePaths)
 	case "semgrep":
 		return parseSemgrep(ctx, evidencePaths)
+	case "bandit":
+		return parseBandit(ctx, evidencePaths)
 	case "trivy":
 		return parseTrivy(ctx, evidencePaths)
 	case "trivy-image":
@@ -46,6 +48,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseTrivyConfig(ctx, evidencePaths)
 	case "trivy-secrets":
 		return parseTrivySecrets(ctx, evidencePaths)
+	case "grype":
+		return parseGrype(ctx, evidencePaths)
 	case "gitleaks":
 		return parseGitleaks(ctx, evidencePaths)
 	case "checkov":
@@ -270,6 +274,83 @@ func parseSemgrep(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 				Ref:     path,
 				Summary: "Semgrep rule match",
 			}))
+		}
+	}
+
+	return findings, nil
+}
+
+func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type banditResult struct {
+		Filename      string `json:"filename"`
+		IssueText     string `json:"issue_text"`
+		IssueSeverity string `json:"issue_severity"`
+		IssueCWE      struct {
+			ID int `json:"id"`
+		} `json:"issue_cwe"`
+		TestID     string `json:"test_id"`
+		TestName   string `json:"test_name"`
+		LineNumber int    `json:"line_number"`
+		MoreInfo   string `json:"more_info"`
+	}
+	type banditOutput struct {
+		Results []banditResult `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open bandit evidence %s: %w", path, err)
+		}
+
+		var payload banditOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode bandit evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results {
+			title := strings.TrimSpace(item.IssueText)
+			if title == "" {
+				title = strings.TrimSpace(item.TestName)
+			}
+			if title == "" {
+				title = strings.TrimSpace(item.TestID)
+			}
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, normalizeSeverity(item.IssueSeverity, "medium"), "high", models.CanonicalLocation{
+				Kind: "file",
+				Path: item.Filename,
+				Line: item.LineNumber,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Bandit security rule match",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Review the insecure code path and apply the safer library or API usage recommended by the Bandit rule.",
+				FixAvailable: true,
+				References:   nonEmptyStrings(item.MoreInfo),
+			}
+			if strings.TrimSpace(item.TestID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.TestID))
+			}
+			if strings.TrimSpace(item.TestName) != "" {
+				finding.Tags = append(finding.Tags, "test:"+strings.ToLower(strings.TrimSpace(item.TestName)))
+			}
+			if item.IssueCWE.ID > 0 {
+				finding.Tags = append(finding.Tags, fmt.Sprintf("cwe:%d", item.IssueCWE.ID))
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 
@@ -590,6 +671,109 @@ func parseTrivySecrets(ctx Context, evidencePaths []string) ([]models.CanonicalF
 
 				findings = append(findings, finding)
 			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parseGrype(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type grypeLocation struct {
+		Path string `json:"path"`
+	}
+	type grypeArtifact struct {
+		Name      string          `json:"name"`
+		Version   string          `json:"version"`
+		Type      string          `json:"type"`
+		Locations []grypeLocation `json:"locations"`
+	}
+	type grypeFix struct {
+		Versions []string `json:"versions"`
+	}
+	type grypeVulnerability struct {
+		ID          string   `json:"id"`
+		Severity    string   `json:"severity"`
+		Description string   `json:"description"`
+		DataSource  string   `json:"dataSource"`
+		Fix         grypeFix `json:"fix"`
+	}
+	type grypeMatch struct {
+		Artifact      grypeArtifact      `json:"artifact"`
+		Vulnerability grypeVulnerability `json:"vulnerability"`
+	}
+	type grypeOutput struct {
+		Matches []grypeMatch `json:"matches"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open grype evidence %s: %w", path, err)
+		}
+
+		var payload grypeOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode grype evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Matches {
+			title := strings.TrimSpace(item.Vulnerability.ID)
+			if title == "" {
+				title = "Dependency vulnerability"
+			}
+			if strings.TrimSpace(item.Artifact.Name) != "" {
+				title = fmt.Sprintf("%s in %s", title, strings.TrimSpace(item.Artifact.Name))
+			}
+
+			category := "dependency_vulnerability"
+			locationKind := "dependency"
+			if targetKind := strings.ToLower(strings.TrimSpace(ctx.TargetKind)); targetKind == "image" || targetKind == "container_image" {
+				category = "container_image_vulnerability"
+				locationKind = "image"
+			}
+
+			locationPath := ctx.Target
+			if len(item.Artifact.Locations) > 0 && strings.TrimSpace(item.Artifact.Locations[0].Path) != "" {
+				locationPath = strings.TrimSpace(item.Artifact.Locations[0].Path)
+			}
+
+			finding := baseFinding(ctx, now, category, title, normalizeSeverity(item.Vulnerability.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: locationKind,
+				Path: locationPath,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Grype package vulnerability",
+			})
+			finding.Description = strings.TrimSpace(item.Vulnerability.Description)
+			firstFixedVersion := ""
+			if len(item.Vulnerability.Fix.Versions) > 0 {
+				firstFixedVersion = strings.TrimSpace(item.Vulnerability.Fix.Versions[0])
+			}
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      fixedVersionSummary(firstFixedVersion),
+				FixAvailable: firstFixedVersion != "",
+				References:   nonEmptyStrings(item.Vulnerability.DataSource),
+			}
+			if strings.TrimSpace(item.Artifact.Name) != "" {
+				finding.Tags = append(finding.Tags, "package:"+strings.TrimSpace(item.Artifact.Name))
+			}
+			if strings.TrimSpace(item.Artifact.Version) != "" {
+				finding.Tags = append(finding.Tags, "version:"+strings.TrimSpace(item.Artifact.Version))
+			}
+			if strings.TrimSpace(item.Artifact.Type) != "" {
+				finding.Tags = append(finding.Tags, "artifact_type:"+strings.ToLower(strings.TrimSpace(item.Artifact.Type)))
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 

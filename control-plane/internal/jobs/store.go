@@ -1091,9 +1091,9 @@ func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
 func defaultToolsForTargetKind(targetKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(targetKind)) {
 	case "repo", "repository", "codebase", "filesystem":
-		return []string{"semgrep", "trivy", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "bandit", "trivy", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "image", "container_image":
-		return []string{"trivy-image", "trivy-config"}
+		return []string{"trivy-image", "grype", "trivy-config"}
 	default:
 		return []string{"zap"}
 	}
@@ -1138,7 +1138,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "gitleaks", "checkov":
+	case "semgrep", "bandit", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1166,6 +1166,8 @@ func maxRuntimeForTool(tool string) int64 {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "semgrep":
 		return 300
+	case "bandit":
+		return 240
 	case "trivy":
 		return 300
 	case "trivy-image":
@@ -1174,6 +1176,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 300
 	case "trivy-secrets":
 		return 240
+	case "grype":
+		return 360
 	case "gitleaks":
 		return 180
 	case "checkov":

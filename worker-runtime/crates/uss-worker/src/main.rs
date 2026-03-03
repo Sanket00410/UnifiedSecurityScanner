@@ -383,6 +383,13 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "bandit".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sast".to_string(), "python".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "trivy".to_string(),
             supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
@@ -412,6 +419,18 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["secrets".to_string(), "code".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "grype".to_string(),
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "image".to_string(),
+                "container_image".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["sca".to_string(), "image".to_string()],
             linux_preferred: false,
         },
         WorkerCapability {
