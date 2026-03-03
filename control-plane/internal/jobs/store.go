@@ -1098,6 +1098,10 @@ func defaultToolsForTargetKind(targetKind string) []string {
 		return []string{"semgrep", "eslint", "trivy", "npm-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "dotnet_repo":
 		return []string{"semgrep", "devskim", "trivy", "dotnet-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "ruby_repo":
+		return []string{"semgrep", "brakeman", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "php_repo":
+		return []string{"semgrep", "phpstan", "trivy", "composer-audit", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "shell_script":
 		return []string{"shellcheck"}
 	case "dockerfile":
@@ -1156,7 +1160,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "devskim", "bandit", "eslint", "shellcheck", "dotnet-audit", "npm-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "kubesec", "kube-score", "tfsec":
+	case "semgrep", "gosec", "spotbugs", "pmd", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "kubesec", "kube-score", "tfsec":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1190,15 +1194,21 @@ func maxRuntimeForTool(tool string) int64 {
 		return 360
 	case "pmd":
 		return 300
+	case "brakeman":
+		return 360
 	case "devskim":
 		return 300
 	case "bandit":
 		return 240
 	case "eslint":
 		return 240
+	case "phpstan":
+		return 240
 	case "shellcheck":
 		return 120
 	case "npm-audit":
+		return 180
+	case "composer-audit":
 		return 180
 	case "dotnet-audit":
 		return 240

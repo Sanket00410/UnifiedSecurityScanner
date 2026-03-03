@@ -843,3 +843,93 @@ func TestParseCFNLintFixture(t *testing.T) {
 		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
 	}
 }
+
+func TestParseBrakemanFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("brakeman", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-brakeman",
+		AdapterID:  "brakeman",
+		TargetKind: "ruby_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "brakeman-results.json")})
+	if err != nil {
+		t.Fatalf("parse brakeman fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 21 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParsePHPStanFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("phpstan", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-phpstan",
+		AdapterID:  "phpstan",
+		TargetKind: "php_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "phpstan-results.json")})
+	if err != nil {
+		t.Fatalf("parse phpstan fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 18 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseComposerAuditFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("composer-audit", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-composer-audit",
+		AdapterID:  "composer-audit",
+		TargetKind: "php_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "composer-audit-results.json")})
+	if err != nil {
+		t.Fatalf("parse composer-audit fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "dependency_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected composer-audit finding to be risk-enriched")
+	}
+}

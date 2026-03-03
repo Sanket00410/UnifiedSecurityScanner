@@ -1,0 +1,14 @@
+{
+  "advisories": {
+    "symfony/http-foundation": [
+      {
+        "advisoryId": "PKSA-1234-abcd-efgh",
+        "packageName": "symfony/http-foundation",
+        "title": "HTTP header parsing vulnerability in symfony/http-foundation",
+        "cve": "CVE-2025-12345",
+        "link": "https://github.com/advisories/GHSA-xxxx-yyyy-zzzz",
+        "severity": "high"
+      }
+    ]
+  }
+}

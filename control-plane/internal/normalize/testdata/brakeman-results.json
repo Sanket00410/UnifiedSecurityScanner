@@ -1,0 +1,13 @@
+{
+  "warnings": [
+    {
+      "warning_type": "SQL Injection",
+      "warning_code": 0,
+      "message": "Possible SQL injection near line 21: User.where(\"email = '#{params[:email]}'\")",
+      "file": "app/controllers/users_controller.rb",
+      "line": 21,
+      "confidence": "High",
+      "link": "https://brakemanscanner.org/docs/warning_types/sql_injection/"
+    }
+  ]
+}

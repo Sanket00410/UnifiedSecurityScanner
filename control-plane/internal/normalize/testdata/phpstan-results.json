@@ -1,0 +1,13 @@
+{
+  "files": {
+    "src/Controller/UserController.php": {
+      "messages": [
+        {
+          "message": "Unsafe dynamic SQL query detected from untrusted input.",
+          "line": 18,
+          "identifier": "security.sql.dynamicQuery"
+        }
+      ]
+    }
+  }
+}

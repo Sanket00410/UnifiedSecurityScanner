@@ -46,18 +46,24 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseSpotBugs(ctx, evidencePaths)
 	case "pmd":
 		return parsePmd(ctx, evidencePaths)
+	case "brakeman":
+		return parseBrakeman(ctx, evidencePaths)
 	case "devskim":
 		return parseDevSkim(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
 	case "eslint":
 		return parseESLint(ctx, evidencePaths)
+	case "phpstan":
+		return parsePHPStan(ctx, evidencePaths)
 	case "shellcheck":
 		return parseShellCheck(ctx, evidencePaths)
 	case "dotnet-audit":
 		return parseDotnetAudit(ctx, evidencePaths)
 	case "npm-audit":
 		return parseNPMAudit(ctx, evidencePaths)
+	case "composer-audit":
+		return parseComposerAudit(ctx, evidencePaths)
 	case "osv-scanner":
 		return parseOSVScanner(ctx, evidencePaths)
 	case "syft":
@@ -550,6 +556,74 @@ func parsePmd(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, e
 	return findings, nil
 }
 
+func parseBrakeman(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type brakemanWarning struct {
+		WarningType string `json:"warning_type"`
+		WarningCode int    `json:"warning_code"`
+		Message     string `json:"message"`
+		File        string `json:"file"`
+		Line        int    `json:"line"`
+		Confidence  string `json:"confidence"`
+		Link        string `json:"link"`
+	}
+	type brakemanOutput struct {
+		Warnings []brakemanWarning `json:"warnings"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open brakeman evidence %s: %w", path, err)
+		}
+
+		var payload brakemanOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode brakeman evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Warnings {
+			title := firstNonEmptyString(item.Message, item.WarningType)
+			if title == "" {
+				title = "Ruby application security issue"
+			}
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, brakemanSeverity(item.Confidence), normalizeConfidence(item.Confidence), models.CanonicalLocation{
+				Kind: "file",
+				Path: item.File,
+				Line: item.Line,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Brakeman security warning",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Refactor the Ruby or Rails code path to remove the insecure pattern identified by Brakeman.",
+				FixAvailable: true,
+				References:   nonEmptyStrings(item.Link),
+			}
+			if strings.TrimSpace(item.WarningType) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.ToLower(strings.TrimSpace(item.WarningType)))
+			}
+			if item.WarningCode > 0 {
+				finding.Tags = append(finding.Tags, fmt.Sprintf("warning_code:%d", item.WarningCode))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func parseDevSkim(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type devSkimResult struct {
 		RuleID         string   `json:"ruleId"`
@@ -758,6 +832,71 @@ func parseESLint(ctx Context, evidencePaths []string) ([]models.CanonicalFinding
 				}
 				if strings.TrimSpace(item.RuleID) != "" {
 					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parsePHPStan(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type phpStanMessage struct {
+		Message    string `json:"message"`
+		Line       int    `json:"line"`
+		Identifier string `json:"identifier"`
+	}
+	type phpStanFile struct {
+		Messages []phpStanMessage `json:"messages"`
+	}
+	type phpStanOutput struct {
+		Files map[string]phpStanFile `json:"files"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open phpstan evidence %s: %w", path, err)
+		}
+
+		var payload phpStanOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode phpstan evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for filePath, fileEntry := range payload.Files {
+			for _, item := range fileEntry.Messages {
+				title := strings.TrimSpace(item.Message)
+				if title == "" {
+					title = "PHP code issue"
+				}
+
+				finding := baseFinding(ctx, now, "sast_rule_match", title, phpStanSeverity(item.Identifier), "medium", models.CanonicalLocation{
+					Kind: "file",
+					Path: filePath,
+					Line: item.Line,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "PHPStan analysis finding",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Refactor the PHP code path to resolve the static analysis issue and remove the unsafe behavior.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(item.Identifier) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Identifier))
 				}
 
 				findings = append(findings, finding)
@@ -998,6 +1137,78 @@ func parseNPMAudit(ctx Context, evidencePaths []string) ([]models.CanonicalFindi
 			}
 
 			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseComposerAudit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type composerAdvisory struct {
+		AdvisoryID  string `json:"advisoryId"`
+		PackageName string `json:"packageName"`
+		Title       string `json:"title"`
+		CVE         string `json:"cve"`
+		Link        string `json:"link"`
+		Severity    string `json:"severity"`
+	}
+	type composerAuditOutput struct {
+		Advisories map[string][]composerAdvisory `json:"advisories"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open composer-audit evidence %s: %w", path, err)
+		}
+
+		var payload composerAuditOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode composer-audit evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for packageName, advisories := range payload.Advisories {
+			for _, advisory := range advisories {
+				resolvedPackage := firstNonEmptyString(advisory.PackageName, packageName)
+				title := firstNonEmptyString(advisory.Title, advisory.AdvisoryID)
+				if title == "" {
+					title = "Dependency vulnerability"
+				}
+
+				finding := baseFinding(ctx, now, "dependency_vulnerability", title, normalizeSeverity(advisory.Severity, "medium"), "high", models.CanonicalLocation{
+					Kind: "dependency",
+					Path: "composer.lock",
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "Composer dependency vulnerability",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Upgrade the vulnerable Composer dependency to a fixed version and refresh the lockfile.",
+					FixAvailable: true,
+					References:   nonEmptyStrings(advisory.Link),
+				}
+				if resolvedPackage != "" {
+					finding.Tags = append(finding.Tags, "package:"+resolvedPackage)
+				}
+				if strings.TrimSpace(advisory.AdvisoryID) != "" {
+					finding.Tags = append(finding.Tags, "advisory:"+strings.TrimSpace(advisory.AdvisoryID))
+				}
+				if strings.TrimSpace(advisory.CVE) != "" {
+					finding.Tags = append(finding.Tags, "cve:"+strings.TrimSpace(advisory.CVE))
+				}
+
+				findings = append(findings, finding)
+			}
 		}
 	}
 
@@ -2346,6 +2557,29 @@ func cfnLintSeverity(value string) string {
 	case "error":
 		return "high"
 	case "warning":
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func brakemanSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high":
+		return "high"
+	case "weak":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func phpStanSeverity(identifier string) string {
+	normalized := strings.ToLower(strings.TrimSpace(identifier))
+	switch {
+	case strings.Contains(normalized, "security"), strings.Contains(normalized, "unsafe"), strings.Contains(normalized, "taint"):
+		return "high"
+	case normalized != "":
 		return "medium"
 	default:
 		return "low"

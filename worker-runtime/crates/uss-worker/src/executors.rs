@@ -15,12 +15,15 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "gosec" => GosecAdapter.execute(request),
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
+        "brakeman" => BrakemanAdapter.execute(request),
         "devskim" => DevSkimAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
         "eslint" => EslintAdapter.execute(request),
+        "phpstan" => PhpStanAdapter.execute(request),
         "shellcheck" => ShellCheckAdapter.execute(request),
         "dotnet-audit" => DotnetAuditAdapter.execute(request),
         "npm-audit" => NpmAuditAdapter.execute(request),
+        "composer-audit" => ComposerAuditAdapter.execute(request),
         "osv-scanner" => OsvScannerAdapter.execute(request),
         "syft" => SyftAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
@@ -47,12 +50,15 @@ struct SemgrepAdapter;
 struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
+struct BrakemanAdapter;
 struct DevSkimAdapter;
 struct BanditAdapter;
 struct EslintAdapter;
+struct PhpStanAdapter;
 struct ShellCheckAdapter;
 struct DotnetAuditAdapter;
 struct NpmAuditAdapter;
+struct ComposerAuditAdapter;
 struct OsvScannerAdapter;
 struct SyftAdapter;
 struct TrivyAdapter;
@@ -363,6 +369,46 @@ impl ScannerAdapter for PmdAdapter {
     }
 }
 
+impl ScannerAdapter for BrakemanAdapter {
+    fn id(&self) -> &'static str {
+        "brakeman"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "brakeman-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "brakeman-exec.log")?;
+        let binary = env::var("USS_BRAKEMAN_CMD").unwrap_or_else(|_| "brakeman".to_string());
+        let args = vec![
+            "-q".to_string(),
+            "-f".to_string(),
+            "json".to_string(),
+            "-o".to_string(),
+            report_path.to_string_lossy().to_string(),
+            request.target.clone(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for DevSkimAdapter {
     fn id(&self) -> &'static str {
         "devskim"
@@ -482,6 +528,46 @@ impl ScannerAdapter for EslintAdapter {
     }
 }
 
+impl ScannerAdapter for PhpStanAdapter {
+    fn id(&self) -> &'static str {
+        "phpstan"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "phpstan-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "phpstan-exec.log")?;
+        let binary = env::var("USS_PHPSTAN_CMD").unwrap_or_else(|_| "phpstan".to_string());
+        let args = vec![
+            "analyse".to_string(),
+            "--error-format".to_string(),
+            "json".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[1],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for ShellCheckAdapter {
     fn id(&self) -> &'static str {
         "shellcheck"
@@ -541,6 +627,42 @@ impl ScannerAdapter for NpmAuditAdapter {
         let log_path = ensure_evidence_path(&request.evidence_dir, "npm-audit-exec.log")?;
         let binary = env::var("USS_NPM_CMD").unwrap_or_else(|_| "npm".to_string());
         let args = vec!["audit".to_string(), "--json".to_string()];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[1],
+            Some(Path::new(&request.target)),
+        )
+    }
+}
+
+impl ScannerAdapter for ComposerAuditAdapter {
+    fn id(&self) -> &'static str {
+        "composer-audit"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path =
+            ensure_evidence_path(&request.evidence_dir, "composer-audit-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "composer-audit-exec.log")?;
+        let binary = env::var("USS_COMPOSER_CMD").unwrap_or_else(|_| "composer".to_string());
+        let args = vec!["audit".to_string(), "--format=json".to_string()];
 
         run_process_with_stdout_report_allow_exit_codes(
             self.id(),
