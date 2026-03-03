@@ -715,9 +715,13 @@ fn default_capabilities() -> Vec<WorkerCapability> {
         },
         WorkerCapability {
             adapter_id: "prowler".to_string(),
-            supported_target_kinds: vec!["aws_account".to_string()],
+            supported_target_kinds: vec![
+                "aws_account".to_string(),
+                "gcp_project".to_string(),
+                "azure_subscription".to_string(),
+            ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
-            labels: vec!["cloud".to_string(), "aws".to_string()],
+            labels: vec!["cloud".to_string(), "posture".to_string()],
             linux_preferred: false,
         },
         WorkerCapability {

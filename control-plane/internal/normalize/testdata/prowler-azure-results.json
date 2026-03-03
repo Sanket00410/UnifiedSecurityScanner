@@ -1,0 +1,14 @@
+[
+  {
+    "Provider": "azure",
+    "SubscriptionId": "sub-001",
+    "Region": "eastus",
+    "CheckID": "storage_1",
+    "CheckTitle": "Ensure storage accounts do not allow public blob access",
+    "Severity": "high",
+    "Status": "FAIL",
+    "StatusExtended": "Storage account publiclogs allows public blob access and should be restricted.",
+    "ResourceId": "publiclogs",
+    "ResourceArn": "/subscriptions/sub-001/resourceGroups/sec-rg/providers/Microsoft.Storage/storageAccounts/publiclogs"
+  }
+]

@@ -2188,6 +2188,8 @@ func parseProwler(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 	type prowlerFinding struct {
 		Provider       string `json:"Provider"`
 		AccountID      string `json:"AccountId"`
+		ProjectID      string `json:"ProjectId"`
+		SubscriptionID string `json:"SubscriptionId"`
 		Region         string `json:"Region"`
 		CheckID        string `json:"CheckID"`
 		CheckTitle     string `json:"CheckTitle"`
@@ -2253,9 +2255,10 @@ func parseProwler(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 			if strings.TrimSpace(item.ResourceID) != "" {
 				finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.ResourceID))
 			}
-			if strings.TrimSpace(item.AccountID) != "" {
-				finding.Asset.AssetID = strings.TrimSpace(item.AccountID)
-				finding.Asset.AssetName = strings.TrimSpace(item.AccountID)
+			assetID := firstNonEmptyString(item.AccountID, item.ProjectID, item.SubscriptionID)
+			if assetID != "" {
+				finding.Asset.AssetID = assetID
+				finding.Asset.AssetName = assetID
 			}
 
 			findings = append(findings, finding)

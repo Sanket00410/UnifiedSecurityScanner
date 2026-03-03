@@ -1,0 +1,14 @@
+[
+  {
+    "Provider": "gcp",
+    "ProjectId": "acme-prod",
+    "Region": "us-central1",
+    "CheckID": "gcs_1",
+    "CheckTitle": "Ensure Cloud Storage buckets are not publicly accessible",
+    "Severity": "high",
+    "Status": "FAIL",
+    "StatusExtended": "Bucket acme-prod-public is exposed publicly and should be restricted.",
+    "ResourceId": "acme-prod-public",
+    "ResourceArn": "projects/acme-prod/buckets/acme-prod-public"
+  }
+]

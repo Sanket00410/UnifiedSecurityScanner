@@ -996,3 +996,57 @@ func TestParseProwlerFixture(t *testing.T) {
 		t.Fatal("expected prowler finding to be risk-enriched")
 	}
 }
+
+func TestParseProwlerGCPFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("prowler", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-prowler-gcp",
+		AdapterID:  "prowler",
+		TargetKind: "gcp_project",
+		Target:     "acme-prod",
+	}, []string{filepath.Join("testdata", "prowler-gcp-results.json")})
+	if err != nil {
+		t.Fatalf("parse prowler gcp fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Asset.AssetID != "acme-prod" {
+		t.Fatalf("unexpected gcp asset id: %s", finding.Asset.AssetID)
+	}
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+}
+
+func TestParseProwlerAzureFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("prowler", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-prowler-azure",
+		AdapterID:  "prowler",
+		TargetKind: "azure_subscription",
+		Target:     "sub-001",
+	}, []string{filepath.Join("testdata", "prowler-azure-results.json")})
+	if err != nil {
+		t.Fatalf("parse prowler azure fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Asset.AssetID != "sub-001" {
+		t.Fatalf("unexpected azure asset id: %s", finding.Asset.AssetID)
+	}
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+}

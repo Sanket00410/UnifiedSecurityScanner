@@ -1310,8 +1310,13 @@ impl ScannerAdapter for ProwlerAdapter {
         let report_path = ensure_evidence_path(&request.evidence_dir, "prowler-results.json")?;
         let log_path = ensure_evidence_path(&request.evidence_dir, "prowler-exec.log")?;
         let binary = env::var("USS_PROWLER_CMD").unwrap_or_else(|_| "prowler".to_string());
+        let provider = match request.target_kind.trim().to_ascii_lowercase().as_str() {
+            "gcp_project" => "gcp",
+            "azure_subscription" => "azure",
+            _ => "aws",
+        };
         let args = vec![
-            "aws".to_string(),
+            provider.to_string(),
             "--output-modes".to_string(),
             "json".to_string(),
         ];

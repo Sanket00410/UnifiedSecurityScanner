@@ -1104,6 +1104,10 @@ func defaultToolsForTargetKind(targetKind string) []string {
 		return []string{"semgrep", "phpstan", "trivy", "composer-audit", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "aws_account":
 		return []string{"prowler"}
+	case "gcp_project":
+		return []string{"prowler"}
+	case "azure_subscription":
+		return []string{"prowler"}
 	case "shell_script":
 		return []string{"shellcheck"}
 	case "dockerfile":
