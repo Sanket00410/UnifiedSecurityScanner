@@ -9,40 +9,88 @@ import (
 )
 
 type AssetSummary struct {
-	AssetID                  string    `json:"asset_id"`
-	AssetType                string    `json:"asset_type"`
-	Environment              string    `json:"environment,omitempty"`
-	Exposure                 string    `json:"exposure,omitempty"`
-	Criticality              float64   `json:"criticality,omitempty"`
-	OwnerTeam                string    `json:"owner_team,omitempty"`
-	CompensatingControlCount int64     `json:"compensating_control_count,omitempty"`
-	LastScannedAt            time.Time `json:"last_scanned_at"`
-	ScanCount                int64     `json:"scan_count"`
-	FindingCount             int64     `json:"finding_count"`
+	AssetID                  string     `json:"asset_id"`
+	AssetType                string     `json:"asset_type"`
+	Environment              string     `json:"environment,omitempty"`
+	Exposure                 string     `json:"exposure,omitempty"`
+	Criticality              float64    `json:"criticality,omitempty"`
+	OwnerTeam                string     `json:"owner_team,omitempty"`
+	OwnerHierarchy           []string   `json:"owner_hierarchy,omitempty"`
+	ServiceName              string     `json:"service_name,omitempty"`
+	ServiceTier              string     `json:"service_tier,omitempty"`
+	ServiceCriticalityClass  string     `json:"service_criticality_class,omitempty"`
+	ExternalSource           string     `json:"external_source,omitempty"`
+	LastSyncedAt             *time.Time `json:"last_synced_at,omitempty"`
+	CompensatingControlCount int64      `json:"compensating_control_count,omitempty"`
+	LastScannedAt            time.Time  `json:"last_scanned_at"`
+	ScanCount                int64      `json:"scan_count"`
+	FindingCount             int64      `json:"finding_count"`
 }
 
 type AssetProfile struct {
-	TenantID    string    `json:"tenant_id,omitempty"`
-	AssetID     string    `json:"asset_id"`
-	AssetType   string    `json:"asset_type"`
-	AssetName   string    `json:"asset_name"`
-	Environment string    `json:"environment"`
-	Exposure    string    `json:"exposure"`
-	Criticality float64   `json:"criticality"`
-	OwnerTeam   string    `json:"owner_team,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	TenantID                string     `json:"tenant_id,omitempty"`
+	AssetID                 string     `json:"asset_id"`
+	AssetType               string     `json:"asset_type"`
+	AssetName               string     `json:"asset_name"`
+	Environment             string     `json:"environment"`
+	Exposure                string     `json:"exposure"`
+	Criticality             float64    `json:"criticality"`
+	OwnerTeam               string     `json:"owner_team,omitempty"`
+	OwnerHierarchy          []string   `json:"owner_hierarchy,omitempty"`
+	ServiceName             string     `json:"service_name,omitempty"`
+	ServiceTier             string     `json:"service_tier,omitempty"`
+	ServiceCriticalityClass string     `json:"service_criticality_class,omitempty"`
+	ExternalSource          string     `json:"external_source,omitempty"`
+	ExternalReference       string     `json:"external_reference,omitempty"`
+	LastSyncedAt            *time.Time `json:"last_synced_at,omitempty"`
+	Tags                    []string   `json:"tags,omitempty"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
 }
 
 type UpsertAssetProfileRequest struct {
-	AssetType   string   `json:"asset_type"`
-	AssetName   string   `json:"asset_name"`
-	Environment string   `json:"environment"`
-	Exposure    string   `json:"exposure"`
-	Criticality float64  `json:"criticality"`
-	OwnerTeam   string   `json:"owner_team"`
-	Tags        []string `json:"tags"`
+	AssetType               string     `json:"asset_type"`
+	AssetName               string     `json:"asset_name"`
+	Environment             string     `json:"environment"`
+	Exposure                string     `json:"exposure"`
+	Criticality             float64    `json:"criticality"`
+	OwnerTeam               string     `json:"owner_team"`
+	OwnerHierarchy          []string   `json:"owner_hierarchy"`
+	ServiceName             string     `json:"service_name"`
+	ServiceTier             string     `json:"service_tier"`
+	ServiceCriticalityClass string     `json:"service_criticality_class"`
+	ExternalSource          string     `json:"external_source"`
+	ExternalReference       string     `json:"external_reference"`
+	LastSyncedAt            *time.Time `json:"last_synced_at"`
+	Tags                    []string   `json:"tags"`
+}
+
+type SyncAssetProfile struct {
+	AssetID                 string     `json:"asset_id"`
+	AssetType               string     `json:"asset_type"`
+	AssetName               string     `json:"asset_name"`
+	Environment             string     `json:"environment"`
+	Exposure                string     `json:"exposure"`
+	Criticality             float64    `json:"criticality"`
+	OwnerTeam               string     `json:"owner_team"`
+	OwnerHierarchy          []string   `json:"owner_hierarchy"`
+	ServiceName             string     `json:"service_name"`
+	ServiceTier             string     `json:"service_tier"`
+	ServiceCriticalityClass string     `json:"service_criticality_class"`
+	ExternalSource          string     `json:"external_source"`
+	ExternalReference       string     `json:"external_reference"`
+	LastSyncedAt            *time.Time `json:"last_synced_at"`
+	Tags                    []string   `json:"tags"`
+}
+
+type SyncAssetProfilesRequest struct {
+	Source string             `json:"source"`
+	Assets []SyncAssetProfile `json:"assets"`
+}
+
+type SyncAssetProfilesResult struct {
+	ImportedCount int            `json:"imported_count"`
+	Items         []AssetProfile `json:"items"`
 }
 
 type CompensatingControl struct {
@@ -66,6 +114,40 @@ type CreateCompensatingControlRequest struct {
 	Effectiveness float64 `json:"effectiveness"`
 	Enabled       bool    `json:"enabled"`
 	Notes         string  `json:"notes"`
+}
+
+type FindingWaiver struct {
+	ID               string     `json:"id"`
+	TenantID         string     `json:"tenant_id,omitempty"`
+	FindingID        string     `json:"finding_id"`
+	RemediationID    string     `json:"remediation_id,omitempty"`
+	PolicyApprovalID string     `json:"policy_approval_id,omitempty"`
+	Reason           string     `json:"reason"`
+	Reduction        float64    `json:"reduction"`
+	Status           string     `json:"status"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type CreateFindingWaiverRequest struct {
+	RemediationID    string     `json:"remediation_id"`
+	PolicyApprovalID string     `json:"policy_approval_id"`
+	Reason           string     `json:"reason"`
+	Reduction        float64    `json:"reduction"`
+	ExpiresAt        *time.Time `json:"expires_at"`
+}
+
+type RiskSummary struct {
+	GeneratedAt      time.Time        `json:"generated_at"`
+	TotalFindings    int64            `json:"total_findings"`
+	OverdueFindings  int64            `json:"overdue_findings"`
+	ReopenedFindings int64            `json:"reopened_findings"`
+	NewFindings7d    int64            `json:"new_findings_7d"`
+	Observations7d   int64            `json:"observations_7d"`
+	AverageAgeDays   float64          `json:"average_age_days"`
+	PriorityCounts   map[string]int64 `json:"priority_counts"`
+	AgingBuckets     map[string]int64 `json:"aging_buckets"`
 }
 
 type Policy struct {

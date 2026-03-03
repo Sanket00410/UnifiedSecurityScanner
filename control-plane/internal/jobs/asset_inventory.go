@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -15,7 +16,9 @@ import (
 
 func (s *Store) GetAssetProfileForTenant(ctx context.Context, organizationID string, assetID string) (models.AssetProfile, bool, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team, tags_json, created_at, updated_at
+		SELECT tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team,
+		       owner_hierarchy_json, service_name, service_tier, service_criticality_class,
+		       external_source, external_reference, last_synced_at, tags_json, created_at, updated_at
 		FROM asset_profiles
 		WHERE tenant_id = $1
 		  AND asset_id = $2
@@ -34,59 +37,75 @@ func (s *Store) GetAssetProfileForTenant(ctx context.Context, organizationID str
 
 func (s *Store) UpsertAssetProfileForTenant(ctx context.Context, organizationID string, assetID string, request models.UpsertAssetProfileRequest) (models.AssetProfile, error) {
 	now := time.Now().UTC()
-	profile := models.AssetProfile{
-		TenantID:    strings.TrimSpace(organizationID),
-		AssetID:     strings.TrimSpace(assetID),
-		AssetType:   strings.TrimSpace(request.AssetType),
-		AssetName:   strings.TrimSpace(request.AssetName),
-		Environment: strings.ToLower(strings.TrimSpace(request.Environment)),
-		Exposure:    strings.ToLower(strings.TrimSpace(request.Exposure)),
-		Criticality: clampAssetScore(request.Criticality, 5),
-		OwnerTeam:   strings.TrimSpace(request.OwnerTeam),
-		Tags:        sanitizeStringSlice(request.Tags),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
+	profile := buildAssetProfile(strings.TrimSpace(organizationID), strings.TrimSpace(assetID), models.SyncAssetProfile{
+		AssetID:                 strings.TrimSpace(assetID),
+		AssetType:               request.AssetType,
+		AssetName:               request.AssetName,
+		Environment:             request.Environment,
+		Exposure:                request.Exposure,
+		Criticality:             request.Criticality,
+		OwnerTeam:               request.OwnerTeam,
+		OwnerHierarchy:          request.OwnerHierarchy,
+		ServiceName:             request.ServiceName,
+		ServiceTier:             request.ServiceTier,
+		ServiceCriticalityClass: request.ServiceCriticalityClass,
+		ExternalSource:          request.ExternalSource,
+		ExternalReference:       request.ExternalReference,
+		LastSyncedAt:            request.LastSyncedAt,
+		Tags:                    request.Tags,
+	}, now)
 
-	if profile.AssetType == "" {
-		profile.AssetType = "unknown"
-	}
-	if profile.AssetName == "" {
-		profile.AssetName = profile.AssetID
-	}
-	if profile.Environment == "" {
-		profile.Environment = "production"
-	}
-	if profile.Exposure == "" {
-		profile.Exposure = "internal"
-	}
-
-	tagsJSON, err := json.Marshal(profile.Tags)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return models.AssetProfile{}, fmt.Errorf("marshal asset profile tags: %w", err)
+		return models.AssetProfile{}, fmt.Errorf("begin asset profile tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := upsertAssetProfileTx(ctx, tx, profile); err != nil {
+		return models.AssetProfile{}, err
 	}
 
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO asset_profiles (
-			tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team, tags_json, created_at, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10
-		)
-		ON CONFLICT (tenant_id, asset_id) DO UPDATE SET
-			asset_type = EXCLUDED.asset_type,
-			asset_name = EXCLUDED.asset_name,
-			environment = EXCLUDED.environment,
-			exposure = EXCLUDED.exposure,
-			criticality = EXCLUDED.criticality,
-			owner_team = EXCLUDED.owner_team,
-			tags_json = EXCLUDED.tags_json,
-			updated_at = EXCLUDED.updated_at
-	`, profile.TenantID, profile.AssetID, profile.AssetType, profile.AssetName, profile.Environment, profile.Exposure, profile.Criticality, profile.OwnerTeam, tagsJSON, now)
-	if err != nil {
-		return models.AssetProfile{}, fmt.Errorf("upsert asset profile: %w", err)
+	if err := tx.Commit(ctx); err != nil {
+		return models.AssetProfile{}, fmt.Errorf("commit asset profile tx: %w", err)
 	}
 
 	return profile, nil
+}
+
+func (s *Store) SyncAssetProfilesForTenant(ctx context.Context, organizationID string, request models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error) {
+	now := time.Now().UTC()
+	result := models.SyncAssetProfilesResult{
+		Items: make([]models.AssetProfile, 0, len(request.Assets)),
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return result, fmt.Errorf("begin asset sync tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, item := range request.Assets {
+		assetID := strings.TrimSpace(item.AssetID)
+		if assetID == "" {
+			continue
+		}
+		if strings.TrimSpace(item.ExternalSource) == "" {
+			item.ExternalSource = strings.TrimSpace(request.Source)
+		}
+
+		profile := buildAssetProfile(strings.TrimSpace(organizationID), assetID, item, now)
+		if err := upsertAssetProfileTx(ctx, tx, profile); err != nil {
+			return result, err
+		}
+		result.Items = append(result.Items, profile)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return result, fmt.Errorf("commit asset sync tx: %w", err)
+	}
+
+	result.ImportedCount = len(result.Items)
+	return result, nil
 }
 
 func (s *Store) ListCompensatingControlsForTenant(ctx context.Context, organizationID string, assetID string, limit int) ([]models.CompensatingControl, error) {
@@ -175,7 +194,9 @@ func loadAssetRiskEnvelopeTx(ctx context.Context, tx pgx.Tx, tenantID string, as
 	}
 
 	row := tx.QueryRow(ctx, `
-		SELECT tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team, tags_json, created_at, updated_at
+		SELECT tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team,
+		       owner_hierarchy_json, service_name, service_tier, service_criticality_class,
+		       external_source, external_reference, last_synced_at, tags_json, created_at, updated_at
 		FROM asset_profiles
 		WHERE tenant_id = $1
 		  AND asset_id = $2
@@ -223,6 +244,13 @@ func riskInputsForFinding(finding models.CanonicalFinding, envelope assetRiskEnv
 		inputs.ExposureOverride = envelope.profile.Exposure
 		inputs.AssetCriticalityOverride = envelope.profile.Criticality
 		inputs.OwnerTeam = envelope.profile.OwnerTeam
+		inputs.OwnerHierarchy = append([]string(nil), envelope.profile.OwnerHierarchy...)
+		inputs.ServiceName = envelope.profile.ServiceName
+		inputs.ServiceTier = envelope.profile.ServiceTier
+		inputs.ServiceCriticalityClass = envelope.profile.ServiceCriticalityClass
+		inputs.ExternalSource = envelope.profile.ExternalSource
+		inputs.ExternalReference = envelope.profile.ExternalReference
+		inputs.LastSyncedAt = envelope.profile.LastSyncedAt
 	}
 
 	reduction := 0.0
@@ -269,6 +297,94 @@ func clampAssetScore(value float64, fallback float64) float64 {
 	}
 }
 
+func buildAssetProfile(tenantID string, assetID string, request models.SyncAssetProfile, reference time.Time) models.AssetProfile {
+	profile := models.AssetProfile{
+		TenantID:                strings.TrimSpace(tenantID),
+		AssetID:                 strings.TrimSpace(assetID),
+		AssetType:               strings.TrimSpace(request.AssetType),
+		AssetName:               strings.TrimSpace(request.AssetName),
+		Environment:             strings.ToLower(strings.TrimSpace(request.Environment)),
+		Exposure:                strings.ToLower(strings.TrimSpace(request.Exposure)),
+		Criticality:             clampAssetScore(request.Criticality, 5),
+		OwnerTeam:               strings.TrimSpace(request.OwnerTeam),
+		OwnerHierarchy:          sanitizeStringSlice(request.OwnerHierarchy),
+		ServiceName:             strings.TrimSpace(request.ServiceName),
+		ServiceTier:             strings.TrimSpace(request.ServiceTier),
+		ServiceCriticalityClass: strings.ToLower(strings.TrimSpace(request.ServiceCriticalityClass)),
+		ExternalSource:          strings.TrimSpace(request.ExternalSource),
+		ExternalReference:       strings.TrimSpace(request.ExternalReference),
+		LastSyncedAt:            request.LastSyncedAt,
+		Tags:                    sanitizeStringSlice(request.Tags),
+		CreatedAt:               reference,
+		UpdatedAt:               reference,
+	}
+
+	if profile.AssetType == "" {
+		profile.AssetType = "unknown"
+	}
+	if profile.AssetName == "" {
+		profile.AssetName = profile.AssetID
+	}
+	if profile.Environment == "" {
+		profile.Environment = "production"
+	}
+	if profile.Exposure == "" {
+		profile.Exposure = "internal"
+	}
+	if profile.LastSyncedAt == nil && profile.ExternalSource != "" {
+		lastSyncedAt := reference
+		profile.LastSyncedAt = &lastSyncedAt
+	}
+
+	return profile
+}
+
+func upsertAssetProfileTx(ctx context.Context, tx pgx.Tx, profile models.AssetProfile) error {
+	ownerHierarchyJSON, err := json.Marshal(profile.OwnerHierarchy)
+	if err != nil {
+		return fmt.Errorf("marshal asset owner hierarchy: %w", err)
+	}
+	tagsJSON, err := json.Marshal(profile.Tags)
+	if err != nil {
+		return fmt.Errorf("marshal asset profile tags: %w", err)
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO asset_profiles (
+			tenant_id, asset_id, asset_type, asset_name, environment, exposure, criticality, owner_team,
+			owner_hierarchy_json, service_name, service_tier, service_criticality_class,
+			external_source, external_reference, last_synced_at, tags_json, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10, $11, $12,
+			$13, $14, $15, $16, $17, $17
+		)
+		ON CONFLICT (tenant_id, asset_id) DO UPDATE SET
+			asset_type = EXCLUDED.asset_type,
+			asset_name = EXCLUDED.asset_name,
+			environment = EXCLUDED.environment,
+			exposure = EXCLUDED.exposure,
+			criticality = EXCLUDED.criticality,
+			owner_team = EXCLUDED.owner_team,
+			owner_hierarchy_json = EXCLUDED.owner_hierarchy_json,
+			service_name = EXCLUDED.service_name,
+			service_tier = EXCLUDED.service_tier,
+			service_criticality_class = EXCLUDED.service_criticality_class,
+			external_source = EXCLUDED.external_source,
+			external_reference = EXCLUDED.external_reference,
+			last_synced_at = EXCLUDED.last_synced_at,
+			tags_json = EXCLUDED.tags_json,
+			updated_at = EXCLUDED.updated_at
+	`, profile.TenantID, profile.AssetID, profile.AssetType, profile.AssetName, profile.Environment, profile.Exposure, profile.Criticality, profile.OwnerTeam,
+		ownerHierarchyJSON, profile.ServiceName, profile.ServiceTier, profile.ServiceCriticalityClass,
+		profile.ExternalSource, profile.ExternalReference, profile.LastSyncedAt, tagsJSON, profile.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert asset profile: %w", err)
+	}
+
+	return nil
+}
+
 func sanitizeStringSlice(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
@@ -292,6 +408,8 @@ type assetProfileScanner interface {
 
 func scanAssetProfile(scanner assetProfileScanner) (models.AssetProfile, error) {
 	var profile models.AssetProfile
+	var ownerHierarchyJSON []byte
+	var lastSyncedAt sql.NullTime
 	var tagsJSON []byte
 
 	err := scanner.Scan(
@@ -303,6 +421,13 @@ func scanAssetProfile(scanner assetProfileScanner) (models.AssetProfile, error) 
 		&profile.Exposure,
 		&profile.Criticality,
 		&profile.OwnerTeam,
+		&ownerHierarchyJSON,
+		&profile.ServiceName,
+		&profile.ServiceTier,
+		&profile.ServiceCriticalityClass,
+		&profile.ExternalSource,
+		&profile.ExternalReference,
+		&lastSyncedAt,
 		&tagsJSON,
 		&profile.CreatedAt,
 		&profile.UpdatedAt,
@@ -314,6 +439,15 @@ func scanAssetProfile(scanner assetProfileScanner) (models.AssetProfile, error) 
 		return models.AssetProfile{}, fmt.Errorf("scan asset profile: %w", err)
 	}
 
+	if len(ownerHierarchyJSON) > 0 {
+		if err := json.Unmarshal(ownerHierarchyJSON, &profile.OwnerHierarchy); err != nil {
+			return models.AssetProfile{}, fmt.Errorf("decode asset owner hierarchy: %w", err)
+		}
+	}
+	if lastSyncedAt.Valid {
+		value := lastSyncedAt.Time.UTC()
+		profile.LastSyncedAt = &value
+	}
 	if len(tagsJSON) > 0 {
 		if err := json.Unmarshal(tagsJSON, &profile.Tags); err != nil {
 			return models.AssetProfile{}, fmt.Errorf("decode asset profile tags: %w", err)

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -107,6 +108,11 @@ func (s *Store) ListFindingsForTenant(ctx context.Context, organizationID string
 		return nil, fmt.Errorf("iterate tenant findings: %w", err)
 	}
 
+	out, err = s.applyEffectiveRiskAdjustments(ctx, strings.TrimSpace(organizationID), out)
+	if err != nil {
+		return nil, err
+	}
+
 	return out, nil
 }
 
@@ -116,24 +122,41 @@ func (s *Store) ListAssetsForTenant(ctx context.Context, organizationID string, 
 	}
 
 	rows, err := s.pool.Query(ctx, `
+		WITH tenant_assets AS (
+			SELECT target AS asset_id, target_kind AS asset_type
+			FROM scan_jobs
+			WHERE tenant_id = $1
+			UNION
+			SELECT asset_id, asset_type
+			FROM asset_profiles
+			WHERE tenant_id = $1
+		)
 		SELECT
-			sj.target,
-			sj.target_kind,
+			ta.asset_id,
+			COALESCE(NULLIF(ap.asset_type, ''), ta.asset_type),
 			COALESCE(ap.environment, ''),
 			COALESCE(ap.exposure, ''),
 			COALESCE(ap.criticality, 0),
 			COALESCE(ap.owner_team, ''),
+			COALESCE(ap.owner_hierarchy_json, '[]'::jsonb),
+			COALESCE(ap.service_name, ''),
+			COALESCE(ap.service_tier, ''),
+			COALESCE(ap.service_criticality_class, ''),
+			COALESCE(ap.external_source, ''),
+			ap.last_synced_at,
 			COALESCE(COUNT(DISTINCT cc.id), 0) AS compensating_control_count,
-			MAX(sj.updated_at) AS last_scanned_at,
+			COALESCE(MAX(sj.updated_at), ap.updated_at, ap.created_at) AS last_scanned_at,
 			COUNT(DISTINCT sj.id) AS scan_count,
 			COUNT(DISTINCT nf.finding_id) AS finding_count
-		FROM scan_jobs sj
-		LEFT JOIN normalized_findings nf ON nf.scan_job_id = sj.id
-		LEFT JOIN asset_profiles ap ON ap.tenant_id = sj.tenant_id AND ap.asset_id = sj.target
-		LEFT JOIN compensating_controls cc ON cc.tenant_id = sj.tenant_id AND cc.asset_id = sj.target AND cc.enabled = TRUE
-		WHERE sj.tenant_id = $1
-		GROUP BY sj.target, sj.target_kind, ap.environment, ap.exposure, ap.criticality, ap.owner_team
-		ORDER BY MAX(sj.updated_at) DESC
+		FROM tenant_assets ta
+		LEFT JOIN scan_jobs sj ON sj.tenant_id = $1 AND sj.target = ta.asset_id
+		LEFT JOIN normalized_findings nf ON nf.tenant_id = $1 AND nf.scan_job_id = sj.id
+		LEFT JOIN asset_profiles ap ON ap.tenant_id = $1 AND ap.asset_id = ta.asset_id
+		LEFT JOIN compensating_controls cc ON cc.tenant_id = $1 AND cc.asset_id = ta.asset_id AND cc.enabled = TRUE
+		GROUP BY ta.asset_id, COALESCE(NULLIF(ap.asset_type, ''), ta.asset_type), ap.environment, ap.exposure, ap.criticality,
+		         ap.owner_team, ap.owner_hierarchy_json, ap.service_name, ap.service_tier, ap.service_criticality_class,
+		         ap.external_source, ap.last_synced_at, ap.updated_at, ap.created_at
+		ORDER BY COALESCE(MAX(sj.updated_at), ap.updated_at, ap.created_at) DESC
 		LIMIT $2
 	`, strings.TrimSpace(organizationID), limit)
 	if err != nil {
@@ -144,6 +167,8 @@ func (s *Store) ListAssetsForTenant(ctx context.Context, organizationID string, 
 	out := make([]models.AssetSummary, 0, limit)
 	for rows.Next() {
 		var asset models.AssetSummary
+		var ownerHierarchyJSON []byte
+		var lastSyncedAt sql.NullTime
 		if err := rows.Scan(
 			&asset.AssetID,
 			&asset.AssetType,
@@ -151,12 +176,27 @@ func (s *Store) ListAssetsForTenant(ctx context.Context, organizationID string, 
 			&asset.Exposure,
 			&asset.Criticality,
 			&asset.OwnerTeam,
+			&ownerHierarchyJSON,
+			&asset.ServiceName,
+			&asset.ServiceTier,
+			&asset.ServiceCriticalityClass,
+			&asset.ExternalSource,
+			&lastSyncedAt,
 			&asset.CompensatingControlCount,
 			&asset.LastScannedAt,
 			&asset.ScanCount,
 			&asset.FindingCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan tenant asset: %w", err)
+		}
+		if len(ownerHierarchyJSON) > 0 {
+			if err := json.Unmarshal(ownerHierarchyJSON, &asset.OwnerHierarchy); err != nil {
+				return nil, fmt.Errorf("decode tenant asset owner hierarchy: %w", err)
+			}
+		}
+		if lastSyncedAt.Valid {
+			value := lastSyncedAt.Time.UTC()
+			asset.LastSyncedAt = &value
 		}
 		out = append(out, asset)
 	}

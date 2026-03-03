@@ -42,9 +42,13 @@ type apiStore interface {
 	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
 	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
+	ListFindingWaiversForTenant(ctx context.Context, tenantID string, findingID string, limit int) ([]models.FindingWaiver, error)
+	CreateFindingWaiverForTenant(ctx context.Context, tenantID string, findingID string, request models.CreateFindingWaiverRequest) (models.FindingWaiver, error)
+	ListRiskSummaryForTenant(ctx context.Context, tenantID string) (models.RiskSummary, error)
 	ListAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.AssetSummary, error)
 	GetAssetProfileForTenant(ctx context.Context, tenantID string, assetID string) (models.AssetProfile, bool, error)
 	UpsertAssetProfileForTenant(ctx context.Context, tenantID string, assetID string, request models.UpsertAssetProfileRequest) (models.AssetProfile, error)
+	SyncAssetProfilesForTenant(ctx context.Context, tenantID string, request models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error)
 	ListCompensatingControlsForTenant(ctx context.Context, tenantID string, assetID string, limit int) ([]models.CompensatingControl, error)
 	CreateCompensatingControlForTenant(ctx context.Context, tenantID string, assetID string, request models.CreateCompensatingControlRequest) (models.CompensatingControl, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
@@ -90,7 +94,13 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "scan_jobs", "scan_job", server.handleScanJobs))
 	mux.HandleFunc("/v1/scan-jobs/", server.withUserAuth(auth.PermissionScanJobsRead, "scan_job.read", "scan_job", server.handleScanJobByID))
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
+	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionFindingsRead,
+		http.MethodPost: auth.PermissionRemediationsWrite,
+	}, "finding", "finding", server.handleFindingRoute))
+	mux.HandleFunc("/v1/risk/summary", server.withUserAuth(auth.PermissionFindingsRead, "risk.summary", "risk_summary", server.handleRiskSummary))
 	mux.HandleFunc("/v1/assets", server.withUserAuth(auth.PermissionAssetsRead, "assets.list", "asset", server.handleAssets))
+	mux.HandleFunc("/v1/assets/sync", server.withUserAuth(auth.PermissionAssetsWrite, "assets.sync", "asset", server.handleAssetSync))
 	mux.HandleFunc("/v1/assets/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionAssetsRead,
 		http.MethodPut:  auth.PermissionAssetsWrite,
@@ -454,6 +464,85 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleFindingRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/findings/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "waivers" {
+		s.writeError(w, http.StatusNotFound, "finding_route_not_found", "the requested finding route was not found")
+		return
+	}
+
+	findingID := strings.TrimSpace(parts[0])
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.ListFindingWaiversForTenant(r.Context(), principal.OrganizationID, findingID, 200)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_finding_waivers_failed", "finding waivers could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateFindingWaiverRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.RemediationID) == "" || strings.TrimSpace(request.Reason) == "" || request.Reduction <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "remediation_id, reason, and a positive reduction are required")
+			return
+		}
+		if request.ExpiresAt != nil && !request.ExpiresAt.After(time.Now().UTC()) {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "expires_at must be in the future")
+			return
+		}
+
+		waiver, err := s.store.CreateFindingWaiverForTenant(r.Context(), principal.OrganizationID, findingID, request)
+		if err != nil {
+			if errors.Is(err, jobs.ErrInvalidWaiver) {
+				s.writeError(w, http.StatusConflict, "invalid_finding_waiver", "the waiver dependencies are not valid for this finding")
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_finding_waiver_failed", "finding waiver could not be created")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, waiver)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleRiskSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	summary, err := s.store.ListRiskSummaryForTenant(r.Context(), principal.OrganizationID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "risk_summary_failed", "risk summary could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, summary)
+}
+
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeMethodNotAllowed(w)
@@ -475,6 +564,39 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items": assets,
 	})
+}
+
+func (s *Server) handleAssetSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.SyncAssetProfilesRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	if len(request.Assets) == 0 {
+		s.writeError(w, http.StatusBadRequest, "validation_error", "assets must contain at least one item")
+		return
+	}
+
+	result, err := s.store.SyncAssetProfilesForTenant(r.Context(), principal.OrganizationID, request)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "asset_sync_failed", "asset profiles could not be synchronized")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleAssetRoute(w http.ResponseWriter, r *http.Request) {
@@ -1064,6 +1186,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policy-approvals/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/findings/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/findings/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			path = strings.TrimSpace(path[:idx])
 		}
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/assets/"):

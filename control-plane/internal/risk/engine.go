@@ -18,6 +18,13 @@ type Inputs struct {
 	ExposureOverride             string
 	AssetCriticalityOverride     float64
 	OwnerTeam                    string
+	OwnerHierarchy               []string
+	ServiceName                  string
+	ServiceTier                  string
+	ServiceCriticalityClass      string
+	ExternalSource               string
+	ExternalReference            string
+	LastSyncedAt                 *time.Time
 	CompensatingControlReduction float64
 }
 
@@ -29,6 +36,28 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 	finding.Source.Layer = normalizeLayer(finding.Source.Layer, finding.Scanner.AdapterID)
 	if strings.TrimSpace(inputs.OwnerTeam) != "" {
 		finding.Asset.OwnerTeam = strings.TrimSpace(inputs.OwnerTeam)
+	}
+	if len(inputs.OwnerHierarchy) > 0 {
+		finding.Asset.OwnerHierarchy = append([]string(nil), inputs.OwnerHierarchy...)
+	}
+	if strings.TrimSpace(inputs.ServiceName) != "" {
+		finding.Asset.ServiceName = strings.TrimSpace(inputs.ServiceName)
+	}
+	if strings.TrimSpace(inputs.ServiceTier) != "" {
+		finding.Asset.ServiceTier = strings.TrimSpace(inputs.ServiceTier)
+	}
+	if strings.TrimSpace(inputs.ServiceCriticalityClass) != "" {
+		finding.Asset.ServiceCriticalityClass = strings.TrimSpace(inputs.ServiceCriticalityClass)
+	}
+	if strings.TrimSpace(inputs.ExternalSource) != "" {
+		finding.Asset.ExternalSource = strings.TrimSpace(inputs.ExternalSource)
+	}
+	if strings.TrimSpace(inputs.ExternalReference) != "" {
+		finding.Asset.ExternalReference = strings.TrimSpace(inputs.ExternalReference)
+	}
+	if inputs.LastSyncedAt != nil {
+		syncedAt := inputs.LastSyncedAt.UTC()
+		finding.Asset.LastSyncedAt = &syncedAt
 	}
 	if strings.TrimSpace(inputs.EnvironmentOverride) != "" {
 		finding.Asset.Environment = strings.TrimSpace(inputs.EnvironmentOverride)
@@ -43,6 +72,7 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 	if inputs.AssetCriticalityOverride > 0 {
 		assetCriticality = clamp10(inputs.AssetCriticalityOverride)
 	}
+	assetCriticality = clamp10(assetCriticality + serviceCriticalityBoost(inputs.ServiceCriticalityClass))
 	businessImpact := clamp10(calculateBusinessImpact(finding, assetCriticality))
 	exploitability := clamp10(calculateExploitability(finding))
 	reachability := clamp10(calculateReachability(finding))
@@ -77,6 +107,53 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 
 	if strings.TrimSpace(finding.Fingerprint) == "" {
 		finding.Fingerprint = Fingerprint(finding)
+	}
+
+	return finding
+}
+
+func ApplyWaiverReduction(finding models.CanonicalFinding, reduction float64) models.CanonicalFinding {
+	reduction = clamp100(reduction)
+	finding.Risk.WaiverReduction = reduction
+	if reduction <= 0 {
+		return finding
+	}
+
+	adjustedScore := clamp100(finding.Risk.OverallScore - reduction)
+	priority := priorityForScore(adjustedScore)
+	slaClass, slaDuration := slaForPriority(priority)
+	finding.Risk.OverallScore = adjustedScore
+	finding.Risk.Priority = priority
+	finding.Risk.SLAClass = slaClass
+
+	referenceTime := finding.FirstSeenAt
+	if referenceTime.IsZero() {
+		referenceTime = time.Now().UTC()
+	}
+	slaDueAt := referenceTime.Add(slaDuration)
+	finding.Risk.SLADueAt = &slaDueAt
+
+	return finding
+}
+
+func ApplyTemporalSignals(finding models.CanonicalFinding, reference time.Time) models.CanonicalFinding {
+	if reference.IsZero() {
+		reference = time.Now().UTC()
+	}
+	reference = reference.UTC()
+
+	if !finding.FirstSeenAt.IsZero() {
+		age := reference.Sub(finding.FirstSeenAt)
+		if age < 0 {
+			age = 0
+		}
+		ageDays := int64(age / (24 * time.Hour))
+		finding.Risk.AgeDays = ageDays
+		finding.Risk.AgingBucket = agingBucketForDays(ageDays)
+	}
+
+	if finding.Risk.SLADueAt != nil && !resolvedLikeStatus(finding.Status) {
+		finding.Risk.Overdue = reference.After(finding.Risk.SLADueAt.UTC())
 	}
 
 	return finding
@@ -398,6 +475,21 @@ func calculatePolicyImpact(finding models.CanonicalFinding) float64 {
 	return score
 }
 
+func serviceCriticalityBoost(value string) float64 {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "tier0", "mission_critical", "platinum":
+		return 1.5
+	case "tier1", "business_critical", "gold":
+		return 1.0
+	case "tier2", "standard", "silver":
+		return 0.5
+	case "tier3", "low", "bronze":
+		return -0.5
+	default:
+		return 0
+	}
+}
+
 func severityBand(severity string) float64 {
 	switch strings.ToLower(strings.TrimSpace(severity)) {
 	case "critical":
@@ -432,6 +524,28 @@ func confidenceMultiplier(confidence string) float64 {
 		return 0.85
 	default:
 		return 1.00
+	}
+}
+
+func agingBucketForDays(ageDays int64) string {
+	switch {
+	case ageDays >= 90:
+		return "90d+"
+	case ageDays >= 31:
+		return "31-89d"
+	case ageDays >= 7:
+		return "7-30d"
+	default:
+		return "0-6d"
+	}
+}
+
+func resolvedLikeStatus(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "resolved", "closed", "accepted", "suppressed":
+		return true
+	default:
+		return false
 	}
 }
 

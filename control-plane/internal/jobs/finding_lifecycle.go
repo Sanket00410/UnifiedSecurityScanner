@@ -125,7 +125,7 @@ func persistFindingTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, f
 			return fmt.Errorf("update normalized finding: %w", err)
 		}
 
-		return nil
+		return recordFindingOccurrenceTx(ctx, tx, task, finding, findingKey, now)
 	}
 
 	finding.OccurrenceCount = 1
@@ -150,7 +150,7 @@ func persistFindingTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, f
 		return fmt.Errorf("insert normalized finding: %w", err)
 	}
 
-	return nil
+	return recordFindingOccurrenceTx(ctx, tx, task, finding, findingKey, now)
 }
 
 func shouldReopenFinding(currentStatus string, nextStatus string) bool {
@@ -183,4 +183,19 @@ func normalizeStoredFindingStatus(value string) string {
 	default:
 		return "open"
 	}
+}
+
+func recordFindingOccurrenceTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, finding models.CanonicalFinding, findingKey string, observedAt time.Time) error {
+	_, err := tx.Exec(ctx, `
+		INSERT INTO finding_occurrences (
+			id, tenant_id, finding_id, finding_key, scan_job_id, task_id, observed_status, observed_at, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $8
+		)
+	`, nextOccurrenceID(), task.TenantID, finding.FindingID, findingKey, task.ScanJobID, task.TaskID, normalizeStoredFindingStatus(finding.Status), observedAt)
+	if err != nil {
+		return fmt.Errorf("insert finding occurrence: %w", err)
+	}
+
+	return nil
 }

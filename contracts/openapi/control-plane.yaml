@@ -361,6 +361,75 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CanonicalFinding"
+  /v1/findings/{findingId}/waivers:
+    get:
+      operationId: listFindingWaivers
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: findingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Finding waivers
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FindingWaiver"
+    post:
+      operationId: createFindingWaiver
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: findingId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFindingWaiverRequest"
+      responses:
+        "201":
+          description: Finding waiver created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindingWaiver"
+        "409":
+          description: Invalid waiver dependency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/risk/summary:
+    get:
+      operationId: getRiskSummary
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant risk summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RiskSummary"
   /v1/assets:
     get:
       operationId: listAssets
@@ -381,6 +450,25 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AssetSummary"
+  /v1/assets/sync:
+    post:
+      operationId: syncAssets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncAssetProfilesRequest"
+      responses:
+        "200":
+          description: Asset profiles synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncAssetProfilesResult"
   /v1/assets/{assetId}:
     get:
       operationId: getAssetProfile
@@ -1044,6 +1132,21 @@ components:
           type: number
         owner_team:
           type: string
+        owner_hierarchy:
+          type: array
+          items:
+            type: string
+        service_name:
+          type: string
+        service_tier:
+          type: string
+        service_criticality_class:
+          type: string
+        external_source:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
         compensating_control_count:
           type: integer
         last_scanned_at:
@@ -1082,6 +1185,23 @@ components:
           type: number
         owner_team:
           type: string
+        owner_hierarchy:
+          type: array
+          items:
+            type: string
+        service_name:
+          type: string
+        service_tier:
+          type: string
+        service_criticality_class:
+          type: string
+        external_source:
+          type: string
+        external_reference:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
         tags:
           type: array
           items:
@@ -1110,10 +1230,94 @@ components:
           type: number
         owner_team:
           type: string
+        owner_hierarchy:
+          type: array
+          items:
+            type: string
+        service_name:
+          type: string
+        service_tier:
+          type: string
+        service_criticality_class:
+          type: string
+        external_source:
+          type: string
+        external_reference:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
         tags:
           type: array
           items:
             type: string
+    SyncAssetProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_id
+        - asset_type
+      properties:
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        asset_name:
+          type: string
+        environment:
+          type: string
+        exposure:
+          type: string
+        criticality:
+          type: number
+        owner_team:
+          type: string
+        owner_hierarchy:
+          type: array
+          items:
+            type: string
+        service_name:
+          type: string
+        service_tier:
+          type: string
+        service_criticality_class:
+          type: string
+        external_source:
+          type: string
+        external_reference:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+    SyncAssetProfilesRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - assets
+      properties:
+        source:
+          type: string
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/SyncAssetProfile"
+    SyncAssetProfilesResult:
+      type: object
+      additionalProperties: false
+      required:
+        - imported_count
+        - items
+      properties:
+        imported_count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AssetProfile"
     CompensatingControl:
       type: object
       additionalProperties: false
@@ -1170,6 +1374,99 @@ components:
           type: boolean
         notes:
           type: string
+    FindingWaiver:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - finding_id
+        - reason
+        - reduction
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        finding_id:
+          type: string
+        remediation_id:
+          type: string
+        policy_approval_id:
+          type: string
+        reason:
+          type: string
+        reduction:
+          type: number
+        status:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateFindingWaiverRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - remediation_id
+        - reason
+        - reduction
+      properties:
+        remediation_id:
+          type: string
+        policy_approval_id:
+          type: string
+        reason:
+          type: string
+        reduction:
+          type: number
+        expires_at:
+          type: string
+          format: date-time
+    RiskSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - generated_at
+        - total_findings
+        - overdue_findings
+        - reopened_findings
+        - new_findings_7d
+        - observations_7d
+        - average_age_days
+        - priority_counts
+        - aging_buckets
+      properties:
+        generated_at:
+          type: string
+          format: date-time
+        total_findings:
+          type: integer
+        overdue_findings:
+          type: integer
+        reopened_findings:
+          type: integer
+        new_findings_7d:
+          type: integer
+        observations_7d:
+          type: integer
+        average_age_days:
+          type: number
+        priority_counts:
+          type: object
+          additionalProperties:
+            type: integer
+        aging_buckets:
+          type: object
+          additionalProperties:
+            type: integer
     Policy:
       type: object
       additionalProperties: false
@@ -1665,6 +1962,23 @@ components:
               type: string
             owner_team:
               type: string
+            owner_hierarchy:
+              type: array
+              items:
+                type: string
+            service_name:
+              type: string
+            service_tier:
+              type: string
+            service_criticality_class:
+              type: string
+            external_source:
+              type: string
+            external_reference:
+              type: string
+            last_synced_at:
+              type: string
+              format: date-time
         risk:
           type: object
           additionalProperties: false
@@ -1687,11 +2001,19 @@ components:
               type: number
             compensating_control_reduction:
               type: number
+            waiver_reduction:
+              type: number
             sla_class:
               type: string
             sla_due_at:
               type: string
               format: date-time
+            age_days:
+              type: integer
+            aging_bucket:
+              type: string
+            overdue:
+              type: boolean
         occurrence_count:
           type: integer
         reopened_count:

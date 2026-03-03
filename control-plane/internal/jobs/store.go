@@ -27,9 +27,12 @@ var (
 	policyApprovalSequence uint64
 	remediationSequence    uint64
 	controlSequence        uint64
+	waiverSequence         uint64
+	occurrenceSequence     uint64
 	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
 	ErrTaskNotFound        = errors.New("task not found")
 	ErrProtectedToken      = errors.New("protected token")
+	ErrInvalidWaiver       = errors.New("invalid finding waiver")
 )
 
 type PolicyDeniedError struct {
@@ -1003,6 +1006,16 @@ func nextRemediationID() string {
 func nextControlID() string {
 	sequence := atomic.AddUint64(&controlSequence, 1)
 	return fmt.Sprintf("control-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextWaiverID() string {
+	sequence := atomic.AddUint64(&waiverSequence, 1)
+	return fmt.Sprintf("waiver-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextOccurrenceID() string {
+	sequence := atomic.AddUint64(&occurrenceSequence, 1)
+	return fmt.Sprintf("finding-occurrence-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
 func sanitizeTools(tools []string) []string {

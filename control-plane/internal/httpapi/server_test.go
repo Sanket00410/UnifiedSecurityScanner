@@ -25,6 +25,9 @@ type stubAPIStore struct {
 	assetProfile     models.AssetProfile
 	assetSummaries   []models.AssetSummary
 	assetControls    []models.CompensatingControl
+	syncedAssets     models.SyncAssetProfilesResult
+	findingWaivers   []models.FindingWaiver
+	riskSummary      models.RiskSummary
 	policy           models.Policy
 	policies         []models.Policy
 	policyVersions   []models.PolicyVersion
@@ -102,6 +105,21 @@ func (s *stubAPIStore) ListFindingsForTenant(context.Context, string, int) ([]mo
 	return nil, nil
 }
 
+func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
+	return s.findingWaivers, nil
+}
+
+func (s *stubAPIStore) CreateFindingWaiverForTenant(context.Context, string, string, models.CreateFindingWaiverRequest) (models.FindingWaiver, error) {
+	if len(s.findingWaivers) == 0 {
+		return models.FindingWaiver{}, nil
+	}
+	return s.findingWaivers[0], nil
+}
+
+func (s *stubAPIStore) ListRiskSummaryForTenant(context.Context, string) (models.RiskSummary, error) {
+	return s.riskSummary, nil
+}
+
 func (s *stubAPIStore) ListAssetsForTenant(context.Context, string, int) ([]models.AssetSummary, error) {
 	return s.assetSummaries, nil
 }
@@ -115,6 +133,10 @@ func (s *stubAPIStore) GetAssetProfileForTenant(context.Context, string, string)
 
 func (s *stubAPIStore) UpsertAssetProfileForTenant(context.Context, string, string, models.UpsertAssetProfileRequest) (models.AssetProfile, error) {
 	return s.assetProfile, nil
+}
+
+func (s *stubAPIStore) SyncAssetProfilesForTenant(context.Context, string, models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error) {
+	return s.syncedAssets, nil
 }
 
 func (s *stubAPIStore) ListCompensatingControlsForTenant(context.Context, string, string, int) ([]models.CompensatingControl, error) {

@@ -40,12 +40,19 @@ type CanonicalSourceInfo struct {
 }
 
 type CanonicalAssetInfo struct {
-	AssetID     string `json:"asset_id"`
-	AssetType   string `json:"asset_type"`
-	AssetName   string `json:"asset_name"`
-	Environment string `json:"environment"`
-	Exposure    string `json:"exposure"`
-	OwnerTeam   string `json:"owner_team,omitempty"`
+	AssetID                 string     `json:"asset_id"`
+	AssetType               string     `json:"asset_type"`
+	AssetName               string     `json:"asset_name"`
+	Environment             string     `json:"environment"`
+	Exposure                string     `json:"exposure"`
+	OwnerTeam               string     `json:"owner_team,omitempty"`
+	OwnerHierarchy          []string   `json:"owner_hierarchy,omitempty"`
+	ServiceName             string     `json:"service_name,omitempty"`
+	ServiceTier             string     `json:"service_tier,omitempty"`
+	ServiceCriticalityClass string     `json:"service_criticality_class,omitempty"`
+	ExternalSource          string     `json:"external_source,omitempty"`
+	ExternalReference       string     `json:"external_reference,omitempty"`
+	LastSyncedAt            *time.Time `json:"last_synced_at,omitempty"`
 }
 
 type CanonicalLocation struct {
@@ -73,8 +80,12 @@ type CanonicalRisk struct {
 	AssetCriticality             float64    `json:"asset_criticality"`
 	PolicyImpact                 float64    `json:"policy_impact"`
 	CompensatingControlReduction float64    `json:"compensating_control_reduction,omitempty"`
+	WaiverReduction              float64    `json:"waiver_reduction,omitempty"`
 	SLAClass                     string     `json:"sla_class"`
 	SLADueAt                     *time.Time `json:"sla_due_at,omitempty"`
+	AgeDays                      int64      `json:"age_days,omitempty"`
+	AgingBucket                  string     `json:"aging_bucket,omitempty"`
+	Overdue                      bool       `json:"overdue,omitempty"`
 }
 
 type CanonicalRemediation struct {

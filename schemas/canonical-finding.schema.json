@@ -164,6 +164,31 @@
         },
         "owner_team": {
           "type": "string"
+        },
+        "owner_hierarchy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "service_name": {
+          "type": "string"
+        },
+        "service_tier": {
+          "type": "string"
+        },
+        "service_criticality_class": {
+          "type": "string"
+        },
+        "external_source": {
+          "type": "string"
+        },
+        "external_reference": {
+          "type": "string"
+        },
+        "last_synced_at": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },
@@ -298,12 +323,27 @@
           "minimum": 0,
           "maximum": 10
         },
+        "waiver_reduction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 40
+        },
         "sla_class": {
           "type": "string"
         },
         "sla_due_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "age_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aging_bucket": {
+          "type": "string"
+        },
+        "overdue": {
+          "type": "boolean"
         }
       }
     },

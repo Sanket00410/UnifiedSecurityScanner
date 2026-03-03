@@ -205,3 +205,99 @@ func TestFingerprintIsStableForEquivalentFindings(t *testing.T) {
 		t.Fatal("expected stable finding id prefix")
 	}
 }
+
+func TestApplyWaiverReductionRecomputesPriorityAndSLA(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+	finding := Enrich(models.CanonicalFinding{
+		SchemaVersion: "1.0.0",
+		Category:      "exploit_confirmed",
+		Title:         "Confirmed exploitable condition",
+		Severity:      "critical",
+		Confidence:    "high",
+		Status:        "open",
+		FirstSeenAt:   now,
+		LastSeenAt:    now,
+		Asset: models.CanonicalAssetInfo{
+			AssetID:   "prod.example.com",
+			AssetType: "domain",
+			AssetName: "prod.example.com",
+		},
+	})
+
+	adjusted := ApplyWaiverReduction(finding, 22)
+	if adjusted.Risk.WaiverReduction != 22 {
+		t.Fatalf("expected waiver reduction 22, got %.2f", adjusted.Risk.WaiverReduction)
+	}
+	if adjusted.Risk.OverallScore >= finding.Risk.OverallScore {
+		t.Fatalf("expected reduced score below %.2f, got %.2f", finding.Risk.OverallScore, adjusted.Risk.OverallScore)
+	}
+	if adjusted.Risk.Priority == finding.Risk.Priority {
+		t.Fatalf("expected priority change after waiver, still %s", adjusted.Risk.Priority)
+	}
+	if adjusted.Risk.SLADueAt == nil {
+		t.Fatal("expected sla due date after waiver adjustment")
+	}
+}
+
+func TestApplyTemporalSignalsSetsAgeAndOverdue(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-24 * time.Hour)
+	finding := ApplyTemporalSignals(models.CanonicalFinding{
+		Status:      "open",
+		FirstSeenAt: now.Add(-45 * 24 * time.Hour),
+		Risk: models.CanonicalRisk{
+			SLAClass: "24h",
+			SLADueAt: &dueAt,
+		},
+	}, now)
+
+	if finding.Risk.AgeDays != 45 {
+		t.Fatalf("expected age_days 45, got %d", finding.Risk.AgeDays)
+	}
+	if finding.Risk.AgingBucket != "31-89d" {
+		t.Fatalf("expected aging bucket 31-89d, got %s", finding.Risk.AgingBucket)
+	}
+	if !finding.Risk.Overdue {
+		t.Fatal("expected overdue finding")
+	}
+}
+
+func TestEnrichWithInputsUsesServiceCriticalityBoost(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+	base := Enrich(models.CanonicalFinding{
+		SchemaVersion: "1.0.0",
+		Category:      "sast_rule_match",
+		Title:         "Unsafe pattern",
+		Severity:      "medium",
+		Confidence:    "high",
+		Status:        "open",
+		FirstSeenAt:   now,
+		LastSeenAt:    now,
+		Asset: models.CanonicalAssetInfo{
+			AssetID:   "service-a",
+			AssetType: "repository",
+			AssetName: "service-a",
+		},
+	})
+
+	boosted := EnrichWithInputs(base, Inputs{
+		ServiceName:             "payments",
+		ServiceCriticalityClass: "tier0",
+	})
+
+	if boosted.Asset.ServiceName != "payments" {
+		t.Fatalf("expected service name to be carried through, got %s", boosted.Asset.ServiceName)
+	}
+	if boosted.Asset.ServiceCriticalityClass != "tier0" {
+		t.Fatalf("expected service criticality class tier0, got %s", boosted.Asset.ServiceCriticalityClass)
+	}
+	if boosted.Risk.AssetCriticality <= base.Risk.AssetCriticality {
+		t.Fatalf("expected service criticality boost above %.2f, got %.2f", base.Risk.AssetCriticality, boosted.Risk.AssetCriticality)
+	}
+}
