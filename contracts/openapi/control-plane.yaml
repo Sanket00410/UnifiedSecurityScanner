@@ -1353,6 +1353,8 @@ components:
         - schema_version
         - finding_id
         - tenant_id
+        - scanner
+        - source
         - category
         - title
         - severity
@@ -1360,6 +1362,8 @@ components:
         - status
         - first_seen_at
         - last_seen_at
+        - asset
+        - risk
       properties:
         schema_version:
           type: string
@@ -1367,9 +1371,31 @@ components:
           type: string
         tenant_id:
           type: string
+        scanner:
+          type: object
+          additionalProperties: false
+          properties:
+            engine:
+              type: string
+            adapter_id:
+              type: string
+            engine_version:
+              type: string
+            scan_job_id:
+              type: string
+        source:
+          type: object
+          additionalProperties: false
+          properties:
+            layer:
+              type: string
+            tool:
+              type: string
         category:
           type: string
         title:
+          type: string
+        description:
           type: string
         severity:
           type: string
@@ -1383,6 +1409,45 @@ components:
         last_seen_at:
           type: string
           format: date-time
+        asset:
+          type: object
+          additionalProperties: false
+          properties:
+            asset_id:
+              type: string
+            asset_type:
+              type: string
+            asset_name:
+              type: string
+            environment:
+              type: string
+            exposure:
+              type: string
+        risk:
+          type: object
+          additionalProperties: false
+          properties:
+            priority:
+              type: string
+            overall_score:
+              type: number
+            business_impact:
+              type: number
+            exploitability:
+              type: number
+            reachability:
+              type: number
+            exposure:
+              type: number
+            asset_criticality:
+              type: number
+            policy_impact:
+              type: number
+            sla_class:
+              type: string
+            sla_due_at:
+              type: string
+              format: date-time
     ApiError:
       type: object
       additionalProperties: false

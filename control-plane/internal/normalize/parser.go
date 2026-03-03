@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"unifiedsecurityscanner/control-plane/internal/models"
+	"unifiedsecurityscanner/control-plane/internal/risk"
 )
 
 var (
@@ -493,10 +494,8 @@ func baseFinding(
 	location models.CanonicalLocation,
 	evidence models.CanonicalEvidence,
 ) models.CanonicalFinding {
-	score := riskScore(severity)
 	findingID := fmt.Sprintf("%s-%s-%d", ctx.TaskID, category, len(title))
-
-	return models.CanonicalFinding{
+	finding := models.CanonicalFinding{
 		SchemaVersion: "1.0.0",
 		FindingID:     findingID,
 		TenantID:      ctx.TenantID,
@@ -506,7 +505,7 @@ func baseFinding(
 			ScanJobID: ctx.ScanJobID,
 		},
 		Source: models.CanonicalSourceInfo{
-			Layer: sourceLayer(ctx.AdapterID),
+			Layer: risk.LayerForAdapter(ctx.AdapterID),
 			Tool:  ctx.AdapterID,
 		},
 		Category:    category,
@@ -522,68 +521,16 @@ func baseFinding(
 			AssetType:   ctx.TargetKind,
 			AssetName:   ctx.Target,
 			Environment: "unknown",
-			Exposure:    "internet",
+			Exposure:    "unknown",
 		},
 		Locations: []models.CanonicalLocation{location},
 		Evidence:  []models.CanonicalEvidence{evidence},
 		Risk: models.CanonicalRisk{
-			Priority:       priorityForSeverity(severity),
-			OverallScore:   score,
-			BusinessImpact: score / 10,
-			Exploitability: score / 10,
-			Reachability:   8,
-			Exposure:       8,
+			Priority: "p4",
 		},
 	}
-}
 
-func riskScore(severity string) float64 {
-	switch severity {
-	case "critical":
-		return 95
-	case "high":
-		return 80
-	case "medium":
-		return 60
-	case "low":
-		return 30
-	default:
-		return 10
-	}
-}
-
-func priorityForSeverity(severity string) string {
-	switch severity {
-	case "critical":
-		return "p0"
-	case "high":
-		return "p1"
-	case "medium":
-		return "p2"
-	case "low":
-		return "p3"
-	default:
-		return "p4"
-	}
-}
-
-func sourceLayer(adapterID string) string {
-	switch adapterID {
-	case "semgrep":
-		return "sast"
-	case "trivy":
-		return "sca"
-	case "gitleaks":
-		return "secrets"
-	case "checkov":
-		return "iac"
-	case "zap":
-		return "dast"
-	case "nmap", "metasploit":
-		return "pentest"
-	default:
-		return "pentest"
-	}
+	return risk.Enrich(finding)
 }
 
 func normalizeSeverity(value string, fallback string) string {

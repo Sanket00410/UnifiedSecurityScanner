@@ -69,7 +69,7 @@
           "enum": [
             "sast",
             "sca",
-            "secret",
+            "secrets",
             "iac",
             "container",
             "dast",
@@ -236,7 +236,10 @@
         "business_impact",
         "exploitability",
         "reachability",
-        "exposure"
+        "exposure",
+        "asset_criticality",
+        "policy_impact",
+        "sla_class"
       ],
       "properties": {
         "priority": {
@@ -273,6 +276,23 @@
           "type": "number",
           "minimum": 0,
           "maximum": 10
+        },
+        "asset_criticality": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "policy_impact": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "sla_class": {
+          "type": "string"
+        },
+        "sla_due_at": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },

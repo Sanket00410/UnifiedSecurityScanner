@@ -19,6 +19,7 @@ import (
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
 	"unifiedsecurityscanner/control-plane/internal/normalize"
+	"unifiedsecurityscanner/control-plane/internal/risk"
 )
 
 type Server struct {
@@ -314,7 +315,7 @@ func fallbackFindings(taskCtx models.TaskContext, summaries []*workerv1.FindingS
 			findingID = fmt.Sprintf("%s-fallback-%d", taskCtx.TaskID, index+1)
 		}
 
-		out = append(out, models.CanonicalFinding{
+		finding := models.CanonicalFinding{
 			SchemaVersion: "1.0.0",
 			FindingID:     findingID,
 			TenantID:      taskCtx.TenantID,
@@ -324,7 +325,7 @@ func fallbackFindings(taskCtx models.TaskContext, summaries []*workerv1.FindingS
 				ScanJobID: taskCtx.ScanJobID,
 			},
 			Source: models.CanonicalSourceInfo{
-				Layer: "pentest",
+				Layer: risk.LayerForAdapter(taskCtx.AdapterID),
 				Tool:  taskCtx.AdapterID,
 			},
 			Category:    summary.GetCategory(),
@@ -340,17 +341,14 @@ func fallbackFindings(taskCtx models.TaskContext, summaries []*workerv1.FindingS
 				AssetType:   taskCtx.TargetKind,
 				AssetName:   taskCtx.Target,
 				Environment: "unknown",
-				Exposure:    "internet",
+				Exposure:    "unknown",
 			},
 			Risk: models.CanonicalRisk{
-				Priority:       "p2",
-				OverallScore:   summary.GetRiskScore(),
-				BusinessImpact: 6,
-				Exploitability: 6,
-				Reachability:   8,
-				Exposure:       8,
+				OverallScore: summary.GetRiskScore(),
 			},
-		})
+		}
+
+		out = append(out, risk.Enrich(finding))
 	}
 
 	return out

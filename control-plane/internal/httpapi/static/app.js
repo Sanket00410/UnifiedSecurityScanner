@@ -190,7 +190,8 @@ async function boot() {
         item.title || item.category || "Untitled finding",
         item.description || "No description available.",
         [
-          item.severity || "unknown",
+          item.risk?.priority || item.severity || "unknown",
+          item.risk?.sla_class || "no-sla",
           item.source?.layer || "unknown layer",
           item.asset?.asset_name || item.asset?.asset_id || "unknown asset"
         ],

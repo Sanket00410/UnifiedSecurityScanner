@@ -30,6 +30,12 @@ func TestParseNmapFixture(t *testing.T) {
 	if findings[0].Category != "open_network_service" {
 		t.Fatalf("unexpected first finding category: %s", findings[0].Category)
 	}
+	if findings[0].Asset.Exposure != "internal" {
+		t.Fatalf("expected internal exposure for internal host, got %s", findings[0].Asset.Exposure)
+	}
+	if findings[0].Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for internal nmap finding, got %s", findings[0].Risk.Priority)
+	}
 	if findings[0].Locations[0].Endpoint != "scanner.internal:22/tcp" {
 		t.Fatalf("unexpected first finding endpoint: %s", findings[0].Locations[0].Endpoint)
 	}
@@ -70,6 +76,12 @@ func TestParseMetasploitFixture(t *testing.T) {
 	if !strings.Contains(finding.Title, "auxiliary/scanner/http/http_version") {
 		t.Fatalf("expected module name in finding title, got %s", finding.Title)
 	}
+	if finding.Risk.Priority != "p1" {
+		t.Fatalf("expected p1 priority for internal metasploit host, got %s", finding.Risk.Priority)
+	}
+	if finding.Risk.SLAClass != "72h" {
+		t.Fatalf("expected 72h sla class, got %s", finding.Risk.SLAClass)
+	}
 }
 
 func TestParseSemgrepFixture(t *testing.T) {
@@ -96,6 +108,9 @@ func TestParseSemgrepFixture(t *testing.T) {
 	}
 	if finding.Severity != "high" {
 		t.Fatalf("unexpected finding severity: %s", finding.Severity)
+	}
+	if finding.Risk.Priority != "p3" {
+		t.Fatalf("expected p3 priority for repo semgrep finding, got %s", finding.Risk.Priority)
 	}
 	if finding.Locations[0].Path != "cmd/api/main.go" {
 		t.Fatalf("unexpected finding path: %s", finding.Locations[0].Path)
@@ -127,6 +142,9 @@ func TestParseTrivyFixture(t *testing.T) {
 	if finding.Remediation == nil || !finding.Remediation.FixAvailable {
 		t.Fatal("expected trivy finding to include a fixable remediation")
 	}
+	if finding.Risk.Priority != "p3" {
+		t.Fatalf("expected p3 priority for dependency finding, got %s", finding.Risk.Priority)
+	}
 }
 
 func TestParseGitleaksFixture(t *testing.T) {
@@ -154,6 +172,9 @@ func TestParseGitleaksFixture(t *testing.T) {
 	if finding.Category != "secret_exposure" {
 		t.Fatalf("unexpected finding category: %s", finding.Category)
 	}
+	if finding.Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for secret exposure, got %s", finding.Risk.Priority)
+	}
 }
 
 func TestParseCheckovFixture(t *testing.T) {
@@ -180,5 +201,8 @@ func TestParseCheckovFixture(t *testing.T) {
 	}
 	if finding.Locations[0].Line != 12 {
 		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+	if finding.Risk.SLAClass != "30d" {
+		t.Fatalf("expected 30d sla class for checkov finding, got %s", finding.Risk.SLAClass)
 	}
 }

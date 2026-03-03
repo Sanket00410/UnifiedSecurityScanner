@@ -79,7 +79,8 @@ func (s *Store) ListFindingsForTenant(ctx context.Context, organizationID string
 		SELECT finding_json
 		FROM normalized_findings
 		WHERE tenant_id = $1
-		ORDER BY updated_at DESC
+		ORDER BY COALESCE(NULLIF(finding_json->'risk'->>'overall_score', '')::double precision, 0) DESC,
+		         updated_at DESC
 		LIMIT $2
 	`, strings.TrimSpace(organizationID), limit)
 	if err != nil {

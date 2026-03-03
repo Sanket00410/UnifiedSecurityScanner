@@ -60,12 +60,16 @@ type CanonicalEvidence struct {
 }
 
 type CanonicalRisk struct {
-	Priority       string  `json:"priority"`
-	OverallScore   float64 `json:"overall_score"`
-	BusinessImpact float64 `json:"business_impact"`
-	Exploitability float64 `json:"exploitability"`
-	Reachability   float64 `json:"reachability"`
-	Exposure       float64 `json:"exposure"`
+	Priority         string     `json:"priority"`
+	OverallScore     float64    `json:"overall_score"`
+	BusinessImpact   float64    `json:"business_impact"`
+	Exploitability   float64    `json:"exploitability"`
+	Reachability     float64    `json:"reachability"`
+	Exposure         float64    `json:"exposure"`
+	AssetCriticality float64    `json:"asset_criticality"`
+	PolicyImpact     float64    `json:"policy_impact"`
+	SLAClass         string     `json:"sla_class"`
+	SLADueAt         *time.Time `json:"sla_due_at,omitempty"`
 }
 
 type CanonicalRemediation struct {

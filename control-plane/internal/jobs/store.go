@@ -16,6 +16,7 @@ import (
 	"unifiedsecurityscanner/control-plane/internal/database"
 	"unifiedsecurityscanner/control-plane/internal/models"
 	policyengine "unifiedsecurityscanner/control-plane/internal/policy"
+	"unifiedsecurityscanner/control-plane/internal/risk"
 )
 
 var (
@@ -434,6 +435,41 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 	}
 
 	for _, finding := range submission.ReportedFindings {
+		if strings.TrimSpace(finding.SchemaVersion) == "" {
+			finding.SchemaVersion = "1.0.0"
+		}
+		if strings.TrimSpace(finding.TenantID) == "" {
+			finding.TenantID = task.TenantID
+		}
+		if strings.TrimSpace(finding.Scanner.Engine) == "" {
+			finding.Scanner.Engine = task.AdapterID
+		}
+		if strings.TrimSpace(finding.Scanner.AdapterID) == "" {
+			finding.Scanner.AdapterID = task.AdapterID
+		}
+		if strings.TrimSpace(finding.Scanner.ScanJobID) == "" {
+			finding.Scanner.ScanJobID = task.ScanJobID
+		}
+		if strings.TrimSpace(finding.Source.Tool) == "" {
+			finding.Source.Tool = task.AdapterID
+		}
+		if strings.TrimSpace(finding.Asset.AssetID) == "" {
+			finding.Asset.AssetID = task.Target
+		}
+		if strings.TrimSpace(finding.Asset.AssetType) == "" {
+			finding.Asset.AssetType = task.TargetKind
+		}
+		if strings.TrimSpace(finding.Asset.AssetName) == "" {
+			finding.Asset.AssetName = task.Target
+		}
+		if finding.FirstSeenAt.IsZero() {
+			finding.FirstSeenAt = now
+		}
+		if finding.LastSeenAt.IsZero() {
+			finding.LastSeenAt = now
+		}
+
+		finding = risk.Enrich(finding)
 		payload, err := json.Marshal(finding)
 		if err != nil {
 			return fmt.Errorf("marshal normalized finding: %w", err)
@@ -473,7 +509,8 @@ func (s *Store) ListFindings(ctx context.Context, limit int) ([]models.Canonical
 	rows, err := s.pool.Query(ctx, `
 		SELECT finding_json
 		FROM normalized_findings
-		ORDER BY updated_at DESC
+		ORDER BY COALESCE(NULLIF(finding_json->'risk'->>'overall_score', '')::double precision, 0) DESC,
+		         updated_at DESC
 		LIMIT $1
 	`, limit)
 	if err != nil {
