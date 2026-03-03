@@ -663,3 +663,93 @@ func TestParseKICSFixture(t *testing.T) {
 		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
 	}
 }
+
+func TestParseESLintFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("eslint", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-eslint",
+		AdapterID:  "eslint",
+		TargetKind: "node_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "eslint-results.json")})
+	if err != nil {
+		t.Fatalf("parse eslint fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 14 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseNPMAuditFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("npm-audit", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-npm-audit",
+		AdapterID:  "npm-audit",
+		TargetKind: "node_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "npm-audit-results.json")})
+	if err != nil {
+		t.Fatalf("parse npm-audit fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "dependency_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected npm-audit finding to be risk-enriched")
+	}
+}
+
+func TestParseKubeSecFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("kubesec", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-kubesec",
+		AdapterID:  "kubesec",
+		TargetKind: "kubernetes",
+		Target:     "c:/repo/k8s",
+	}, []string{filepath.Join("testdata", "kubesec-results.json")})
+	if err != nil {
+		t.Fatalf("parse kubesec fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Path != "k8s/deployment.yaml" {
+		t.Fatalf("unexpected finding path: %s", finding.Locations[0].Path)
+	}
+}

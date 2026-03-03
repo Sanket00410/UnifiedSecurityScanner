@@ -1,0 +1,15 @@
+adapter_id: eslint
+display_name: ESLint JavaScript and TypeScript SAST Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - node_repo
+  - repo
+  - filesystem
+default_timeout_seconds: 240
+evidence_requirements:
+  - json_report
+  - rule_match_summary
+  - source_location

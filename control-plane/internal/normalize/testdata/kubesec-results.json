@@ -1,0 +1,16 @@
+[
+  {
+    "object": {
+      "name": "payments-api"
+    },
+    "file": "k8s/deployment.yaml",
+    "scoring": {
+      "advise": [
+        {
+          "selector": "containers[].securityContext.readOnlyRootFilesystem",
+          "reason": "Container should set readOnlyRootFilesystem to true."
+        }
+      ]
+    }
+  }
+]

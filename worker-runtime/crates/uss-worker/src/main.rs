@@ -382,6 +382,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
                 "filesystem".to_string(),
                 "go_repo".to_string(),
                 "java_repo".to_string(),
+                "node_repo".to_string(),
             ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["code".to_string(), "sast".to_string()],
@@ -428,6 +429,21 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "eslint".to_string(),
+            supported_target_kinds: vec![
+                "node_repo".to_string(),
+                "repo".to_string(),
+                "filesystem".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec![
+                "code".to_string(),
+                "sast".to_string(),
+                "javascript".to_string(),
+            ],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "shellcheck".to_string(),
             supported_target_kinds: vec!["shell_script".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
@@ -441,6 +457,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
                 "filesystem".to_string(),
                 "go_repo".to_string(),
                 "java_repo".to_string(),
+                "node_repo".to_string(),
             ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec![
@@ -451,12 +468,24 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "npm-audit".to_string(),
+            supported_target_kinds: vec![
+                "node_repo".to_string(),
+                "repo".to_string(),
+                "filesystem".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sca".to_string(), "node".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "syft".to_string(),
             supported_target_kinds: vec![
                 "repo".to_string(),
                 "filesystem".to_string(),
                 "go_repo".to_string(),
                 "java_repo".to_string(),
+                "node_repo".to_string(),
                 "image".to_string(),
                 "container_image".to_string(),
             ],
@@ -471,6 +500,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
                 "filesystem".to_string(),
                 "go_repo".to_string(),
                 "java_repo".to_string(),
+                "node_repo".to_string(),
             ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["code".to_string(), "sca".to_string()],
@@ -488,6 +518,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             supported_target_kinds: vec![
                 "repo".to_string(),
                 "filesystem".to_string(),
+                "node_repo".to_string(),
                 "image".to_string(),
                 "terraform".to_string(),
                 "kubernetes".to_string(),
@@ -499,7 +530,11 @@ fn default_capabilities() -> Vec<WorkerCapability> {
         },
         WorkerCapability {
             adapter_id: "trivy-secrets".to_string(),
-            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "node_repo".to_string(),
+            ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["secrets".to_string(), "code".to_string()],
             linux_preferred: false,
@@ -511,6 +546,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
                 "filesystem".to_string(),
                 "go_repo".to_string(),
                 "java_repo".to_string(),
+                "node_repo".to_string(),
                 "image".to_string(),
                 "container_image".to_string(),
             ],
@@ -520,7 +556,11 @@ fn default_capabilities() -> Vec<WorkerCapability> {
         },
         WorkerCapability {
             adapter_id: "gitleaks".to_string(),
-            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "node_repo".to_string(),
+            ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["code".to_string(), "secrets".to_string()],
             linux_preferred: false,
@@ -530,6 +570,7 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             supported_target_kinds: vec![
                 "repo".to_string(),
                 "filesystem".to_string(),
+                "node_repo".to_string(),
                 "terraform".to_string(),
                 "kubernetes".to_string(),
             ],
@@ -555,6 +596,17 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["iac".to_string(), "cloud".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "kubesec".to_string(),
+            supported_target_kinds: vec![
+                "kubernetes".to_string(),
+                "repo".to_string(),
+                "filesystem".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["iac".to_string(), "kubernetes".to_string()],
             linux_preferred: false,
         },
         WorkerCapability {

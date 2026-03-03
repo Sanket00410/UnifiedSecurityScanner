@@ -16,7 +16,9 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
+        "eslint" => EslintAdapter.execute(request),
         "shellcheck" => ShellCheckAdapter.execute(request),
+        "npm-audit" => NpmAuditAdapter.execute(request),
         "osv-scanner" => OsvScannerAdapter.execute(request),
         "syft" => SyftAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
@@ -28,6 +30,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "checkov" => CheckovAdapter.execute(request),
         "hadolint" => HadolintAdapter.execute(request),
         "kics" => KicsAdapter.execute(request),
+        "kubesec" => KubeSecAdapter.execute(request),
         "kube-score" => KubeScoreAdapter.execute(request),
         "tfsec" => TfsecAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
@@ -42,7 +45,9 @@ struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
 struct BanditAdapter;
+struct EslintAdapter;
 struct ShellCheckAdapter;
+struct NpmAuditAdapter;
 struct OsvScannerAdapter;
 struct SyftAdapter;
 struct TrivyAdapter;
@@ -54,6 +59,7 @@ struct GitleaksAdapter;
 struct CheckovAdapter;
 struct HadolintAdapter;
 struct KicsAdapter;
+struct KubeSecAdapter;
 struct KubeScoreAdapter;
 struct TfsecAdapter;
 
@@ -391,6 +397,45 @@ impl ScannerAdapter for BanditAdapter {
     }
 }
 
+impl ScannerAdapter for EslintAdapter {
+    fn id(&self) -> &'static str {
+        "eslint"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "eslint-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "eslint-exec.log")?;
+        let binary = env::var("USS_ESLINT_CMD").unwrap_or_else(|_| "eslint".to_string());
+        let args = vec![
+            "--format".to_string(),
+            "json".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[1],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for ShellCheckAdapter {
     fn id(&self) -> &'static str {
         "shellcheck"
@@ -416,7 +461,7 @@ impl ScannerAdapter for ShellCheckAdapter {
             request.target.clone(),
         ];
 
-        run_process_with_stdout_report(
+        run_process_with_stdout_report_allow_exit_codes(
             self.id(),
             &binary,
             &args,
@@ -424,7 +469,43 @@ impl ScannerAdapter for ShellCheckAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            &[1],
             None,
+        )
+    }
+}
+
+impl ScannerAdapter for NpmAuditAdapter {
+    fn id(&self) -> &'static str {
+        "npm-audit"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "npm-audit-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "npm-audit-exec.log")?;
+        let binary = env::var("USS_NPM_CMD").unwrap_or_else(|_| "npm".to_string());
+        let args = vec!["audit".to_string(), "--json".to_string()];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[1],
+            Some(Path::new(&request.target)),
         )
     }
 }
@@ -921,6 +1002,40 @@ impl ScannerAdapter for KicsAdapter {
     }
 }
 
+impl ScannerAdapter for KubeSecAdapter {
+    fn id(&self) -> &'static str {
+        "kubesec"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "kubesec-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "kubesec-exec.log")?;
+        let binary = env::var("USS_KUBESEC_CMD").unwrap_or_else(|_| "kubesec".to_string());
+        let args = vec!["scan".to_string(), request.target.clone()];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
 fn validate_common(adapter: &dyn ScannerAdapter, request: &AdapterRequest) -> Result<(), String> {
     if !adapter.supports(&request.execution_mode) {
         return Err(format!(
@@ -1153,6 +1268,82 @@ fn run_process_with_stdout_report(
         match child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
+                    return Ok(AdapterResult {
+                        success: true,
+                        finding_count: 0,
+                        evidence_paths,
+                        summary: format!("{adapter_id} completed successfully"),
+                        error_message: None,
+                    });
+                }
+
+                return Ok(AdapterResult {
+                    success: false,
+                    finding_count: 0,
+                    evidence_paths,
+                    summary: format!("{adapter_id} exited with status {status}"),
+                    error_message: Some(format!("{adapter_id} exited with non-zero status")),
+                });
+            }
+            Ok(None) => {
+                if started.elapsed() > Duration::from_secs(max_runtime_seconds) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "{adapter_id} timed out after {max_runtime_seconds} seconds"
+                    ));
+                }
+
+                thread::sleep(Duration::from_millis(200));
+            }
+            Err(err) => {
+                return Err(format!("wait on {adapter_id}: {err}"));
+            }
+        }
+    }
+}
+
+fn run_process_with_stdout_report_allow_exit_codes(
+    adapter_id: &str,
+    binary: &str,
+    args: &[String],
+    report_path: &Path,
+    log_path: &Path,
+    max_runtime_seconds: u64,
+    reported_paths: Vec<PathBuf>,
+    allowed_exit_codes: &[i32],
+    working_dir: Option<&Path>,
+) -> Result<AdapterResult, String> {
+    let stdout_file =
+        File::create(report_path).map_err(|err| format!("create report file: {err}"))?;
+    let stderr_file = File::create(log_path).map_err(|err| format!("create log file: {err}"))?;
+    let evidence_paths = if reported_paths.is_empty() {
+        vec![report_path.to_string_lossy().to_string()]
+    } else {
+        reported_paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let mut command = Command::new(binary);
+    command
+        .args(args)
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
+    if let Some(dir) = working_dir {
+        command.current_dir(dir);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("spawn {adapter_id}: {err}"))?;
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let exit_code = status.code().unwrap_or(-1);
+                if status.success() || allowed_exit_codes.contains(&exit_code) {
                     return Ok(AdapterResult {
                         success: true,
                         finding_count: 0,

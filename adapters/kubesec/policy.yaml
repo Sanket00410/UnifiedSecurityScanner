@@ -1,0 +1,15 @@
+adapter_id: kubesec
+display_name: KubeSec Kubernetes Analyzer
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - kubernetes
+  - repo
+  - filesystem
+default_timeout_seconds: 180
+evidence_requirements:
+  - json_report
+  - policy_match_summary
+  - resource_context

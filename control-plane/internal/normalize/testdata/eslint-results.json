@@ -1,0 +1,16 @@
+[
+  {
+    "filePath": "src/server.js",
+    "messages": [
+      {
+        "ruleId": "security/detect-object-injection",
+        "severity": 2,
+        "message": "Potential object injection sink through dynamic property access.",
+        "line": 14,
+        "column": 11
+      }
+    ],
+    "errorCount": 1,
+    "warningCount": 0
+  }
+]

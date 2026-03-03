@@ -1,0 +1,17 @@
+{
+  "vulnerabilities": {
+    "lodash": {
+      "name": "lodash",
+      "severity": "high",
+      "via": [
+        {
+          "source": 123456,
+          "name": "GHSA-35jh-r3h4-6jhm",
+          "title": "Prototype pollution in lodash",
+          "url": "https://github.com/advisories/GHSA-35jh-r3h4-6jhm",
+          "severity": "high"
+        }
+      ]
+    }
+  }
+}

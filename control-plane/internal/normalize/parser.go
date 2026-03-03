@@ -48,8 +48,12 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parsePmd(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
+	case "eslint":
+		return parseESLint(ctx, evidencePaths)
 	case "shellcheck":
 		return parseShellCheck(ctx, evidencePaths)
+	case "npm-audit":
+		return parseNPMAudit(ctx, evidencePaths)
 	case "osv-scanner":
 		return parseOSVScanner(ctx, evidencePaths)
 	case "syft":
@@ -72,6 +76,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseHadolint(ctx, evidencePaths)
 	case "kics":
 		return parseKICS(ctx, evidencePaths)
+	case "kubesec":
+		return parseKubeSec(ctx, evidencePaths)
 	case "kube-score":
 		return parseKubeScore(ctx, evidencePaths)
 	case "tfsec":
@@ -615,6 +621,74 @@ func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding
 	return findings, nil
 }
 
+func parseESLint(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type eslintMessage struct {
+		RuleID   string `json:"ruleId"`
+		Severity int    `json:"severity"`
+		Message  string `json:"message"`
+		Line     int    `json:"line"`
+		Column   int    `json:"column"`
+	}
+	type eslintFile struct {
+		FilePath     string          `json:"filePath"`
+		Messages     []eslintMessage `json:"messages"`
+		ErrorCount   int             `json:"errorCount"`
+		WarningCount int             `json:"warningCount"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open eslint evidence %s: %w", path, err)
+		}
+
+		payload := make([]eslintFile, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode eslint evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, fileEntry := range payload {
+			for _, item := range fileEntry.Messages {
+				title := strings.TrimSpace(item.Message)
+				if title == "" {
+					title = "JavaScript or TypeScript security issue"
+				}
+
+				finding := baseFinding(ctx, now, "sast_rule_match", title, eslintSeverity(item.Severity), "medium", models.CanonicalLocation{
+					Kind:   "file",
+					Path:   fileEntry.FilePath,
+					Line:   item.Line,
+					Column: item.Column,
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "ESLint rule match",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Refactor the JavaScript or TypeScript code to satisfy the lint rule and remove the unsafe pattern.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(item.RuleID) != "" {
+					finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
 func parseShellCheck(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type shellCheckComment struct {
 		File    string `json:"file"`
@@ -670,6 +744,94 @@ func parseShellCheck(ctx Context, evidencePaths []string) ([]models.CanonicalFin
 			}
 			if item.Code > 0 {
 				finding.Tags = append(finding.Tags, fmt.Sprintf("rule:SC%d", item.Code))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseNPMAudit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type npmVia struct {
+		Source   int    `json:"source"`
+		Name     string `json:"name"`
+		Title    string `json:"title"`
+		URL      string `json:"url"`
+		Severity string `json:"severity"`
+	}
+	type npmVulnerability struct {
+		Name     string   `json:"name"`
+		Severity string   `json:"severity"`
+		Via      []npmVia `json:"via"`
+	}
+	type npmAuditOutput struct {
+		Vulnerabilities map[string]npmVulnerability `json:"vulnerabilities"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open npm-audit evidence %s: %w", path, err)
+		}
+
+		var payload npmAuditOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode npm-audit evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for packageName, vuln := range payload.Vulnerabilities {
+			title := fmt.Sprintf("Dependency vulnerability in %s", packageName)
+			if strings.TrimSpace(vuln.Name) != "" {
+				title = fmt.Sprintf("Dependency vulnerability in %s", strings.TrimSpace(vuln.Name))
+			}
+			description := ""
+			references := make([]string, 0)
+			if len(vuln.Via) > 0 {
+				first := vuln.Via[0]
+				if strings.TrimSpace(first.Title) != "" {
+					title = strings.TrimSpace(first.Title)
+				}
+				description = firstNonEmptyString(first.Title, description)
+				if strings.TrimSpace(first.URL) != "" {
+					references = append(references, strings.TrimSpace(first.URL))
+				}
+			}
+
+			finding := baseFinding(ctx, now, "dependency_vulnerability", title, normalizeSeverity(vuln.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: "dependency",
+				Path: "package-lock.json",
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "npm audit dependency vulnerability",
+			})
+			finding.Description = description
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Upgrade the vulnerable npm dependency to a fixed version and refresh the lockfile.",
+				FixAvailable: true,
+				References:   references,
+			}
+			name := strings.TrimSpace(vuln.Name)
+			if name == "" {
+				name = strings.TrimSpace(packageName)
+			}
+			if name != "" {
+				finding.Tags = append(finding.Tags, "package:"+name)
+			}
+			for _, via := range vuln.Via {
+				if strings.TrimSpace(via.Name) != "" {
+					finding.Tags = append(finding.Tags, "advisory:"+strings.TrimSpace(via.Name))
+				}
 			}
 
 			findings = append(findings, finding)
@@ -1508,6 +1670,80 @@ func parseKICS(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, 
 	return findings, nil
 }
 
+func parseKubeSec(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type kubeSecAdvice struct {
+		Selector string `json:"selector"`
+		Reason   string `json:"reason"`
+	}
+	type kubeSecScoring struct {
+		Advise []kubeSecAdvice `json:"advise"`
+	}
+	type kubeSecObject struct {
+		Name string `json:"name"`
+	}
+	type kubeSecResult struct {
+		Object  kubeSecObject  `json:"object"`
+		File    string         `json:"file"`
+		Scoring kubeSecScoring `json:"scoring"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open kubesec evidence %s: %w", path, err)
+		}
+
+		payload := make([]kubeSecResult, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode kubesec evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload {
+			if len(item.Scoring.Advise) == 0 {
+				continue
+			}
+			for _, advice := range item.Scoring.Advise {
+				title := firstNonEmptyString(advice.Reason, advice.Selector)
+				if title == "" {
+					title = "Kubernetes workload misconfiguration"
+				}
+
+				finding := baseFinding(ctx, now, "iac_misconfiguration", title, "medium", "medium", models.CanonicalLocation{
+					Kind: "file",
+					Path: firstNonEmptyString(item.File, ctx.Target),
+				}, models.CanonicalEvidence{
+					Kind:    "json",
+					Ref:     path,
+					Summary: "KubeSec policy advisory",
+				})
+				finding.Description = title
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      "Update the Kubernetes manifest to satisfy the KubeSec control.",
+					FixAvailable: true,
+				}
+				if strings.TrimSpace(advice.Selector) != "" {
+					finding.Tags = append(finding.Tags, "selector:"+strings.TrimSpace(advice.Selector))
+				}
+				if strings.TrimSpace(item.Object.Name) != "" {
+					finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.Object.Name))
+				}
+
+				findings = append(findings, finding)
+			}
+		}
+	}
+
+	return findings, nil
+}
+
 func parseKubeScore(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type kubeScoreComment struct {
 		Path     string `json:"path"`
@@ -1863,6 +2099,16 @@ func kubeScoreSeverity(value string) string {
 	default:
 		return "low"
 	}
+}
+
+func eslintSeverity(value int) string {
+	if value >= 2 {
+		return "high"
+	}
+	if value == 1 {
+		return "medium"
+	}
+	return "low"
 }
 
 func shellCheckSeverity(value string) string {
