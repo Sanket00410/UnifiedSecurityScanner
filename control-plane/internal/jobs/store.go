@@ -19,20 +19,21 @@ import (
 )
 
 var (
-	jobSequence            uint64
-	leaseSequence          uint64
-	taskSequence           uint64
-	policySequence         uint64
-	policyVersionSequence  uint64
-	policyApprovalSequence uint64
-	remediationSequence    uint64
-	controlSequence        uint64
-	waiverSequence         uint64
-	occurrenceSequence     uint64
-	ErrWorkerLeaseNotFound = errors.New("worker lease not found")
-	ErrTaskNotFound        = errors.New("task not found")
-	ErrProtectedToken      = errors.New("protected token")
-	ErrInvalidWaiver       = errors.New("invalid finding waiver")
+	jobSequence                     uint64
+	leaseSequence                   uint64
+	taskSequence                    uint64
+	policySequence                  uint64
+	policyVersionSequence           uint64
+	policyApprovalSequence          uint64
+	remediationSequence             uint64
+	controlSequence                 uint64
+	waiverSequence                  uint64
+	occurrenceSequence              uint64
+	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
+	ErrTaskNotFound                 = errors.New("task not found")
+	ErrProtectedToken               = errors.New("protected token")
+	ErrInvalidWaiver                = errors.New("invalid finding waiver")
+	ErrInvalidRemediationTransition = errors.New("invalid remediation transition")
 )
 
 type PolicyDeniedError struct {

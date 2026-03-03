@@ -283,6 +283,9 @@
             "p4"
           ]
         },
+        "priority_queue": {
+          "type": "string"
+        },
         "overall_score": {
           "type": "number",
           "minimum": 0,
@@ -328,6 +331,12 @@
           "minimum": 0,
           "maximum": 40
         },
+        "effective_severity": {
+          "type": "string"
+        },
+        "severity_override_reason": {
+          "type": "string"
+        },
         "sla_class": {
           "type": "string"
         },
@@ -344,6 +353,11 @@
         },
         "overdue": {
           "type": "boolean"
+        },
+        "trend_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
         }
       }
     },

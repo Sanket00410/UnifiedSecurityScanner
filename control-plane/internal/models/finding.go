@@ -72,6 +72,7 @@ type CanonicalEvidence struct {
 
 type CanonicalRisk struct {
 	Priority                     string     `json:"priority"`
+	PriorityQueue                string     `json:"priority_queue,omitempty"`
 	OverallScore                 float64    `json:"overall_score"`
 	BusinessImpact               float64    `json:"business_impact"`
 	Exploitability               float64    `json:"exploitability"`
@@ -81,11 +82,14 @@ type CanonicalRisk struct {
 	PolicyImpact                 float64    `json:"policy_impact"`
 	CompensatingControlReduction float64    `json:"compensating_control_reduction,omitempty"`
 	WaiverReduction              float64    `json:"waiver_reduction,omitempty"`
+	EffectiveSeverity            string     `json:"effective_severity,omitempty"`
+	SeverityOverrideReason       string     `json:"severity_override_reason,omitempty"`
 	SLAClass                     string     `json:"sla_class"`
 	SLADueAt                     *time.Time `json:"sla_due_at,omitempty"`
 	AgeDays                      int64      `json:"age_days,omitempty"`
 	AgingBucket                  string     `json:"aging_bucket,omitempty"`
 	Overdue                      bool       `json:"overdue,omitempty"`
+	TrendScore                   float64    `json:"trend_score,omitempty"`
 }
 
 type CanonicalRemediation struct {

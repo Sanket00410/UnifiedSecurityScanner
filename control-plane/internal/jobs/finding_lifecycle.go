@@ -103,6 +103,7 @@ func persistFindingTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, f
 		finding.FindingID = existingFindingID
 		finding.OccurrenceCount = occurrenceCount
 		finding.ReopenedCount = reopenedCount
+		finding = risk.ApplyTemporalSignals(finding, now)
 
 		payload, err := json.Marshal(finding)
 		if err != nil {
@@ -131,6 +132,7 @@ func persistFindingTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, f
 	finding.OccurrenceCount = 1
 	finding.ReopenedCount = 0
 	finding.FindingID = risk.StableFindingID(findingKey)
+	finding = risk.ApplyTemporalSignals(finding, now)
 
 	payload, err := json.Marshal(finding)
 	if err != nil {

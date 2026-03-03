@@ -850,6 +850,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/remediations/{remediationId}:
+    get:
+      operationId: getRemediation
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAction"
+        "404":
+          description: Remediation action not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/remediations/{remediationId}/transition:
+    post:
+      operationId: transitionRemediation
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransitionRemediationRequest"
+      responses:
+        "200":
+          description: Remediation transitioned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAction"
+        "409":
+          description: Invalid remediation transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   securitySchemes:
     BearerToken:
@@ -1753,6 +1809,22 @@ components:
           nullable: true
         notes:
           type: string
+    TransitionRemediationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+        owner:
+          type: string
+        due_at:
+          type: string
+          format: date-time
+          nullable: true
+        notes:
+          type: string
     WorkerCapability:
       type: object
       additionalProperties: false
@@ -1985,6 +2057,8 @@ components:
           properties:
             priority:
               type: string
+            priority_queue:
+              type: string
             overall_score:
               type: number
             business_impact:
@@ -2003,6 +2077,10 @@ components:
               type: number
             waiver_reduction:
               type: number
+            effective_severity:
+              type: string
+            severity_override_reason:
+              type: string
             sla_class:
               type: string
             sla_due_at:
@@ -2014,6 +2092,8 @@ components:
               type: string
             overdue:
               type: boolean
+            trend_score:
+              type: number
         occurrence_count:
           type: integer
         reopened_count:

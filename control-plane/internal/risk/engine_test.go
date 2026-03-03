@@ -57,6 +57,12 @@ func TestEnrichPrioritizesInternetExploitableFindings(t *testing.T) {
 	if finding.Risk.SLAClass != "24h" {
 		t.Fatalf("expected 24h sla class, got %s", finding.Risk.SLAClass)
 	}
+	if finding.Risk.PriorityQueue != "queue:p0:24h" {
+		t.Fatalf("expected p0 priority queue, got %s", finding.Risk.PriorityQueue)
+	}
+	if finding.Risk.EffectiveSeverity != "critical" {
+		t.Fatalf("expected effective severity critical, got %s", finding.Risk.EffectiveSeverity)
+	}
 	if finding.Risk.SLADueAt == nil || !finding.Risk.SLADueAt.Equal(now.Add(24*time.Hour)) {
 		t.Fatalf("expected 24h due date, got %#v", finding.Risk.SLADueAt)
 	}
@@ -107,6 +113,9 @@ func TestEnrichLowersPriorityForInternalCodebaseFindings(t *testing.T) {
 	}
 	if finding.Risk.SLAClass != "30d" {
 		t.Fatalf("expected 30d sla class, got %s", finding.Risk.SLAClass)
+	}
+	if finding.Risk.EffectiveSeverity == "" {
+		t.Fatal("expected effective severity to be populated")
 	}
 }
 
@@ -236,6 +245,9 @@ func TestApplyWaiverReductionRecomputesPriorityAndSLA(t *testing.T) {
 	if adjusted.Risk.Priority == finding.Risk.Priority {
 		t.Fatalf("expected priority change after waiver, still %s", adjusted.Risk.Priority)
 	}
+	if adjusted.Risk.PriorityQueue == "" {
+		t.Fatal("expected priority queue after waiver adjustment")
+	}
 	if adjusted.Risk.SLADueAt == nil {
 		t.Fatal("expected sla due date after waiver adjustment")
 	}
@@ -263,6 +275,9 @@ func TestApplyTemporalSignalsSetsAgeAndOverdue(t *testing.T) {
 	}
 	if !finding.Risk.Overdue {
 		t.Fatal("expected overdue finding")
+	}
+	if finding.Risk.TrendScore <= 0 {
+		t.Fatalf("expected trend score, got %.2f", finding.Risk.TrendScore)
 	}
 }
 

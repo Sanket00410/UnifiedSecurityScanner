@@ -28,6 +28,7 @@ type stubAPIStore struct {
 	syncedAssets     models.SyncAssetProfilesResult
 	findingWaivers   []models.FindingWaiver
 	riskSummary      models.RiskSummary
+	remediation      models.RemediationAction
 	policy           models.Policy
 	policies         []models.Policy
 	policyVersions   []models.PolicyVersion
@@ -195,11 +196,28 @@ func (s *stubAPIStore) DecidePolicyApproval(context.Context, string, string, boo
 }
 
 func (s *stubAPIStore) ListRemediationsForTenant(context.Context, string, int) ([]models.RemediationAction, error) {
-	return nil, nil
+	if s.remediation.ID == "" {
+		return nil, nil
+	}
+	return []models.RemediationAction{s.remediation}, nil
+}
+
+func (s *stubAPIStore) GetRemediationForTenant(context.Context, string, string) (models.RemediationAction, bool, error) {
+	if s.remediation.ID == "" {
+		return models.RemediationAction{}, false, nil
+	}
+	return s.remediation, true, nil
 }
 
 func (s *stubAPIStore) CreateRemediationForTenant(context.Context, string, models.CreateRemediationRequest) (models.RemediationAction, error) {
-	return models.RemediationAction{}, nil
+	return s.remediation, nil
+}
+
+func (s *stubAPIStore) TransitionRemediationForTenant(context.Context, string, string, models.TransitionRemediationRequest) (models.RemediationAction, bool, error) {
+	if s.remediation.ID == "" {
+		return models.RemediationAction{}, false, nil
+	}
+	return s.remediation, true, nil
 }
 
 func TestAuthSessionRequiresBearerToken(t *testing.T) {

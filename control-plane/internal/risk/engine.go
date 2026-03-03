@@ -84,6 +84,7 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 	overallScore := clamp100(baseScore - (controlReduction * 4))
 	priority := priorityForScore(overallScore)
 	slaClass, slaDuration := slaForPriority(priority)
+	effectiveSeverity, severityReason := applySeverityOverrideRules(finding, overallScore)
 
 	referenceTime := finding.FirstSeenAt
 	if referenceTime.IsZero() {
@@ -93,6 +94,7 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 
 	finding.Risk = models.CanonicalRisk{
 		Priority:                     priority,
+		PriorityQueue:                priorityQueueFor(priority, slaClass),
 		OverallScore:                 overallScore,
 		BusinessImpact:               businessImpact,
 		Exploitability:               exploitability,
@@ -101,6 +103,8 @@ func EnrichWithInputs(finding models.CanonicalFinding, inputs Inputs) models.Can
 		AssetCriticality:             assetCriticality,
 		PolicyImpact:                 policyImpact,
 		CompensatingControlReduction: controlReduction,
+		EffectiveSeverity:            effectiveSeverity,
+		SeverityOverrideReason:       severityReason,
 		SLAClass:                     slaClass,
 		SLADueAt:                     &slaDueAt,
 	}
@@ -124,6 +128,7 @@ func ApplyWaiverReduction(finding models.CanonicalFinding, reduction float64) mo
 	slaClass, slaDuration := slaForPriority(priority)
 	finding.Risk.OverallScore = adjustedScore
 	finding.Risk.Priority = priority
+	finding.Risk.PriorityQueue = priorityQueueFor(priority, slaClass)
 	finding.Risk.SLAClass = slaClass
 
 	referenceTime := finding.FirstSeenAt
@@ -155,6 +160,7 @@ func ApplyTemporalSignals(finding models.CanonicalFinding, reference time.Time) 
 	if finding.Risk.SLADueAt != nil && !resolvedLikeStatus(finding.Status) {
 		finding.Risk.Overdue = reference.After(finding.Risk.SLADueAt.UTC())
 	}
+	finding.Risk.TrendScore = trendScoreForFinding(finding)
 
 	return finding
 }
@@ -490,6 +496,40 @@ func serviceCriticalityBoost(value string) float64 {
 	}
 }
 
+func applySeverityOverrideRules(finding models.CanonicalFinding, overallScore float64) (string, string) {
+	effective := strings.ToLower(strings.TrimSpace(finding.Severity))
+	if effective == "" {
+		effective = "medium"
+	}
+
+	overrideTo := ""
+	reason := ""
+	switch {
+	case strings.EqualFold(strings.TrimSpace(finding.Category), "exploit_confirmed"):
+		overrideTo = "critical"
+		reason = "exploit_confirmed"
+	case strings.EqualFold(strings.TrimSpace(finding.Category), "secret_exposure") &&
+		(strings.EqualFold(strings.TrimSpace(finding.Asset.Environment), "production") || strings.EqualFold(strings.TrimSpace(finding.Asset.Exposure), "internet")):
+		overrideTo = "critical"
+		reason = "secret_exposure_on_sensitive_asset"
+	case overallScore >= 90:
+		overrideTo = "critical"
+		reason = "risk_score_threshold"
+	case overallScore >= 75:
+		overrideTo = "high"
+		reason = "priority_threshold"
+	case overallScore >= 55:
+		overrideTo = "medium"
+		reason = "priority_threshold"
+	}
+
+	if severityWeight(overrideTo) > severityWeight(effective) {
+		return overrideTo, reason
+	}
+
+	return effective, ""
+}
+
 func severityBand(severity string) float64 {
 	switch strings.ToLower(strings.TrimSpace(severity)) {
 	case "critical":
@@ -502,6 +542,23 @@ func severityBand(severity string) float64 {
 		return 3.0
 	default:
 		return 1.0
+	}
+}
+
+func severityWeight(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "critical":
+		return 5
+	case "high":
+		return 4
+	case "medium":
+		return 3
+	case "low":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
 	}
 }
 
@@ -527,6 +584,18 @@ func confidenceMultiplier(confidence string) float64 {
 	}
 }
 
+func priorityQueueFor(priority string, slaClass string) string {
+	priority = strings.ToLower(strings.TrimSpace(priority))
+	slaClass = strings.ToLower(strings.TrimSpace(slaClass))
+	if priority == "" {
+		priority = "p4"
+	}
+	if slaClass == "" {
+		slaClass = "90d"
+	}
+	return "queue:" + priority + ":" + slaClass
+}
+
 func agingBucketForDays(ageDays int64) string {
 	switch {
 	case ageDays >= 90:
@@ -540,6 +609,25 @@ func agingBucketForDays(ageDays int64) string {
 	}
 }
 
+func trendScoreForFinding(finding models.CanonicalFinding) float64 {
+	score := 0.0
+	score += minFloat(10, float64(finding.OccurrenceCount)*1.25)
+	score += minFloat(10, float64(finding.ReopenedCount)*2.5)
+
+	switch {
+	case finding.Risk.AgeDays <= 7:
+		score += 2.5
+	case finding.Risk.AgeDays <= 30:
+		score += 1.0
+	}
+
+	if finding.Risk.Overdue {
+		score += 2.0
+	}
+
+	return clamp100(score)
+}
+
 func resolvedLikeStatus(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "resolved", "closed", "accepted", "suppressed":
@@ -547,6 +635,13 @@ func resolvedLikeStatus(value string) bool {
 	default:
 		return false
 	}
+}
+
+func minFloat(a float64, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func priorityForScore(score float64) string {

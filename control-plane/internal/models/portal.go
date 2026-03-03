@@ -412,3 +412,10 @@ type CreateRemediationRequest struct {
 	DueAt     *time.Time `json:"due_at,omitempty"`
 	Notes     string     `json:"notes,omitempty"`
 }
+
+type TransitionRemediationRequest struct {
+	Status string     `json:"status"`
+	Owner  string     `json:"owner,omitempty"`
+	DueAt  *time.Time `json:"due_at,omitempty"`
+	Notes  string     `json:"notes,omitempty"`
+}

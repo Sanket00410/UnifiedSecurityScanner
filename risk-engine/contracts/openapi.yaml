@@ -1,0 +1,150 @@
+openapi: 3.0.3
+info:
+  title: Unified Security Scanner Risk Engine API
+  version: 1.0.0
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      responses:
+        "200":
+          description: Service health
+  /v1/score:
+    post:
+      operationId: scoreFinding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScoreRequest"
+      responses:
+        "200":
+          description: Enriched finding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScoreResponse"
+  /v1/score/batch:
+    post:
+      operationId: scoreFindingsBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchScoreRequest"
+      responses:
+        "200":
+          description: Enriched findings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchScoreResponse"
+  /v1/queues:
+    get:
+      operationId: listRiskQueues
+      responses:
+        "200":
+          description: Priority queues
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QueueDescriptor"
+components:
+  schemas:
+    ScoreRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - finding
+      properties:
+        finding:
+          type: object
+        inputs:
+          $ref: "#/components/schemas/ScoreInputs"
+        reference_time:
+          type: string
+          format: date-time
+    ScoreInputs:
+      type: object
+      additionalProperties: false
+      properties:
+        environment_override:
+          type: string
+        exposure_override:
+          type: string
+        asset_criticality_override:
+          type: number
+        owner_team:
+          type: string
+        owner_hierarchy:
+          type: array
+          items:
+            type: string
+        service_name:
+          type: string
+        service_tier:
+          type: string
+        service_criticality_class:
+          type: string
+        external_source:
+          type: string
+        external_reference:
+          type: string
+        last_synced_at:
+          type: string
+          format: date-time
+        compensating_control_reduction:
+          type: number
+        waiver_reduction:
+          type: number
+    ScoreResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - finding
+      properties:
+        finding:
+          type: object
+    BatchScoreRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScoreRequest"
+    BatchScoreResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScoreResponse"
+    QueueDescriptor:
+      type: object
+      additionalProperties: false
+      required:
+        - priority
+        - sla_class
+        - queue
+      properties:
+        priority:
+          type: string
+        sla_class:
+          type: string
+        queue:
+          type: string

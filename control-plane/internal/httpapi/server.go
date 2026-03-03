@@ -60,7 +60,9 @@ type apiStore interface {
 	ListPolicyApprovalsForTenant(ctx context.Context, tenantID string, limit int) ([]models.PolicyApproval, error)
 	DecidePolicyApproval(ctx context.Context, tenantID string, approvalID string, approved bool, decidedBy string, reason string) (models.PolicyApproval, bool, error)
 	ListRemediationsForTenant(ctx context.Context, tenantID string, limit int) ([]models.RemediationAction, error)
+	GetRemediationForTenant(ctx context.Context, tenantID string, remediationID string) (models.RemediationAction, bool, error)
 	CreateRemediationForTenant(ctx context.Context, tenantID string, request models.CreateRemediationRequest) (models.RemediationAction, error)
+	TransitionRemediationForTenant(ctx context.Context, tenantID string, remediationID string, request models.TransitionRemediationRequest) (models.RemediationAction, bool, error)
 }
 
 func New(cfg config.Config, store apiStore) *Server {
@@ -121,6 +123,10 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionRemediationsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
 	}, "remediations", "remediation", server.handleRemediations))
+	mux.HandleFunc("/v1/remediations/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionRemediationsRead,
+		http.MethodPost: auth.PermissionRemediationsWrite,
+	}, "remediation", "remediation", server.handleRemediationRoute))
 	mux.HandleFunc("/v1/workers/register", server.withWorkerAuth(server.handleWorkerRegister))
 	mux.HandleFunc("/v1/workers/heartbeat", server.withWorkerAuth(server.handleWorkerHeartbeat))
 	mux.HandleFunc("/app", server.handleAppRoot)
@@ -1016,6 +1022,80 @@ func (s *Server) handleRemediations(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleRemediationRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediations/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "remediation_route_not_found", "the requested remediation route was not found")
+		return
+	}
+
+	remediationID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		item, found, err := s.store.GetRemediationForTenant(r.Context(), principal.OrganizationID, remediationID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_remediation_failed", "remediation action could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, item)
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "transition" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		defer r.Body.Close()
+
+		var request models.TransitionRemediationRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.Status) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "status is required")
+			return
+		}
+
+		item, found, err := s.store.TransitionRemediationForTenant(r.Context(), principal.OrganizationID, remediationID, request)
+		if err != nil {
+			if errors.Is(err, jobs.ErrInvalidRemediationTransition) {
+				s.writeError(w, http.StatusConflict, "invalid_remediation_transition", "the requested remediation transition is not allowed")
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "transition_remediation_failed", "remediation action could not be transitioned")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, item)
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "remediation_route_not_found", "the requested remediation route was not found")
+}
+
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal) {
 	defer r.Body.Close()
 
@@ -1184,6 +1264,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/policy-approvals/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/policy-approvals/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/remediations/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediations/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

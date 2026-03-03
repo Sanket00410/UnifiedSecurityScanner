@@ -361,6 +361,37 @@ func (s *Store) ListRemediationsForTenant(ctx context.Context, organizationID st
 	return out, nil
 }
 
+func (s *Store) GetRemediationForTenant(ctx context.Context, organizationID string, remediationID string) (models.RemediationAction, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT tenant_id, id, finding_id, title, status, owner, due_at, notes, created_at, updated_at
+		FROM remediation_actions
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, strings.TrimSpace(organizationID), strings.TrimSpace(remediationID))
+
+	var item models.RemediationAction
+	err := row.Scan(
+		&item.TenantID,
+		&item.ID,
+		&item.FindingID,
+		&item.Title,
+		&item.Status,
+		&item.Owner,
+		&item.DueAt,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		if isNoRows(err) {
+			return models.RemediationAction{}, false, nil
+		}
+		return models.RemediationAction{}, false, fmt.Errorf("get tenant remediation: %w", err)
+	}
+
+	return item, true, nil
+}
+
 func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID string, request models.CreateRemediationRequest) (models.RemediationAction, error) {
 	now := time.Now().UTC()
 	item := models.RemediationAction{
@@ -376,8 +407,16 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 		UpdatedAt: now,
 	}
 
+	item.Status = normalizeRemediationStatus(item.Status)
 	if item.Status == "" {
 		item.Status = "open"
+	}
+	if item.DueAt == nil {
+		derivedDueAt, err := s.deriveRemediationDueAt(ctx, item.TenantID, item.FindingID)
+		if err != nil {
+			return models.RemediationAction{}, err
+		}
+		item.DueAt = derivedDueAt
 	}
 
 	_, err := s.pool.Exec(ctx, `
@@ -392,4 +431,186 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 	}
 
 	return item, nil
+}
+
+func (s *Store) TransitionRemediationForTenant(ctx context.Context, organizationID string, remediationID string, request models.TransitionRemediationRequest) (models.RemediationAction, bool, error) {
+	now := time.Now().UTC()
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.RemediationAction{}, false, fmt.Errorf("begin remediation transition tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var item models.RemediationAction
+	err = tx.QueryRow(ctx, `
+		SELECT tenant_id, id, finding_id, title, status, owner, due_at, notes, created_at, updated_at
+		FROM remediation_actions
+		WHERE tenant_id = $1
+		  AND id = $2
+		FOR UPDATE
+	`, strings.TrimSpace(organizationID), strings.TrimSpace(remediationID)).Scan(
+		&item.TenantID,
+		&item.ID,
+		&item.FindingID,
+		&item.Title,
+		&item.Status,
+		&item.Owner,
+		&item.DueAt,
+		&item.Notes,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		if isNoRows(err) {
+			return models.RemediationAction{}, false, nil
+		}
+		return models.RemediationAction{}, false, fmt.Errorf("load remediation for transition: %w", err)
+	}
+
+	nextStatus := normalizeRemediationStatus(request.Status)
+	if !isValidRemediationTransition(item.Status, nextStatus) {
+		return models.RemediationAction{}, false, ErrInvalidRemediationTransition
+	}
+
+	if strings.TrimSpace(request.Owner) != "" {
+		item.Owner = strings.TrimSpace(request.Owner)
+	}
+	if request.DueAt != nil {
+		item.DueAt = request.DueAt
+	}
+	if strings.TrimSpace(request.Notes) != "" {
+		if strings.TrimSpace(item.Notes) == "" {
+			item.Notes = strings.TrimSpace(request.Notes)
+		} else {
+			item.Notes = item.Notes + "\n" + strings.TrimSpace(request.Notes)
+		}
+	}
+	item.Status = nextStatus
+	item.UpdatedAt = now
+
+	_, err = tx.Exec(ctx, `
+		UPDATE remediation_actions
+		SET status = $2,
+		    owner = $3,
+		    due_at = $4,
+		    notes = $5,
+		    updated_at = $6
+		WHERE id = $1
+	`, item.ID, item.Status, item.Owner, item.DueAt, item.Notes, item.UpdatedAt)
+	if err != nil {
+		return models.RemediationAction{}, false, fmt.Errorf("update remediation transition: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.RemediationAction{}, false, fmt.Errorf("commit remediation transition tx: %w", err)
+	}
+
+	return item, true, nil
+}
+
+func (s *Store) deriveRemediationDueAt(ctx context.Context, organizationID string, findingID string) (*time.Time, error) {
+	var payload []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT finding_json
+		FROM normalized_findings
+		WHERE tenant_id = $1
+		  AND finding_id = $2
+	`, strings.TrimSpace(organizationID), strings.TrimSpace(findingID)).Scan(&payload)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load finding for remediation due date: %w", err)
+	}
+
+	var finding models.CanonicalFinding
+	if err := json.Unmarshal(payload, &finding); err != nil {
+		return nil, fmt.Errorf("decode finding for remediation due date: %w", err)
+	}
+	if finding.Risk.SLADueAt == nil {
+		return nil, nil
+	}
+
+	dueAt := finding.Risk.SLADueAt.UTC()
+	return &dueAt, nil
+}
+
+func normalizeRemediationStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "open":
+		return "open"
+	case "assigned":
+		return "assigned"
+	case "in_progress", "in-progress":
+		return "in_progress"
+	case "blocked":
+		return "blocked"
+	case "ready_for_verify", "ready-for-verify":
+		return "ready_for_verify"
+	case "verified":
+		return "verified"
+	case "accepted_risk", "accepted-risk":
+		return "accepted_risk"
+	case "closed":
+		return "closed"
+	default:
+		return ""
+	}
+}
+
+func isValidRemediationTransition(current string, next string) bool {
+	current = normalizeRemediationStatus(current)
+	next = normalizeRemediationStatus(next)
+	if next == "" {
+		return false
+	}
+	if current == next {
+		return true
+	}
+
+	allowed := map[string]map[string]struct{}{
+		"open": {
+			"assigned":      {},
+			"in_progress":   {},
+			"blocked":       {},
+			"accepted_risk": {},
+			"closed":        {},
+		},
+		"assigned": {
+			"in_progress":      {},
+			"blocked":          {},
+			"ready_for_verify": {},
+			"accepted_risk":    {},
+		},
+		"in_progress": {
+			"blocked":          {},
+			"ready_for_verify": {},
+			"accepted_risk":    {},
+		},
+		"blocked": {
+			"assigned":      {},
+			"in_progress":   {},
+			"accepted_risk": {},
+		},
+		"ready_for_verify": {
+			"verified":    {},
+			"in_progress": {},
+			"blocked":     {},
+		},
+		"verified": {
+			"closed": {},
+		},
+		"accepted_risk": {
+			"closed": {},
+		},
+	}
+
+	nextSet, ok := allowed[current]
+	if !ok {
+		return false
+	}
+	_, ok = nextSet[next]
+	return ok
 }
