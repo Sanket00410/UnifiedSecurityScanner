@@ -15,13 +15,19 @@ func TestEvaluateSubmissionRequiresApprovalForRestrictedTool(t *testing.T) {
 			Enabled: true,
 			Scope:   "runtime",
 			Mode:    "enforce",
-			Rules: []string{
-				"require_approval:metasploit",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "require_approval",
+					Field:  "tool",
+					Match:  "exact",
+					Values: []string{"metasploit"},
+				},
 			},
 		},
 	}, models.CreateScanJobRequest{
 		TargetKind: "domain",
 		Profile:    "default",
+		Target:     "example.com",
 	}, []string{"metasploit"})
 
 	if rejection != nil {
@@ -46,13 +52,19 @@ func TestEvaluateSubmissionRejectsBlockedTool(t *testing.T) {
 			Enabled: true,
 			Scope:   "global",
 			Mode:    "enforce",
-			Rules: []string{
-				"block_tool:metasploit",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "block",
+					Field:  "tool",
+					Match:  "exact",
+					Values: []string{"metasploit"},
+				},
 			},
 		},
 	}, models.CreateScanJobRequest{
 		TargetKind: "domain",
 		Profile:    "default",
+		Target:     "example.com",
 	}, []string{"metasploit"})
 
 	if rejection == nil {
@@ -72,18 +84,81 @@ func TestEvaluateSubmissionHonorsAllowLists(t *testing.T) {
 			Enabled: true,
 			Scope:   "repository",
 			Mode:    "enforce",
-			Rules: []string{
-				"allow_tool:semgrep",
-				"allow_target:repository",
-				"allow_profile:enterprise",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "allow",
+					Field:  "tool",
+					Match:  "exact",
+					Values: []string{"semgrep"},
+				},
+				{
+					Effect: "allow",
+					Field:  "target_kind",
+					Match:  "exact",
+					Values: []string{"repository"},
+				},
+				{
+					Effect: "allow",
+					Field:  "profile",
+					Match:  "exact",
+					Values: []string{"enterprise"},
+				},
 			},
 		},
 	}, models.CreateScanJobRequest{
 		TargetKind: "repository",
 		Profile:    "default",
+		Target:     "C:/repo",
 	}, []string{"semgrep"})
 
 	if rejection == nil {
 		t.Fatal("expected profile allow-list mismatch to be rejected")
+	}
+	if rejection.Reason != "scan profile is not allow-listed by enforced policy" {
+		t.Fatalf("unexpected rejection reason: %s", rejection.Reason)
+	}
+}
+
+func TestEvaluateSubmissionSupportsMatchTypesAndExceptions(t *testing.T) {
+	t.Parallel()
+
+	plan, rejection := EvaluateSubmission([]models.Policy{
+		{
+			ID:      "policy-4",
+			Enabled: true,
+			Scope:   "runtime",
+			Mode:    "enforce",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "require_approval",
+					Field:  "tool",
+					Match:  "prefix",
+					Values: []string{"meta"},
+					Exceptions: []models.PolicyRuleException{
+						{
+							Field:  "target",
+							Match:  "suffix",
+							Values: []string{".internal"},
+						},
+					},
+				},
+			},
+		},
+	}, models.CreateScanJobRequest{
+		TargetKind: "domain",
+		Profile:    "default",
+		Target:     "portal.internal",
+	}, []string{"metasploit"})
+
+	if rejection != nil {
+		t.Fatalf("unexpected rejection: %v", rejection)
+	}
+
+	decision := plan.Decisions["metasploit"]
+	if decision.Status != TaskDecisionApproved {
+		t.Fatalf("expected exception to keep task approved, got %s", decision.Status)
+	}
+	if plan.ApprovalMode != "standard" {
+		t.Fatalf("unexpected approval mode: %s", plan.ApprovalMode)
 	}
 }

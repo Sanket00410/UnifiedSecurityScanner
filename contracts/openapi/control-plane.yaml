@@ -964,7 +964,7 @@ components:
         rules:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/PolicyRule"
         updated_by:
           type: string
         created_at:
@@ -990,7 +990,7 @@ components:
         rules:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/PolicyRule"
         updated_by:
           type: string
         global:
@@ -1012,9 +1012,74 @@ components:
         rules:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/PolicyRule"
         updated_by:
           type: string
+    PolicyRule:
+      type: object
+      additionalProperties: false
+      required:
+        - effect
+        - field
+        - match
+        - values
+      properties:
+        effect:
+          type: string
+          enum:
+            - allow
+            - block
+            - require_approval
+            - monitor
+        field:
+          type: string
+          enum:
+            - tool
+            - target
+            - target_kind
+            - profile
+        match:
+          type: string
+          enum:
+            - exact
+            - prefix
+            - suffix
+            - contains
+            - any
+        values:
+          type: array
+          items:
+            type: string
+        exceptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PolicyRuleException"
+    PolicyRuleException:
+      type: object
+      additionalProperties: false
+      required:
+        - match
+        - values
+      properties:
+        field:
+          type: string
+          enum:
+            - tool
+            - target
+            - target_kind
+            - profile
+        match:
+          type: string
+          enum:
+            - exact
+            - prefix
+            - suffix
+            - contains
+            - any
+        values:
+          type: array
+          items:
+            type: string
     PolicyVersion:
       type: object
       additionalProperties: false

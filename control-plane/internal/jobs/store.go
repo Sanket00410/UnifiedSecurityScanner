@@ -1028,24 +1028,8 @@ func sanitizeTools(tools []string) []string {
 	return out
 }
 
-func sanitizeRuleList(rules []string) []string {
-	seen := make(map[string]struct{}, len(rules))
-	out := make([]string, 0, len(rules))
-
-	for _, rule := range rules {
-		normalized := strings.TrimSpace(rule)
-		if normalized == "" {
-			continue
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-
-		seen[normalized] = struct{}{}
-		out = append(out, normalized)
-	}
-
-	return out
+func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
+	return models.NormalizePolicyRuleSet([]models.PolicyRule(rules))
 }
 
 func defaultToolsForTargetKind(targetKind string) []string {

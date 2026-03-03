@@ -33,6 +33,11 @@ type Rejection struct {
 	RuleHits []string
 }
 
+type boundRule struct {
+	PolicyID string
+	Rule     models.PolicyRule
+}
+
 func EvaluateSubmission(policies []models.Policy, request models.CreateScanJobRequest, tools []string) (Plan, *Rejection) {
 	applicable := applicablePolicies(policies, request)
 	enforced := make([]models.Policy, 0, len(applicable))
@@ -42,82 +47,15 @@ func EvaluateSubmission(policies []models.Policy, request models.CreateScanJobRe
 		}
 	}
 
-	targetAllow := make(map[string]string)
-	targetAllowHits := make(map[string]string)
-	targetBlock := make(map[string]string)
-	targetBlockHits := make(map[string]string)
-	profileAllow := make(map[string]string)
-	profileAllowHits := make(map[string]string)
-	profileBlock := make(map[string]string)
-	profileBlockHits := make(map[string]string)
-	toolAllow := make(map[string]string)
-	toolAllowHits := make(map[string]string)
-	toolBlock := make(map[string]string)
-	toolBlockHits := make(map[string]string)
-	toolApproval := make(map[string]string)
-	toolApprovalHits := make(map[string]string)
-
-	for _, policy := range enforced {
-		for _, rule := range policy.Rules {
-			kind, value := splitRule(rule)
-			switch kind {
-			case "allow_target":
-				targetAllow[value] = policy.ID
-				targetAllowHits[value] = rule
-			case "block_target":
-				targetBlock[value] = policy.ID
-				targetBlockHits[value] = rule
-			case "allow_profile":
-				profileAllow[value] = policy.ID
-				profileAllowHits[value] = rule
-			case "block_profile":
-				profileBlock[value] = policy.ID
-				profileBlockHits[value] = rule
-			case "allow_tool":
-				toolAllow[value] = policy.ID
-				toolAllowHits[value] = rule
-			case "block_tool":
-				toolBlock[value] = policy.ID
-				toolBlockHits[value] = rule
-			case "require_approval":
-				toolApproval[value] = policy.ID
-				toolApprovalHits[value] = rule
-			}
-		}
+	jobContext := map[string]string{
+		"target_kind": strings.ToLower(strings.TrimSpace(request.TargetKind)),
+		"profile":     strings.ToLower(strings.TrimSpace(request.Profile)),
+		"target":      strings.ToLower(strings.TrimSpace(request.Target)),
 	}
 
-	targetKind := strings.ToLower(strings.TrimSpace(request.TargetKind))
-	profile := strings.ToLower(strings.TrimSpace(request.Profile))
-	if len(targetAllow) > 0 {
-		if _, ok := targetAllow[targetKind]; !ok {
-			return Plan{}, &Rejection{
-				PolicyID: firstPolicyID(targetAllow),
-				Reason:   "target kind is not allow-listed by enforced policy",
-				RuleHits: []string{firstRule(targetAllowHits)},
-			}
-		}
-	}
-	if policyID, blocked := targetBlock[targetKind]; blocked {
-		return Plan{}, &Rejection{
-			PolicyID: policyID,
-			Reason:   "target kind is blocked by enforced policy",
-			RuleHits: []string{targetBlockHits[targetKind]},
-		}
-	}
-	if len(profileAllow) > 0 {
-		if _, ok := profileAllow[profile]; !ok {
-			return Plan{}, &Rejection{
-				PolicyID: firstPolicyID(profileAllow),
-				Reason:   "scan profile is not allow-listed by enforced policy",
-				RuleHits: []string{firstRule(profileAllowHits)},
-			}
-		}
-	}
-	if policyID, blocked := profileBlock[profile]; blocked {
-		return Plan{}, &Rejection{
-			PolicyID: policyID,
-			Reason:   "scan profile is blocked by enforced policy",
-			RuleHits: []string{profileBlockHits[profile]},
+	for _, field := range []string{"target_kind", "profile", "target"} {
+		if rejection := evaluateFieldRules(enforced, field, jobContext); rejection != nil {
+			return Plan{}, rejection
 		}
 	}
 
@@ -132,33 +70,36 @@ func EvaluateSubmission(policies []models.Policy, request models.CreateScanJobRe
 			continue
 		}
 
-		if len(toolAllow) > 0 {
-			if _, ok := toolAllow[normalizedTool]; !ok {
-				return Plan{}, &Rejection{
-					PolicyID: firstPolicyID(toolAllow),
-					Reason:   "requested tool is not allow-listed by enforced policy",
-					RuleHits: []string{firstRule(toolAllowHits)},
-				}
-			}
+		toolContext := map[string]string{
+			"tool":        normalizedTool,
+			"target_kind": jobContext["target_kind"],
+			"profile":     jobContext["profile"],
+			"target":      jobContext["target"],
 		}
-		if policyID, blocked := toolBlock[normalizedTool]; blocked {
-			return Plan{}, &Rejection{
-				PolicyID: policyID,
-				Reason:   "requested tool is blocked by enforced policy",
-				RuleHits: []string{toolBlockHits[normalizedTool]},
-			}
+
+		if rejection := evaluateFieldRules(enforced, "tool", toolContext); rejection != nil {
+			return Plan{}, rejection
 		}
 
 		decision := TaskDecision{
 			Tool:   normalizedTool,
 			Status: TaskDecisionApproved,
 		}
-		if policyID, requiresApproval := toolApproval[normalizedTool]; requiresApproval {
+
+		for _, item := range matchingRules(enforced, "tool", "require_approval", toolContext) {
 			decision.Status = TaskDecisionPendingApproval
-			decision.PolicyID = policyID
-			decision.Reason = "restricted adapter requires explicit approval before dispatch"
-			decision.RuleHits = []string{toolApprovalHits[normalizedTool]}
+			if decision.PolicyID == "" {
+				decision.PolicyID = item.PolicyID
+				decision.Reason = "restricted adapter requires explicit approval before dispatch"
+			}
+			decision.RuleHits = append(decision.RuleHits, summarizeRule(item.Rule))
+		}
+		if decision.Status == TaskDecisionPendingApproval {
 			plan.ApprovalMode = "manual-approval"
+		}
+
+		for _, item := range matchingRules(applicable, "tool", "monitor", toolContext) {
+			decision.Monitored = append(decision.Monitored, summarizeRule(item.Rule))
 		}
 
 		plan.Decisions[normalizedTool] = decision
@@ -206,25 +147,187 @@ func isEnforced(mode string) bool {
 	}
 }
 
-func splitRule(rule string) (string, string) {
-	normalized := strings.ToLower(strings.TrimSpace(rule))
-	parts := strings.SplitN(normalized, ":", 2)
-	if len(parts) != 2 {
-		return normalized, ""
+func evaluateFieldRules(policies []models.Policy, field string, ctx map[string]string) *Rejection {
+	allowRules := rulesForField(policies, field, "allow")
+	if len(allowRules) > 0 {
+		matchedAllowRules := filterMatchingRules(allowRules, ctx)
+		if len(matchedAllowRules) == 0 {
+			return &Rejection{
+				PolicyID: allowRules[0].PolicyID,
+				Reason:   rejectionReason(field, "allow"),
+				RuleHits: summarizeBoundRules(allowRules),
+			}
+		}
 	}
-	return parts[0], strings.TrimSpace(parts[1])
+
+	blockRules := filterMatchingRules(rulesForField(policies, field, "block"), ctx)
+	if len(blockRules) > 0 {
+		return &Rejection{
+			PolicyID: blockRules[0].PolicyID,
+			Reason:   rejectionReason(field, "block"),
+			RuleHits: summarizeBoundRules(blockRules),
+		}
+	}
+
+	return nil
 }
 
-func firstPolicyID(items map[string]string) string {
-	for _, policyID := range items {
-		return policyID
-	}
-	return ""
+func matchingRules(policies []models.Policy, field string, effect string, ctx map[string]string) []boundRule {
+	return filterMatchingRules(rulesForField(policies, field, effect), ctx)
 }
 
-func firstRule(items map[string]string) string {
-	for _, rule := range items {
-		return rule
+func rulesForField(policies []models.Policy, field string, effect string) []boundRule {
+	out := make([]boundRule, 0)
+	for _, policy := range policies {
+		for _, rule := range policy.Rules {
+			if strings.ToLower(strings.TrimSpace(rule.Effect)) != effect {
+				continue
+			}
+			if normalizeField(rule.Field) != field {
+				continue
+			}
+			out = append(out, boundRule{
+				PolicyID: policy.ID,
+				Rule:     rule,
+			})
+		}
 	}
-	return ""
+	return out
+}
+
+func filterMatchingRules(rules []boundRule, ctx map[string]string) []boundRule {
+	out := make([]boundRule, 0, len(rules))
+	for _, item := range rules {
+		if !ruleMatches(item.Rule, ctx) {
+			continue
+		}
+		if ruleExcepted(item.Rule, ctx) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func ruleMatches(rule models.PolicyRule, ctx map[string]string) bool {
+	field := normalizeField(rule.Field)
+	value := strings.ToLower(strings.TrimSpace(ctx[field]))
+	if field == "" {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(rule.Match)) == "any" {
+		return true
+	}
+	if len(rule.Values) == 0 {
+		return false
+	}
+
+	for _, candidate := range rule.Values {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		switch strings.ToLower(strings.TrimSpace(rule.Match)) {
+		case "", "exact":
+			if value == candidate {
+				return true
+			}
+		case "prefix":
+			if strings.HasPrefix(value, candidate) {
+				return true
+			}
+		case "suffix":
+			if strings.HasSuffix(value, candidate) {
+				return true
+			}
+		case "contains":
+			if strings.Contains(value, candidate) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func ruleExcepted(rule models.PolicyRule, ctx map[string]string) bool {
+	for _, exception := range rule.Exceptions {
+		field := normalizeField(exception.Field)
+		if field == "" {
+			field = normalizeField(rule.Field)
+		}
+
+		matcher := models.PolicyRule{
+			Field:  field,
+			Match:  exception.Match,
+			Values: exception.Values,
+		}
+		if ruleMatches(matcher, ctx) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeField(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "tool":
+		return "tool"
+	case "target":
+		return "target"
+	case "target_kind":
+		return "target_kind"
+	case "profile":
+		return "profile"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func rejectionReason(field string, effect string) string {
+	switch field {
+	case "tool":
+		if effect == "allow" {
+			return "requested tool is not allow-listed by enforced policy"
+		}
+		return "requested tool is blocked by enforced policy"
+	case "target_kind":
+		if effect == "allow" {
+			return "target kind is not allow-listed by enforced policy"
+		}
+		return "target kind is blocked by enforced policy"
+	case "profile":
+		if effect == "allow" {
+			return "scan profile is not allow-listed by enforced policy"
+		}
+		return "scan profile is blocked by enforced policy"
+	case "target":
+		if effect == "allow" {
+			return "scan target is not allow-listed by enforced policy"
+		}
+		return "scan target is blocked by enforced policy"
+	default:
+		if effect == "allow" {
+			return "requested operation is not allow-listed by enforced policy"
+		}
+		return "requested operation is blocked by enforced policy"
+	}
+}
+
+func summarizeRule(rule models.PolicyRule) string {
+	match := strings.ToLower(strings.TrimSpace(rule.Match))
+	if match == "" {
+		match = "exact"
+	}
+
+	values := strings.Join(rule.Values, ",")
+	if values == "" {
+		values = "*"
+	}
+	return strings.ToLower(strings.TrimSpace(rule.Effect)) + ":" + normalizeField(rule.Field) + ":" + match + ":" + values
+}
+
+func summarizeBoundRules(rules []boundRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, item := range rules {
+		out = append(out, summarizeRule(item.Rule))
+	}
+	return out
 }

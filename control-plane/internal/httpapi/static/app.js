@@ -88,6 +88,48 @@ function makeCard(title, body, meta, severity) {
   return card;
 }
 
+function formatRuleClause(field, match, values) {
+  const normalizedValues = Array.isArray(values) && values.length ? values.join("|") : "*";
+  return `${field || "unknown"} ${match || "exact"} ${normalizedValues}`;
+}
+
+function formatPolicyRule(rule) {
+  if (typeof rule === "string") {
+    return rule;
+  }
+  if (!rule || typeof rule !== "object") {
+    return "";
+  }
+
+  const head = `${rule.effect || "monitor"} ${formatRuleClause(rule.field, rule.match, rule.values)}`;
+  const exceptions = Array.isArray(rule.exceptions) ? rule.exceptions : [];
+  if (!exceptions.length) {
+    return head;
+  }
+
+  const renderedExceptions = exceptions
+    .map((item) => `except ${formatRuleClause(item.field || rule.field, item.match, item.values)}`)
+    .filter(Boolean);
+  if (!renderedExceptions.length) {
+    return head;
+  }
+
+  return `${head}; ${renderedExceptions.join("; ")}`;
+}
+
+function formatPolicyRules(rules) {
+  if (!Array.isArray(rules) || !rules.length) {
+    return "No explicit rules configured.";
+  }
+
+  const rendered = rules.map((item) => formatPolicyRule(item)).filter(Boolean);
+  if (!rendered.length) {
+    return "No explicit rules configured.";
+  }
+
+  return rendered.join(", ");
+}
+
 function updateSession(session) {
   const user = document.getElementById("session-user");
   const org = document.getElementById("session-org");
@@ -168,7 +210,7 @@ async function boot() {
     renderList("policies", policies, (item) =>
       makeCard(
         item.name,
-        item.rules?.length ? item.rules.join(", ") : "No explicit rules configured.",
+        formatPolicyRules(item.rules),
         [
           item.scope || "global",
           item.mode || "monitor",
