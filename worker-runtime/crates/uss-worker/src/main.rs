@@ -383,6 +383,17 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "gosec".to_string(),
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "go_repo".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sast".to_string(), "go".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "bandit".to_string(),
             supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
@@ -445,6 +456,13 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["code".to_string(), "iac".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "hadolint".to_string(),
+            supported_target_kinds: vec!["dockerfile".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["iac".to_string(), "container".to_string()],
             linux_preferred: false,
         },
     ]

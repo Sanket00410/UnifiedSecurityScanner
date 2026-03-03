@@ -229,13 +229,13 @@ func normalizeLayer(current string, adapterID string) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
-	case "semgrep", "bandit":
+	case "semgrep", "gosec", "bandit":
 		return "sast"
 	case "trivy", "trivy-image", "grype":
 		return "sca"
 	case "trivy-secrets", "gitleaks":
 		return "secrets"
-	case "trivy-config", "checkov":
+	case "trivy-config", "checkov", "hadolint":
 		return "iac"
 	case "zap":
 		return "dast"
@@ -291,7 +291,14 @@ func normalizeExposure(current string, assetType string, assetName string) strin
 }
 
 func normalizeAssetType(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "go_repo":
+		return "repo"
+	case "container_image":
+		return "image"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func containsAny(value string, parts ...string) bool {

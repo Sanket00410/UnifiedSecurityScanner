@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseMetasploit(ctx, evidencePaths)
 	case "semgrep":
 		return parseSemgrep(ctx, evidencePaths)
+	case "gosec":
+		return parseGosec(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
 	case "trivy":
@@ -54,6 +57,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseGitleaks(ctx, evidencePaths)
 	case "checkov":
 		return parseCheckov(ctx, evidencePaths)
+	case "hadolint":
+		return parseHadolint(ctx, evidencePaths)
 	default:
 		return nil, fmt.Errorf("unsupported parser for adapter %s", adapterID)
 	}
@@ -274,6 +279,82 @@ func parseSemgrep(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 				Ref:     path,
 				Summary: "Semgrep rule match",
 			}))
+		}
+	}
+
+	return findings, nil
+}
+
+func parseGosec(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type gosecCWE struct {
+		ID int `json:"id"`
+	}
+	type gosecIssue struct {
+		Severity   string   `json:"severity"`
+		Confidence string   `json:"confidence"`
+		CWE        gosecCWE `json:"cwe"`
+		RuleID     string   `json:"rule_id"`
+		Details    string   `json:"details"`
+		File       string   `json:"file"`
+		Line       string   `json:"line"`
+		Column     string   `json:"column"`
+	}
+	type gosecOutput struct {
+		Issues []gosecIssue `json:"Issues"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open gosec evidence %s: %w", path, err)
+		}
+
+		var payload gosecOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode gosec evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Issues {
+			title := strings.TrimSpace(item.Details)
+			if title == "" {
+				title = strings.TrimSpace(item.RuleID)
+			}
+
+			line := parseStringInt(item.Line)
+			column := parseStringInt(item.Column)
+			confidence := normalizeConfidence(item.Confidence)
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, normalizeSeverity(item.Severity, "medium"), confidence, models.CanonicalLocation{
+				Kind:   "file",
+				Path:   item.File,
+				Line:   line,
+				Column: column,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Gosec security rule match",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Refactor the insecure code path and replace it with a safer Go API or defensive control.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.RuleID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+			}
+			if item.CWE.ID > 0 {
+				finding.Tags = append(finding.Tags, fmt.Sprintf("cwe:%d", item.CWE.ID))
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 
@@ -903,6 +984,67 @@ func parseCheckov(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 	return findings, nil
 }
 
+func parseHadolint(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type hadolintIssue struct {
+		Code    string `json:"code"`
+		Column  int    `json:"column"`
+		File    string `json:"file"`
+		Level   string `json:"level"`
+		Line    int    `json:"line"`
+		Message string `json:"message"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open hadolint evidence %s: %w", path, err)
+		}
+
+		payload := make([]hadolintIssue, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode hadolint evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload {
+			title := strings.TrimSpace(item.Message)
+			if title == "" {
+				title = strings.TrimSpace(item.Code)
+			}
+
+			finding := baseFinding(ctx, now, "container_misconfiguration", title, hadolintSeverity(item.Level), "low", models.CanonicalLocation{
+				Kind:   "file",
+				Path:   item.File,
+				Line:   item.Line,
+				Column: item.Column,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Hadolint Dockerfile rule match",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Update the Dockerfile to satisfy the container build security rule.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.Code) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Code))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func zapSeverity(line string) (severity string, category string, ok bool) {
 	lower := strings.ToLower(line)
 	switch {
@@ -981,6 +1123,42 @@ func normalizeSeverity(value string, fallback string) string {
 	default:
 		return fallback
 	}
+}
+
+func normalizeConfidence(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high":
+		return "high"
+	case "low":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func hadolintSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error":
+		return "high"
+	case "warning", "warn":
+		return "medium"
+	case "style", "info", "ignore":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func parseStringInt(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func fixedVersionSummary(value string) string {

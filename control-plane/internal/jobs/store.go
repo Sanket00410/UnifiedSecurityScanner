@@ -1090,6 +1090,10 @@ func sanitizeRuleList(rules models.PolicyRuleSet) models.PolicyRuleSet {
 
 func defaultToolsForTargetKind(targetKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(targetKind)) {
+	case "go_repo":
+		return []string{"gosec"}
+	case "dockerfile":
+		return []string{"hadolint"}
 	case "repo", "repository", "codebase", "filesystem":
 		return []string{"semgrep", "bandit", "trivy", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "image", "container_image":
@@ -1138,7 +1142,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "bandit", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov":
+	case "semgrep", "gosec", "bandit", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1166,6 +1170,8 @@ func maxRuntimeForTool(tool string) int64 {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "semgrep":
 		return 300
+	case "gosec":
+		return 240
 	case "bandit":
 		return 240
 	case "trivy":
@@ -1182,6 +1188,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 180
 	case "checkov":
 		return 240
+	case "hadolint":
+		return 120
 	case "zap":
 		return 600
 	case "metasploit":

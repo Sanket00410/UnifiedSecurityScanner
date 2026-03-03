@@ -117,6 +117,39 @@ func TestParseSemgrepFixture(t *testing.T) {
 	}
 }
 
+func TestParseGosecFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("gosec", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-gosec",
+		AdapterID:  "gosec",
+		TargetKind: "go_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "gosec-results.json")})
+	if err != nil {
+		t.Fatalf("parse gosec fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority != "p3" {
+		t.Fatalf("expected p3 priority for gosec finding, got %s", finding.Risk.Priority)
+	}
+	if finding.Locations[0].Line != 42 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
 func TestParseBanditFixture(t *testing.T) {
 	t.Parallel()
 
@@ -366,5 +399,38 @@ func TestParseCheckovFixture(t *testing.T) {
 	}
 	if finding.Risk.SLAClass != "30d" {
 		t.Fatalf("expected 30d sla class for checkov finding, got %s", finding.Risk.SLAClass)
+	}
+}
+
+func TestParseHadolintFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("hadolint", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-hadolint",
+		AdapterID:  "hadolint",
+		TargetKind: "dockerfile",
+		Target:     "Dockerfile",
+	}, []string{filepath.Join("testdata", "hadolint-results.json")})
+	if err != nil {
+		t.Fatalf("parse hadolint fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "container_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for hadolint finding, got %s", finding.Risk.Priority)
+	}
+	if finding.Locations[0].Line != 4 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
 	}
 }

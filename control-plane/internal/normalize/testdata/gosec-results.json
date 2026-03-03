@@ -1,0 +1,16 @@
+{
+  "Issues": [
+    {
+      "severity": "HIGH",
+      "confidence": "HIGH",
+      "cwe": {
+        "id": 327
+      },
+      "rule_id": "G401",
+      "details": "Use of weak cryptographic primitive.",
+      "file": "cmd/api/main.go",
+      "line": "42",
+      "column": "3"
+    }
+  ]
+}

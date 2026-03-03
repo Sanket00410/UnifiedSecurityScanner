@@ -12,6 +12,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "nmap" => NmapAdapter.execute(request),
         "metasploit" => MetasploitAdapter.execute(request),
         "semgrep" => SemgrepAdapter.execute(request),
+        "gosec" => GosecAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
         "trivy-image" => TrivyImageAdapter.execute(request),
@@ -20,6 +21,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "grype" => GrypeAdapter.execute(request),
         "gitleaks" => GitleaksAdapter.execute(request),
         "checkov" => CheckovAdapter.execute(request),
+        "hadolint" => HadolintAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
     }
 }
@@ -28,6 +30,7 @@ struct ZapAdapter;
 struct NmapAdapter;
 struct MetasploitAdapter;
 struct SemgrepAdapter;
+struct GosecAdapter;
 struct BanditAdapter;
 struct TrivyAdapter;
 struct TrivyImageAdapter;
@@ -36,6 +39,7 @@ struct TrivySecretsAdapter;
 struct GrypeAdapter;
 struct GitleaksAdapter;
 struct CheckovAdapter;
+struct HadolintAdapter;
 
 impl ScannerAdapter for ZapAdapter {
     fn id(&self) -> &'static str {
@@ -79,6 +83,7 @@ impl ScannerAdapter for ZapAdapter {
             &report_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            None,
         )
     }
 }
@@ -118,6 +123,7 @@ impl ScannerAdapter for NmapAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path],
+            None,
         )
     }
 }
@@ -162,6 +168,7 @@ impl ScannerAdapter for MetasploitAdapter {
             &evidence_path,
             request.max_runtime_seconds,
             vec![evidence_path.clone()],
+            None,
         )
     }
 }
@@ -202,6 +209,46 @@ impl ScannerAdapter for SemgrepAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for GosecAdapter {
+    fn id(&self) -> &'static str {
+        "gosec"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "gosec-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "gosec-exec.log")?;
+        let binary = env::var("USS_GOSEC_CMD").unwrap_or_else(|_| "gosec".to_string());
+        let args = vec![
+            "-fmt".to_string(),
+            "json".to_string(),
+            "-out".to_string(),
+            report_path.to_string_lossy().to_string(),
+            "./...".to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            Some(Path::new(&request.target)),
         )
     }
 }
@@ -241,6 +288,7 @@ impl ScannerAdapter for BanditAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path],
+            None,
         )
     }
 }
@@ -415,6 +463,7 @@ impl ScannerAdapter for GrypeAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            None,
         )
     }
 }
@@ -456,6 +505,7 @@ impl ScannerAdapter for GitleaksAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path],
+            None,
         )
     }
 }
@@ -492,6 +542,45 @@ impl ScannerAdapter for CheckovAdapter {
             &report_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for HadolintAdapter {
+    fn id(&self) -> &'static str {
+        "hadolint"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "hadolint-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "hadolint-exec.log")?;
+        let binary = env::var("USS_HADOLINT_CMD").unwrap_or_else(|_| "hadolint".to_string());
+        let args = vec![
+            "--format".to_string(),
+            "json".to_string(),
+            request.target.clone(),
+        ];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            None,
         )
     }
 }
@@ -554,6 +643,7 @@ fn run_trivy_adapter(
         &log_path,
         request.max_runtime_seconds,
         vec![report_path],
+        None,
     )
 }
 
@@ -564,6 +654,7 @@ fn run_process(
     log_path: &Path,
     max_runtime_seconds: u64,
     reported_paths: Vec<PathBuf>,
+    working_dir: Option<&Path>,
 ) -> Result<AdapterResult, String> {
     let stdout_file = File::create(log_path).map_err(|err| format!("create log file: {err}"))?;
     let stderr_file = stdout_file
@@ -578,10 +669,15 @@ fn run_process(
             .collect::<Vec<_>>()
     };
 
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
+        .stderr(Stdio::from(stderr_file));
+    if let Some(dir) = working_dir {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .spawn()
         .map_err(|err| format!("spawn {adapter_id}: {err}"))?;
 
@@ -633,6 +729,7 @@ fn run_process_with_stdout_report(
     log_path: &Path,
     max_runtime_seconds: u64,
     reported_paths: Vec<PathBuf>,
+    working_dir: Option<&Path>,
 ) -> Result<AdapterResult, String> {
     let stdout_file =
         File::create(report_path).map_err(|err| format!("create report file: {err}"))?;
@@ -646,10 +743,15 @@ fn run_process_with_stdout_report(
             .collect::<Vec<_>>()
     };
 
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
+        .stderr(Stdio::from(stderr_file));
+    if let Some(dir) = working_dir {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .spawn()
         .map_err(|err| format!("spawn {adapter_id}: {err}"))?;
 
