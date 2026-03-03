@@ -753,3 +753,93 @@ func TestParseKubeSecFixture(t *testing.T) {
 		t.Fatalf("unexpected finding path: %s", finding.Locations[0].Path)
 	}
 }
+
+func TestParseDevSkimFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("devskim", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-devskim",
+		AdapterID:  "devskim",
+		TargetKind: "dotnet_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "devskim-results.json")})
+	if err != nil {
+		t.Fatalf("parse devskim fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sast" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "sast_rule_match" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 33 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}
+
+func TestParseDotnetAuditFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("dotnet-audit", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-dotnet-audit",
+		AdapterID:  "dotnet-audit",
+		TargetKind: "dotnet_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "dotnet-audit-results.json")})
+	if err != nil {
+		t.Fatalf("parse dotnet-audit fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "dependency_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected dotnet-audit finding to be risk-enriched")
+	}
+}
+
+func TestParseCFNLintFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("cfn-lint", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-cfn-lint",
+		AdapterID:  "cfn-lint",
+		TargetKind: "cloudformation",
+		Target:     "templates/app.yaml",
+	}, []string{filepath.Join("testdata", "cfn-lint-results.json")})
+	if err != nil {
+		t.Fatalf("parse cfn-lint fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 19 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+}

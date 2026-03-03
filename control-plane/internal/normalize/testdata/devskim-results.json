@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "ruleId": "DS137138",
+      "severity": "high",
+      "recommendation": "Avoid hardcoded weak cryptographic algorithms.",
+      "message": "Potential weak cryptography usage in .NET code.",
+      "fileName": "src/Payments/Crypto.cs",
+      "startLine": 33,
+      "startColumn": 17,
+      "tags": [
+        "cryptography",
+        "dotnet"
+      ]
+    }
+  ]
+}

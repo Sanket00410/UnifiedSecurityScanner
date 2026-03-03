@@ -1096,6 +1096,8 @@ func defaultToolsForTargetKind(targetKind string) []string {
 		return []string{"semgrep", "spotbugs", "pmd", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "node_repo":
 		return []string{"semgrep", "eslint", "trivy", "npm-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "dotnet_repo":
+		return []string{"semgrep", "devskim", "trivy", "dotnet-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "shell_script":
 		return []string{"shellcheck"}
 	case "dockerfile":
@@ -1104,6 +1106,8 @@ func defaultToolsForTargetKind(targetKind string) []string {
 		return []string{"tfsec", "kics", "trivy-config", "checkov"}
 	case "kubernetes":
 		return []string{"kube-score", "kubesec", "kics", "trivy-config", "checkov"}
+	case "cloudformation":
+		return []string{"cfn-lint", "kics", "trivy-config", "checkov"}
 	case "repo", "repository", "codebase", "filesystem":
 		return []string{"semgrep", "bandit", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "image", "container_image":
@@ -1152,7 +1156,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "bandit", "eslint", "shellcheck", "npm-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "hadolint", "kics", "kubesec", "kube-score", "tfsec":
+	case "semgrep", "gosec", "spotbugs", "pmd", "devskim", "bandit", "eslint", "shellcheck", "dotnet-audit", "npm-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "kubesec", "kube-score", "tfsec":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1186,6 +1190,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 360
 	case "pmd":
 		return 300
+	case "devskim":
+		return 300
 	case "bandit":
 		return 240
 	case "eslint":
@@ -1194,6 +1200,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 120
 	case "npm-audit":
 		return 180
+	case "dotnet-audit":
+		return 240
 	case "osv-scanner":
 		return 240
 	case "syft":
@@ -1212,6 +1220,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 180
 	case "checkov":
 		return 240
+	case "cfn-lint":
+		return 180
 	case "hadolint":
 		return 120
 	case "kics":

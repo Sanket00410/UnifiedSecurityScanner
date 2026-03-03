@@ -1,0 +1,24 @@
+{
+  "projects": [
+    {
+      "path": "src/Payments/Payments.csproj",
+      "frameworks": [
+        {
+          "topLevelPackages": [
+            {
+              "id": "Newtonsoft.Json",
+              "resolvedVersion": "12.0.1",
+              "vulnerabilities": [
+                {
+                  "severity": "high",
+                  "advisoryurl": "https://github.com/advisories/GHSA-5crp-9r3c-p9vr"
+                }
+              ]
+            }
+          ],
+          "transitivePackages": []
+        }
+      ]
+    }
+  ]
+}

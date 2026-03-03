@@ -15,9 +15,11 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "gosec" => GosecAdapter.execute(request),
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
+        "devskim" => DevSkimAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
         "eslint" => EslintAdapter.execute(request),
         "shellcheck" => ShellCheckAdapter.execute(request),
+        "dotnet-audit" => DotnetAuditAdapter.execute(request),
         "npm-audit" => NpmAuditAdapter.execute(request),
         "osv-scanner" => OsvScannerAdapter.execute(request),
         "syft" => SyftAdapter.execute(request),
@@ -28,6 +30,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "grype" => GrypeAdapter.execute(request),
         "gitleaks" => GitleaksAdapter.execute(request),
         "checkov" => CheckovAdapter.execute(request),
+        "cfn-lint" => CfnLintAdapter.execute(request),
         "hadolint" => HadolintAdapter.execute(request),
         "kics" => KicsAdapter.execute(request),
         "kubesec" => KubeSecAdapter.execute(request),
@@ -44,9 +47,11 @@ struct SemgrepAdapter;
 struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
+struct DevSkimAdapter;
 struct BanditAdapter;
 struct EslintAdapter;
 struct ShellCheckAdapter;
+struct DotnetAuditAdapter;
 struct NpmAuditAdapter;
 struct OsvScannerAdapter;
 struct SyftAdapter;
@@ -57,6 +62,7 @@ struct TrivySecretsAdapter;
 struct GrypeAdapter;
 struct GitleaksAdapter;
 struct CheckovAdapter;
+struct CfnLintAdapter;
 struct HadolintAdapter;
 struct KicsAdapter;
 struct KubeSecAdapter;
@@ -357,6 +363,46 @@ impl ScannerAdapter for PmdAdapter {
     }
 }
 
+impl ScannerAdapter for DevSkimAdapter {
+    fn id(&self) -> &'static str {
+        "devskim"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "devskim-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "devskim-exec.log")?;
+        let binary = env::var("USS_DEVSKIM_CMD").unwrap_or_else(|_| "devskim".to_string());
+        let args = vec![
+            "analyze".to_string(),
+            request.target.clone(),
+            "--output-format".to_string(),
+            "json".to_string(),
+            "--output-file".to_string(),
+            report_path.to_string_lossy().to_string(),
+        ];
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path],
+            None,
+        )
+    }
+}
+
 impl ScannerAdapter for BanditAdapter {
     fn id(&self) -> &'static str {
         "bandit"
@@ -505,6 +551,47 @@ impl ScannerAdapter for NpmAuditAdapter {
             request.max_runtime_seconds,
             vec![report_path.clone()],
             &[1],
+            Some(Path::new(&request.target)),
+        )
+    }
+}
+
+impl ScannerAdapter for DotnetAuditAdapter {
+    fn id(&self) -> &'static str {
+        "dotnet-audit"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "dotnet-audit-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "dotnet-audit-exec.log")?;
+        let binary = env::var("USS_DOTNET_CMD").unwrap_or_else(|_| "dotnet".to_string());
+        let args = vec![
+            "list".to_string(),
+            "package".to_string(),
+            "--vulnerable".to_string(),
+            "--include-transitive".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
+
+        run_process_with_stdout_report(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
             Some(Path::new(&request.target)),
         )
     }
@@ -914,6 +1001,41 @@ impl ScannerAdapter for CheckovAdapter {
             &report_path,
             request.max_runtime_seconds,
             vec![report_path.clone()],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for CfnLintAdapter {
+    fn id(&self) -> &'static str {
+        "cfn-lint"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "cfn-lint-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "cfn-lint-exec.log")?;
+        let binary = env::var("USS_CFN_LINT_CMD").unwrap_or_else(|_| "cfn-lint".to_string());
+        let args = vec!["-f".to_string(), "json".to_string(), request.target.clone()];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[2, 4],
             None,
         )
     }

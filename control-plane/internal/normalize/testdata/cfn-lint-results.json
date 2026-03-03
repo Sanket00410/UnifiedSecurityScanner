@@ -1,0 +1,14 @@
+[
+  {
+    "Rule": "E3002",
+    "Message": "Invalid property configuration in CloudFormation resource.",
+    "Level": "Error",
+    "Location": {
+      "Path": "templates/app.yaml",
+      "Start": {
+        "Line": 19,
+        "Column": 7
+      }
+    }
+  }
+]

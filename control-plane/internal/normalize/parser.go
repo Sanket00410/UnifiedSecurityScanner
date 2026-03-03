@@ -46,12 +46,16 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseSpotBugs(ctx, evidencePaths)
 	case "pmd":
 		return parsePmd(ctx, evidencePaths)
+	case "devskim":
+		return parseDevSkim(ctx, evidencePaths)
 	case "bandit":
 		return parseBandit(ctx, evidencePaths)
 	case "eslint":
 		return parseESLint(ctx, evidencePaths)
 	case "shellcheck":
 		return parseShellCheck(ctx, evidencePaths)
+	case "dotnet-audit":
+		return parseDotnetAudit(ctx, evidencePaths)
 	case "npm-audit":
 		return parseNPMAudit(ctx, evidencePaths)
 	case "osv-scanner":
@@ -72,6 +76,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseGitleaks(ctx, evidencePaths)
 	case "checkov":
 		return parseCheckov(ctx, evidencePaths)
+	case "cfn-lint":
+		return parseCFNLint(ctx, evidencePaths)
 	case "hadolint":
 		return parseHadolint(ctx, evidencePaths)
 	case "kics":
@@ -544,6 +550,79 @@ func parsePmd(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, e
 	return findings, nil
 }
 
+func parseDevSkim(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type devSkimResult struct {
+		RuleID         string   `json:"ruleId"`
+		Severity       string   `json:"severity"`
+		Recommendation string   `json:"recommendation"`
+		Message        string   `json:"message"`
+		FileName       string   `json:"fileName"`
+		StartLine      int      `json:"startLine"`
+		StartColumn    int      `json:"startColumn"`
+		Tags           []string `json:"tags"`
+	}
+	type devSkimOutput struct {
+		Results []devSkimResult `json:"results"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open devskim evidence %s: %w", path, err)
+		}
+
+		var payload devSkimOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode devskim evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload.Results {
+			title := firstNonEmptyString(item.Message, item.Recommendation, item.RuleID)
+			if title == "" {
+				title = "Potential .NET security issue"
+			}
+
+			finding := baseFinding(ctx, now, "sast_rule_match", title, normalizeSeverity(item.Severity, "medium"), "medium", models.CanonicalLocation{
+				Kind:   "file",
+				Path:   item.FileName,
+				Line:   item.StartLine,
+				Column: item.StartColumn,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "DevSkim security rule match",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Update the .NET code to satisfy the DevSkim security rule and remove the insecure pattern.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.RuleID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.RuleID))
+			}
+			for _, tag := range item.Tags {
+				trimmed := strings.TrimSpace(tag)
+				if trimmed == "" {
+					continue
+				}
+				finding.Tags = append(finding.Tags, "tag:"+strings.ToLower(trimmed))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func parseBandit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type banditResult struct {
 		Filename      string `json:"filename"`
@@ -747,6 +826,90 @@ func parseShellCheck(ctx Context, evidencePaths []string) ([]models.CanonicalFin
 			}
 
 			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
+func parseDotnetAudit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type dotnetAdvisory struct {
+		Severity    string `json:"severity"`
+		AdvisoryURL string `json:"advisoryurl"`
+	}
+	type dotnetPackage struct {
+		ID              string           `json:"id"`
+		ResolvedVersion string           `json:"resolvedVersion"`
+		Vulnerabilities []dotnetAdvisory `json:"vulnerabilities"`
+	}
+	type dotnetFramework struct {
+		TopLevelPackages   []dotnetPackage `json:"topLevelPackages"`
+		TransitivePackages []dotnetPackage `json:"transitivePackages"`
+	}
+	type dotnetProject struct {
+		Path       string            `json:"path"`
+		Frameworks []dotnetFramework `json:"frameworks"`
+	}
+	type dotnetAuditOutput struct {
+		Projects []dotnetProject `json:"projects"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open dotnet-audit evidence %s: %w", path, err)
+		}
+
+		var payload dotnetAuditOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode dotnet-audit evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, project := range payload.Projects {
+			for _, framework := range project.Frameworks {
+				packageSets := [][]dotnetPackage{framework.TopLevelPackages, framework.TransitivePackages}
+				for _, packages := range packageSets {
+					for _, pkg := range packages {
+						for _, advisory := range pkg.Vulnerabilities {
+							title := "Dependency vulnerability"
+							if strings.TrimSpace(pkg.ID) != "" {
+								title = fmt.Sprintf("Dependency vulnerability in %s", strings.TrimSpace(pkg.ID))
+							}
+
+							finding := baseFinding(ctx, now, "dependency_vulnerability", title, normalizeSeverity(advisory.Severity, "medium"), "high", models.CanonicalLocation{
+								Kind: "dependency",
+								Path: firstNonEmptyString(project.Path, "packages.lock.json"),
+							}, models.CanonicalEvidence{
+								Kind:    "json",
+								Ref:     path,
+								Summary: ".NET package vulnerability",
+							})
+							finding.Description = title
+							finding.Remediation = &models.CanonicalRemediation{
+								Summary:      "Upgrade the affected NuGet dependency to a fixed version and restore packages again.",
+								FixAvailable: true,
+								References:   nonEmptyStrings(advisory.AdvisoryURL),
+							}
+							if strings.TrimSpace(pkg.ID) != "" {
+								finding.Tags = append(finding.Tags, "package:"+strings.TrimSpace(pkg.ID))
+							}
+							if strings.TrimSpace(pkg.ResolvedVersion) != "" {
+								finding.Tags = append(finding.Tags, "version:"+strings.TrimSpace(pkg.ResolvedVersion))
+							}
+
+							findings = append(findings, finding)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -1509,6 +1672,73 @@ func parseCheckov(ctx Context, evidencePaths []string) ([]models.CanonicalFindin
 	return findings, nil
 }
 
+func parseCFNLint(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type cfnLocationStart struct {
+		Line   int `json:"line"`
+		Column int `json:"column"`
+	}
+	type cfnLocation struct {
+		Path  string           `json:"path"`
+		Start cfnLocationStart `json:"start"`
+	}
+	type cfnLintIssue struct {
+		Rule     string      `json:"Rule"`
+		Message  string      `json:"Message"`
+		Level    string      `json:"Level"`
+		Location cfnLocation `json:"Location"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open cfn-lint evidence %s: %w", path, err)
+		}
+
+		payload := make([]cfnLintIssue, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode cfn-lint evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload {
+			title := firstNonEmptyString(item.Message, item.Rule)
+			if title == "" {
+				title = "CloudFormation policy violation"
+			}
+
+			finding := baseFinding(ctx, now, "iac_misconfiguration", title, cfnLintSeverity(item.Level), "medium", models.CanonicalLocation{
+				Kind:   "file",
+				Path:   firstNonEmptyString(item.Location.Path, ctx.Target),
+				Line:   item.Location.Start.Line,
+				Column: item.Location.Start.Column,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "cfn-lint policy violation",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Update the CloudFormation template to satisfy the cfn-lint rule.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.Rule) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.Rule))
+			}
+
+			findings = append(findings, finding)
+		}
+	}
+
+	return findings, nil
+}
+
 func parseHadolint(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
 	type hadolintIssue struct {
 		Code    string `json:"code"`
@@ -2109,6 +2339,17 @@ func eslintSeverity(value int) string {
 		return "medium"
 	}
 	return "low"
+}
+
+func cfnLintSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "error":
+		return "high"
+	case "warning":
+		return "medium"
+	default:
+		return "low"
+	}
 }
 
 func shellCheckSeverity(value string) string {
