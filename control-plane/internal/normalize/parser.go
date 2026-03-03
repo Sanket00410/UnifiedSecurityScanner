@@ -46,6 +46,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseSpotBugs(ctx, evidencePaths)
 	case "pmd":
 		return parsePmd(ctx, evidencePaths)
+	case "bundler-audit":
+		return parseBundlerAudit(ctx, evidencePaths)
 	case "brakeman":
 		return parseBrakeman(ctx, evidencePaths)
 	case "devskim":
@@ -88,6 +90,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseHadolint(ctx, evidencePaths)
 	case "kics":
 		return parseKICS(ctx, evidencePaths)
+	case "prowler":
+		return parseProwler(ctx, evidencePaths)
 	case "kubesec":
 		return parseKubeSec(ctx, evidencePaths)
 	case "kube-score":
@@ -550,6 +554,75 @@ func parsePmd(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, e
 
 				findings = append(findings, finding)
 			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parseBundlerAudit(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type bundlerAdvisory struct {
+		ID          string `json:"id"`
+		Gem         string `json:"gem"`
+		Title       string `json:"title"`
+		CVE         string `json:"cve"`
+		URL         string `json:"url"`
+		Criticality string `json:"criticality"`
+	}
+	type bundlerAuditOutput struct {
+		Advisories []bundlerAdvisory `json:"advisories"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open bundler-audit evidence %s: %w", path, err)
+		}
+
+		var payload bundlerAuditOutput
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode bundler-audit evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, advisory := range payload.Advisories {
+			title := firstNonEmptyString(advisory.Title, advisory.ID)
+			if title == "" {
+				title = "Dependency vulnerability"
+			}
+
+			finding := baseFinding(ctx, now, "dependency_vulnerability", title, normalizeSeverity(advisory.Criticality, "medium"), "high", models.CanonicalLocation{
+				Kind: "dependency",
+				Path: "Gemfile.lock",
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Bundler dependency vulnerability",
+			})
+			finding.Description = title
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Upgrade the vulnerable Ruby gem to a fixed version and refresh Gemfile.lock.",
+				FixAvailable: true,
+				References:   nonEmptyStrings(advisory.URL),
+			}
+			if strings.TrimSpace(advisory.Gem) != "" {
+				finding.Tags = append(finding.Tags, "package:"+strings.TrimSpace(advisory.Gem))
+			}
+			if strings.TrimSpace(advisory.ID) != "" {
+				finding.Tags = append(finding.Tags, "advisory:"+strings.TrimSpace(advisory.ID))
+			}
+			if strings.TrimSpace(advisory.CVE) != "" {
+				finding.Tags = append(finding.Tags, "cve:"+strings.TrimSpace(advisory.CVE))
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 
@@ -2105,6 +2178,87 @@ func parseKICS(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, 
 
 				findings = append(findings, finding)
 			}
+		}
+	}
+
+	return findings, nil
+}
+
+func parseProwler(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type prowlerFinding struct {
+		Provider       string `json:"Provider"`
+		AccountID      string `json:"AccountId"`
+		Region         string `json:"Region"`
+		CheckID        string `json:"CheckID"`
+		CheckTitle     string `json:"CheckTitle"`
+		Severity       string `json:"Severity"`
+		Status         string `json:"Status"`
+		StatusExtended string `json:"StatusExtended"`
+		ResourceID     string `json:"ResourceId"`
+		ResourceARN    string `json:"ResourceArn"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("open prowler evidence %s: %w", path, err)
+		}
+
+		payload := make([]prowlerFinding, 0)
+		if err := json.NewDecoder(file).Decode(&payload); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("decode prowler evidence %s: %w", path, err)
+		}
+		_ = file.Close()
+
+		for _, item := range payload {
+			if status := strings.ToUpper(strings.TrimSpace(item.Status)); status != "" && status != "FAIL" {
+				continue
+			}
+
+			title := firstNonEmptyString(item.CheckTitle, item.CheckID)
+			if title == "" {
+				title = "Cloud posture finding"
+			}
+
+			locationPath := firstNonEmptyString(item.ResourceARN, item.ResourceID, item.Region, ctx.Target)
+			finding := baseFinding(ctx, now, "iac_misconfiguration", title, normalizeSeverity(item.Severity, "medium"), "high", models.CanonicalLocation{
+				Kind: "resource",
+				Path: locationPath,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "Prowler cloud posture finding",
+			})
+			finding.Description = firstNonEmptyString(item.StatusExtended, title)
+			finding.Remediation = &models.CanonicalRemediation{
+				Summary:      "Update the cloud account configuration to satisfy the failed control and remove the exposure.",
+				FixAvailable: true,
+			}
+			if strings.TrimSpace(item.Provider) != "" {
+				finding.Tags = append(finding.Tags, "provider:"+strings.ToLower(strings.TrimSpace(item.Provider)))
+			}
+			if strings.TrimSpace(item.CheckID) != "" {
+				finding.Tags = append(finding.Tags, "rule:"+strings.TrimSpace(item.CheckID))
+			}
+			if strings.TrimSpace(item.Region) != "" {
+				finding.Tags = append(finding.Tags, "region:"+strings.TrimSpace(item.Region))
+			}
+			if strings.TrimSpace(item.ResourceID) != "" {
+				finding.Tags = append(finding.Tags, "resource:"+strings.TrimSpace(item.ResourceID))
+			}
+			if strings.TrimSpace(item.AccountID) != "" {
+				finding.Asset.AssetID = strings.TrimSpace(item.AccountID)
+				finding.Asset.AssetName = strings.TrimSpace(item.AccountID)
+			}
+
+			findings = append(findings, finding)
 		}
 	}
 

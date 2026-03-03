@@ -15,6 +15,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "gosec" => GosecAdapter.execute(request),
         "spotbugs" => SpotBugsAdapter.execute(request),
         "pmd" => PmdAdapter.execute(request),
+        "bundler-audit" => BundlerAuditAdapter.execute(request),
         "brakeman" => BrakemanAdapter.execute(request),
         "devskim" => DevSkimAdapter.execute(request),
         "bandit" => BanditAdapter.execute(request),
@@ -36,6 +37,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "cfn-lint" => CfnLintAdapter.execute(request),
         "hadolint" => HadolintAdapter.execute(request),
         "kics" => KicsAdapter.execute(request),
+        "prowler" => ProwlerAdapter.execute(request),
         "kubesec" => KubeSecAdapter.execute(request),
         "kube-score" => KubeScoreAdapter.execute(request),
         "tfsec" => TfsecAdapter.execute(request),
@@ -50,6 +52,7 @@ struct SemgrepAdapter;
 struct GosecAdapter;
 struct SpotBugsAdapter;
 struct PmdAdapter;
+struct BundlerAuditAdapter;
 struct BrakemanAdapter;
 struct DevSkimAdapter;
 struct BanditAdapter;
@@ -71,6 +74,7 @@ struct CheckovAdapter;
 struct CfnLintAdapter;
 struct HadolintAdapter;
 struct KicsAdapter;
+struct ProwlerAdapter;
 struct KubeSecAdapter;
 struct KubeScoreAdapter;
 struct TfsecAdapter;
@@ -365,6 +369,47 @@ impl ScannerAdapter for PmdAdapter {
             request.max_runtime_seconds,
             vec![report_path],
             None,
+        )
+    }
+}
+
+impl ScannerAdapter for BundlerAuditAdapter {
+    fn id(&self) -> &'static str {
+        "bundler-audit"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path =
+            ensure_evidence_path(&request.evidence_dir, "bundler-audit-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "bundler-audit-exec.log")?;
+        let binary =
+            env::var("USS_BUNDLER_AUDIT_CMD").unwrap_or_else(|_| "bundle-audit".to_string());
+        let args = vec![
+            "check".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[1],
+            Some(Path::new(&request.target)),
         )
     }
 }
@@ -1241,6 +1286,45 @@ impl ScannerAdapter for KicsAdapter {
             &log_path,
             request.max_runtime_seconds,
             vec![report_path],
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for ProwlerAdapter {
+    fn id(&self) -> &'static str {
+        "prowler"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path = ensure_evidence_path(&request.evidence_dir, "prowler-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "prowler-exec.log")?;
+        let binary = env::var("USS_PROWLER_CMD").unwrap_or_else(|_| "prowler".to_string());
+        let args = vec![
+            "aws".to_string(),
+            "--output-modes".to_string(),
+            "json".to_string(),
+        ];
+
+        run_process_with_stdout_report_allow_exit_codes(
+            self.id(),
+            &binary,
+            &args,
+            &report_path,
+            &log_path,
+            request.max_runtime_seconds,
+            vec![report_path.clone()],
+            &[3],
             None,
         )
     }

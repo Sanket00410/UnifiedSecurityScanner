@@ -1099,9 +1099,11 @@ func defaultToolsForTargetKind(targetKind string) []string {
 	case "dotnet_repo":
 		return []string{"semgrep", "devskim", "trivy", "dotnet-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "ruby_repo":
-		return []string{"semgrep", "brakeman", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+		return []string{"semgrep", "brakeman", "trivy", "bundler-audit", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
 	case "php_repo":
 		return []string{"semgrep", "phpstan", "trivy", "composer-audit", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "checkov"}
+	case "aws_account":
+		return []string{"prowler"}
 	case "shell_script":
 		return []string{"shellcheck"}
 	case "dockerfile":
@@ -1160,7 +1162,7 @@ func supportedAdapters(capabilities []models.WorkerCapability) []string {
 
 func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
-	case "semgrep", "gosec", "spotbugs", "pmd", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "kubesec", "kube-score", "tfsec":
+	case "semgrep", "gosec", "spotbugs", "pmd", "bundler-audit", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
 		return models.ExecutionModePassive
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1194,6 +1196,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 360
 	case "pmd":
 		return 300
+	case "bundler-audit":
+		return 180
 	case "brakeman":
 		return 360
 	case "devskim":
@@ -1236,6 +1240,8 @@ func maxRuntimeForTool(tool string) int64 {
 		return 120
 	case "kics":
 		return 300
+	case "prowler":
+		return 900
 	case "kubesec":
 		return 180
 	case "kube-score":

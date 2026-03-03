@@ -1,0 +1,14 @@
+[
+  {
+    "Provider": "aws",
+    "AccountId": "123456789012",
+    "Region": "us-east-1",
+    "CheckID": "s3_1",
+    "CheckTitle": "Ensure S3 buckets are not publicly accessible",
+    "Severity": "high",
+    "Status": "FAIL",
+    "StatusExtended": "Bucket public-logs allows public access and should be restricted.",
+    "ResourceId": "public-logs",
+    "ResourceArn": "arn:aws:s3:::public-logs"
+  }
+]

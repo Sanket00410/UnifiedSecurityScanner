@@ -425,6 +425,17 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "bundler-audit".to_string(),
+            supported_target_kinds: vec![
+                "ruby_repo".to_string(),
+                "repo".to_string(),
+                "filesystem".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["code".to_string(), "sca".to_string(), "ruby".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "brakeman".to_string(),
             supported_target_kinds: vec![
                 "ruby_repo".to_string(),
@@ -700,6 +711,13 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             ],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],
             labels: vec!["iac".to_string(), "cloud".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "prowler".to_string(),
+            supported_target_kinds: vec!["aws_account".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["cloud".to_string(), "aws".to_string()],
             linux_preferred: false,
         },
         WorkerCapability {

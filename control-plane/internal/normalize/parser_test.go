@@ -933,3 +933,66 @@ func TestParseComposerAuditFixture(t *testing.T) {
 		t.Fatal("expected composer-audit finding to be risk-enriched")
 	}
 }
+
+func TestParseBundlerAuditFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("bundler-audit", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-bundler-audit",
+		AdapterID:  "bundler-audit",
+		TargetKind: "ruby_repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "bundler-audit-results.json")})
+	if err != nil {
+		t.Fatalf("parse bundler-audit fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "dependency_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected bundler-audit finding to be risk-enriched")
+	}
+}
+
+func TestParseProwlerFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("prowler", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-prowler",
+		AdapterID:  "prowler",
+		TargetKind: "aws_account",
+		Target:     "123456789012",
+	}, []string{filepath.Join("testdata", "prowler-results.json")})
+	if err != nil {
+		t.Fatalf("parse prowler fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Asset.AssetID != "123456789012" {
+		t.Fatalf("unexpected asset id: %s", finding.Asset.AssetID)
+	}
+	if finding.Risk.Priority == "" {
+		t.Fatal("expected prowler finding to be risk-enriched")
+	}
+}

@@ -1,0 +1,12 @@
+{
+  "advisories": [
+    {
+      "id": "OSVDB-123456",
+      "gem": "rack",
+      "title": "Directory traversal vulnerability in rack",
+      "cve": "CVE-2025-22222",
+      "url": "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+      "criticality": "high"
+    }
+  ]
+}
