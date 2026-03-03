@@ -513,6 +513,31 @@ func TestPhase4AssignmentEscalationsAndTicketSync(t *testing.T) {
 		t.Fatalf("expected remediation owner to derive from asset context, got %s", remediation.Owner)
 	}
 
+	evidenceResponse, evidenceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/remediations/"+remediation.ID+"/evidence", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"kind":    "ticket",
+		"name":    "investigation notes",
+		"ref":     "local://evidence/remediation-note-1",
+		"summary": "supporting investigation context",
+	}, http.StatusCreated)
+	defer evidenceResponse.Body.Close()
+
+	var evidence models.RemediationEvidence
+	decodeJSONResponse(t, evidenceBody, &evidence)
+	if evidence.ID == "" || evidence.Kind != "ticket" {
+		t.Fatalf("expected remediation evidence to be created, got %+v", evidence)
+	}
+
+	evidenceListResponse, evidenceListBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/remediations/"+remediation.ID+"/evidence", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer evidenceListResponse.Body.Close()
+
+	var evidencePayload struct {
+		Items []models.RemediationEvidence `json:"items"`
+	}
+	decodeJSONResponse(t, evidenceListBody, &evidencePayload)
+	if len(evidencePayload.Items) != 1 {
+		t.Fatalf("expected 1 remediation evidence item, got %d", len(evidencePayload.Items))
+	}
+
 	assignmentResponse, assignmentBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/remediations/"+remediation.ID+"/assignment-requests", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
 		"requested_owner": "appsec-ops",
 		"reason":          "handoff to ops queue",

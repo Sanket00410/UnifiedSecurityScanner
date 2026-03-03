@@ -435,6 +435,26 @@ type CreateRemediationCommentRequest struct {
 	Comment string `json:"comment"`
 }
 
+type RemediationEvidence struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id,omitempty"`
+	RemediationID string    `json:"remediation_id"`
+	Kind          string    `json:"kind"`
+	Name          string    `json:"name,omitempty"`
+	Ref           string    `json:"ref"`
+	Summary       string    `json:"summary,omitempty"`
+	CreatedBy     string    `json:"created_by,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type CreateRemediationEvidenceRequest struct {
+	Kind    string `json:"kind"`
+	Name    string `json:"name,omitempty"`
+	Ref     string `json:"ref"`
+	Summary string `json:"summary,omitempty"`
+}
+
 type RemediationVerification struct {
 	ID            string     `json:"id"`
 	TenantID      string     `json:"tenant_id,omitempty"`

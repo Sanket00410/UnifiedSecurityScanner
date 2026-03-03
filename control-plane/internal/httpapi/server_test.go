@@ -30,6 +30,7 @@ type stubAPIStore struct {
 	riskSummary              models.RiskSummary
 	remediation              models.RemediationAction
 	remediationActivities    []models.RemediationActivity
+	remediationEvidence      []models.RemediationEvidence
 	remediationAssignments   []models.RemediationAssignmentRequest
 	remediationVerifications []models.RemediationVerification
 	remediationExceptions    []models.RemediationException
@@ -236,6 +237,17 @@ func (s *stubAPIStore) CreateRemediationCommentForTenant(context.Context, string
 		return models.RemediationActivity{}, nil
 	}
 	return s.remediationActivities[0], nil
+}
+
+func (s *stubAPIStore) ListRemediationEvidenceForTenant(context.Context, string, string, int) ([]models.RemediationEvidence, error) {
+	return s.remediationEvidence, nil
+}
+
+func (s *stubAPIStore) CreateRemediationEvidenceForTenant(context.Context, string, string, string, models.CreateRemediationEvidenceRequest) (models.RemediationEvidence, error) {
+	if len(s.remediationEvidence) == 0 {
+		return models.RemediationEvidence{}, nil
+	}
+	return s.remediationEvidence[0], nil
 }
 
 func (s *stubAPIStore) ListRemediationVerificationsForTenant(context.Context, string, string, int) ([]models.RemediationVerification, error) {
@@ -664,6 +676,70 @@ func TestAssetRouteSupportsProfilesAndControls(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(controlsRecorder, controlsRequest)
 	if controlsRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for control list, got %d", controlsRecorder.Code)
+	}
+}
+
+func TestRemediationRouteSupportsEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		remediation: models.RemediationAction{
+			ID:        "remediation-1",
+			TenantID:  "org-1",
+			FindingID: "finding-1",
+			Title:     "Fix auth issue",
+			Status:    "open",
+			Owner:     "edge",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		remediationEvidence: []models.RemediationEvidence{
+			{
+				ID:            "evidence-1",
+				RemediationID: "remediation-1",
+				Kind:          "ticket",
+				Ref:           "local://evidence/1",
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/remediations/remediation-1/evidence", strings.NewReader(`{
+		"kind": "ticket",
+		"ref": "local://evidence/1"
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer appsec-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for remediation evidence create, got %d", createRecorder.Code)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/remediations/remediation-1/evidence", nil)
+	listRequest.Header.Set("Authorization", "Bearer appsec-token")
+
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for remediation evidence list, got %d", listRecorder.Code)
 	}
 }
 

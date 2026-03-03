@@ -65,6 +65,8 @@ type apiStore interface {
 	TransitionRemediationForTenant(ctx context.Context, tenantID string, remediationID string, request models.TransitionRemediationRequest) (models.RemediationAction, bool, error)
 	ListRemediationActivityForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationActivity, error)
 	CreateRemediationCommentForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRemediationCommentRequest) (models.RemediationActivity, error)
+	ListRemediationEvidenceForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationEvidence, error)
+	CreateRemediationEvidenceForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRemediationEvidenceRequest) (models.RemediationEvidence, error)
 	ListRemediationVerificationsForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationVerification, error)
 	RequestRemediationRetestForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRetestRequest) (models.RemediationVerification, models.ScanJob, error)
 	RecordRemediationVerificationForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.RecordRemediationVerificationRequest) (models.RemediationVerification, bool, error)
@@ -1157,6 +1159,42 @@ func (s *Server) handleRemediationRoute(w http.ResponseWriter, r *http.Request) 
 			}
 
 			s.writeJSON(w, http.StatusCreated, item)
+			return
+		case "evidence":
+			switch r.Method {
+			case http.MethodGet:
+				items, err := s.store.ListRemediationEvidenceForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+				if err != nil {
+					s.writeError(w, http.StatusInternalServerError, "list_remediation_evidence_failed", "remediation evidence could not be loaded")
+					return
+				}
+				s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			case http.MethodPost:
+				defer r.Body.Close()
+
+				var request models.CreateRemediationEvidenceRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+					return
+				}
+				if strings.TrimSpace(request.Kind) == "" || strings.TrimSpace(request.Ref) == "" {
+					s.writeError(w, http.StatusBadRequest, "validation_error", "kind and ref are required")
+					return
+				}
+
+				item, err := s.store.CreateRemediationEvidenceForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+				if err != nil {
+					if errors.Is(err, jobs.ErrTaskNotFound) {
+						s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+						return
+					}
+					s.writeError(w, http.StatusInternalServerError, "create_remediation_evidence_failed", "remediation evidence could not be created")
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, item)
+			default:
+				s.writeMethodNotAllowed(w)
+			}
 			return
 		case "verifications":
 			if r.Method != http.MethodGet {

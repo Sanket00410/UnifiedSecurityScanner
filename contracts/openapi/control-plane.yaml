@@ -957,6 +957,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RemediationActivity"
+  /v1/remediations/{remediationId}/evidence:
+    get:
+      operationId: listRemediationEvidence
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation evidence attachments
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationEvidence"
+    post:
+      operationId: createRemediationEvidence
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationEvidenceRequest"
+      responses:
+        "201":
+          description: Remediation evidence created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationEvidence"
   /v1/remediations/{remediationId}/verifications:
     get:
       operationId: listRemediationVerifications
@@ -2332,6 +2382,54 @@ components:
         - comment
       properties:
         comment:
+          type: string
+    RemediationEvidence:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - kind
+        - ref
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        kind:
+          type: string
+        name:
+          type: string
+        ref:
+          type: string
+        summary:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateRemediationEvidenceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - kind
+        - ref
+      properties:
+        kind:
+          type: string
+        name:
+          type: string
+        ref:
+          type: string
+        summary:
           type: string
     RemediationVerification:
       type: object

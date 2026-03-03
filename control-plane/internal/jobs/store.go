@@ -33,6 +33,7 @@ var (
 	verificationSequence            uint64
 	exceptionSequence               uint64
 	ticketSequence                  uint64
+	remediationEvidenceSequence     uint64
 	assignmentSequence              uint64
 	notificationSequence            uint64
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
@@ -1046,6 +1047,11 @@ func nextExceptionID() string {
 func nextTicketID() string {
 	sequence := atomic.AddUint64(&ticketSequence, 1)
 	return fmt.Sprintf("remediation-ticket-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextRemediationEvidenceID() string {
+	sequence := atomic.AddUint64(&remediationEvidenceSequence, 1)
+	return fmt.Sprintf("remediation-evidence-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
 func nextAssignmentRequestID() string {

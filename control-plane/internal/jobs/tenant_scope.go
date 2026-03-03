@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"unifiedsecurityscanner/control-plane/internal/models"
+	remediationengine "unifiedsecurityscanner/control-plane/internal/remediation"
 )
 
 func (s *Store) CreateForTenant(ctx context.Context, organizationID string, request models.CreateScanJobRequest) (models.ScanJob, error) {
@@ -413,15 +414,16 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 		item.Status = "open"
 	}
 
+	ownerSource := "request"
 	if item.Owner == "" || item.DueAt == nil {
 		finding, err := s.loadFindingForTenant(ctx, item.TenantID, item.FindingID)
 		if err != nil && !errors.Is(err, ErrTaskNotFound) {
 			return models.RemediationAction{}, err
 		}
 		if err == nil {
-			if item.Owner == "" && strings.TrimSpace(finding.Asset.OwnerTeam) != "" {
-				item.Owner = strings.TrimSpace(finding.Asset.OwnerTeam)
-			}
+			resolution := remediationengine.ResolveOwner(item.Owner, &finding)
+			item.Owner = resolution.Owner
+			ownerSource = resolution.Source
 			if item.DueAt == nil && finding.Risk.SLADueAt != nil {
 				dueAt := finding.Risk.SLADueAt.UTC()
 				item.DueAt = &dueAt
@@ -429,7 +431,9 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 		}
 	}
 	if item.Owner == "" {
-		item.Owner = "unassigned"
+		resolution := remediationengine.ResolveOwner("", nil)
+		item.Owner = resolution.Owner
+		ownerSource = resolution.Source
 	}
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -457,8 +461,9 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 		Actor:         item.Owner,
 		Comment:       item.Notes,
 		Metadata: map[string]any{
-			"status":     item.Status,
-			"finding_id": item.FindingID,
+			"status":       item.Status,
+			"finding_id":   item.FindingID,
+			"owner_source": ownerSource,
 		},
 		CreatedAt: now,
 	}); err != nil {
@@ -592,81 +597,9 @@ func (s *Store) deriveRemediationDueAt(ctx context.Context, organizationID strin
 }
 
 func normalizeRemediationStatus(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "":
-		return ""
-	case "open":
-		return "open"
-	case "assigned":
-		return "assigned"
-	case "in_progress", "in-progress":
-		return "in_progress"
-	case "blocked":
-		return "blocked"
-	case "ready_for_verify", "ready-for-verify":
-		return "ready_for_verify"
-	case "verified":
-		return "verified"
-	case "accepted_risk", "accepted-risk":
-		return "accepted_risk"
-	case "closed":
-		return "closed"
-	default:
-		return ""
-	}
+	return remediationengine.NormalizeStatus(value)
 }
 
 func isValidRemediationTransition(current string, next string) bool {
-	current = normalizeRemediationStatus(current)
-	next = normalizeRemediationStatus(next)
-	if next == "" {
-		return false
-	}
-	if current == next {
-		return true
-	}
-
-	allowed := map[string]map[string]struct{}{
-		"open": {
-			"assigned":      {},
-			"in_progress":   {},
-			"blocked":       {},
-			"accepted_risk": {},
-			"closed":        {},
-		},
-		"assigned": {
-			"in_progress":      {},
-			"blocked":          {},
-			"ready_for_verify": {},
-			"accepted_risk":    {},
-		},
-		"in_progress": {
-			"blocked":          {},
-			"ready_for_verify": {},
-			"accepted_risk":    {},
-		},
-		"blocked": {
-			"assigned":      {},
-			"in_progress":   {},
-			"accepted_risk": {},
-		},
-		"ready_for_verify": {
-			"verified":    {},
-			"in_progress": {},
-			"blocked":     {},
-		},
-		"verified": {
-			"closed": {},
-		},
-		"accepted_risk": {
-			"closed": {},
-		},
-	}
-
-	nextSet, ok := allowed[current]
-	if !ok {
-		return false
-	}
-	_, ok = nextSet[next]
-	return ok
+	return remediationengine.IsValidTransition(current, next)
 }
