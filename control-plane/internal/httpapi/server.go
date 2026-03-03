@@ -73,6 +73,13 @@ type apiStore interface {
 	DecideRemediationExceptionForTenant(ctx context.Context, tenantID string, exceptionID string, approved bool, actor string, reason string) (models.RemediationException, bool, error)
 	ListRemediationTicketLinksForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationTicketLink, error)
 	CreateRemediationTicketLinkForTenant(ctx context.Context, tenantID string, remediationID string, request models.CreateRemediationTicketLinkRequest) (models.RemediationTicketLink, error)
+	SyncRemediationTicketLinkForTenant(ctx context.Context, tenantID string, remediationID string, ticketID string, request models.SyncRemediationTicketLinkRequest) (models.RemediationTicketLink, bool, error)
+	ListRemediationAssignmentRequestsForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationAssignmentRequest, error)
+	CreateRemediationAssignmentRequestForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRemediationAssignmentRequest) (models.RemediationAssignmentRequest, error)
+	DecideRemediationAssignmentRequestForTenant(ctx context.Context, tenantID string, requestID string, approved bool, actor string, reason string) (models.RemediationAssignmentRequest, bool, error)
+	ListNotificationEventsForTenant(ctx context.Context, tenantID string, limit int) ([]models.NotificationEvent, error)
+	AcknowledgeNotificationEventForTenant(ctx context.Context, tenantID string, notificationID string, actor string) (models.NotificationEvent, bool, error)
+	SweepRemediationEscalationsForTenant(ctx context.Context, tenantID string, actor string) (models.NotificationSweepResult, error)
 }
 
 func New(cfg config.Config, store apiStore) *Server {
@@ -138,6 +145,10 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost: auth.PermissionRemediationsWrite,
 	}, "remediation", "remediation", server.handleRemediationRoute))
 	mux.HandleFunc("/v1/remediation-exceptions/", server.withUserAuth(auth.PermissionRemediationsWrite, "remediation_exception.decide", "remediation_exception", server.handleRemediationExceptionDecision))
+	mux.HandleFunc("/v1/remediation-assignments/", server.withUserAuth(auth.PermissionRemediationsWrite, "remediation_assignment.decide", "remediation_assignment", server.handleRemediationAssignmentDecision))
+	mux.HandleFunc("/v1/notifications", server.withUserAuth(auth.PermissionRemediationsRead, "notifications.list", "notification", server.handleNotifications))
+	mux.HandleFunc("/v1/notifications/", server.withUserAuth(auth.PermissionRemediationsWrite, "notification.ack", "notification", server.handleNotificationRoute))
+	mux.HandleFunc("/v1/remediation-escalations/sweep", server.withUserAuth(auth.PermissionRemediationsWrite, "remediation_escalations.sweep", "notification", server.handleRemediationEscalationSweep))
 	mux.HandleFunc("/v1/workers/register", server.withWorkerAuth(server.handleWorkerRegister))
 	mux.HandleFunc("/v1/workers/heartbeat", server.withWorkerAuth(server.handleWorkerHeartbeat))
 	mux.HandleFunc("/app", server.handleAppRoot)
@@ -1303,7 +1314,75 @@ func (s *Server) handleRemediationRoute(w http.ResponseWriter, r *http.Request) 
 				s.writeMethodNotAllowed(w)
 			}
 			return
+		case "assignment-requests":
+			switch r.Method {
+			case http.MethodGet:
+				items, err := s.store.ListRemediationAssignmentRequestsForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+				if err != nil {
+					s.writeError(w, http.StatusInternalServerError, "list_remediation_assignment_requests_failed", "remediation assignment requests could not be loaded")
+					return
+				}
+				s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			case http.MethodPost:
+				defer r.Body.Close()
+
+				var request models.CreateRemediationAssignmentRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+					return
+				}
+				if strings.TrimSpace(request.RequestedOwner) == "" {
+					s.writeError(w, http.StatusBadRequest, "validation_error", "requested_owner is required")
+					return
+				}
+
+				item, err := s.store.CreateRemediationAssignmentRequestForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+				if err != nil {
+					if errors.Is(err, jobs.ErrTaskNotFound) {
+						s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+						return
+					}
+					s.writeError(w, http.StatusInternalServerError, "create_remediation_assignment_request_failed", "remediation assignment request could not be created")
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, item)
+			default:
+				s.writeMethodNotAllowed(w)
+			}
+			return
 		}
+	}
+
+	if len(parts) == 4 && parts[1] == "tickets" && parts[3] == "sync" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+		if strings.TrimSpace(parts[2]) == "" {
+			s.writeError(w, http.StatusNotFound, "remediation_route_not_found", "the requested remediation route was not found")
+			return
+		}
+
+		defer r.Body.Close()
+
+		var request models.SyncRemediationTicketLinkRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		item, found, err := s.store.SyncRemediationTicketLinkForTenant(r.Context(), principal.OrganizationID, remediationID, strings.TrimSpace(parts[2]), request)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "sync_remediation_ticket_failed", "remediation ticket could not be synchronized")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "remediation_ticket_not_found", "remediation ticket was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, item)
+		return
 	}
 
 	s.writeError(w, http.StatusNotFound, "remediation_route_not_found", "the requested remediation route was not found")
@@ -1362,6 +1441,135 @@ func (s *Server) handleRemediationExceptionDecision(w http.ResponseWriter, r *ht
 	}
 
 	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleRemediationAssignmentDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediation-assignments/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "remediation_assignment_route_not_found", "the requested remediation assignment route was not found")
+		return
+	}
+
+	approved := false
+	switch parts[1] {
+	case "approve":
+		approved = true
+	case "deny":
+		approved = false
+	default:
+		s.writeError(w, http.StatusNotFound, "remediation_assignment_route_not_found", "the requested remediation assignment route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.DecideRemediationAssignmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, found, err := s.store.DecideRemediationAssignmentRequestForTenant(r.Context(), principal.OrganizationID, parts[0], approved, principal.Email, request.Reason)
+	if err != nil {
+		if errors.Is(err, jobs.ErrInvalidAssignmentDecision) {
+			s.writeError(w, http.StatusConflict, "invalid_remediation_assignment_decision", "the remediation assignment request could not be decided")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "decide_remediation_assignment_failed", "remediation assignment request could not be updated")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "remediation_assignment_not_found", "remediation assignment request was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	items, err := s.store.ListNotificationEventsForTenant(r.Context(), principal.OrganizationID, 200)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_notifications_failed", "notification events could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleNotificationRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/notifications/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "ack" {
+		s.writeError(w, http.StatusNotFound, "notification_route_not_found", "the requested notification route was not found")
+		return
+	}
+
+	item, found, err := s.store.AcknowledgeNotificationEventForTenant(r.Context(), principal.OrganizationID, parts[0], principal.Email)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "acknowledge_notification_failed", "notification event could not be acknowledged")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "notification_not_found", "notification event was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleRemediationEscalationSweep(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	result, err := s.store.SweepRemediationEscalationsForTenant(r.Context(), principal.OrganizationID, principal.Email)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "sweep_remediation_escalations_failed", "remediation escalations could not be processed")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal) {
@@ -1544,6 +1752,18 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/remediation-exceptions/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediation-exceptions/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/remediation-assignments/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediation-assignments/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/notifications/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/notifications/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

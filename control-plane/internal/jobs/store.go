@@ -33,6 +33,8 @@ var (
 	verificationSequence            uint64
 	exceptionSequence               uint64
 	ticketSequence                  uint64
+	assignmentSequence              uint64
+	notificationSequence            uint64
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
 	ErrTaskNotFound                 = errors.New("task not found")
 	ErrProtectedToken               = errors.New("protected token")
@@ -40,6 +42,7 @@ var (
 	ErrInvalidRemediationTransition = errors.New("invalid remediation transition")
 	ErrInvalidVerification          = errors.New("invalid remediation verification")
 	ErrInvalidExceptionDecision     = errors.New("invalid remediation exception")
+	ErrInvalidAssignmentDecision    = errors.New("invalid remediation assignment")
 )
 
 type PolicyDeniedError struct {
@@ -1043,6 +1046,16 @@ func nextExceptionID() string {
 func nextTicketID() string {
 	sequence := atomic.AddUint64(&ticketSequence, 1)
 	return fmt.Sprintf("remediation-ticket-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextAssignmentRequestID() string {
+	sequence := atomic.AddUint64(&assignmentSequence, 1)
+	return fmt.Sprintf("remediation-assignment-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextNotificationID() string {
+	sequence := atomic.AddUint64(&notificationSequence, 1)
+	return fmt.Sprintf("notification-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
 func sanitizeTools(tools []string) []string {

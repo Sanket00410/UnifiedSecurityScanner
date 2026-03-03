@@ -1147,6 +1147,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RemediationTicketLink"
+  /v1/remediations/{remediationId}/assignment-requests:
+    get:
+      operationId: listRemediationAssignmentRequests
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation assignment requests
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationAssignmentRequest"
+    post:
+      operationId: createRemediationAssignmentRequest
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationAssignmentRequest"
+      responses:
+        "201":
+          description: Remediation assignment request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAssignmentRequest"
+  /v1/remediations/{remediationId}/tickets/{ticketId}/sync:
+    post:
+      operationId: syncRemediationTicket
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: ticketId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncRemediationTicketLinkRequest"
+      responses:
+        "200":
+          description: Remediation ticket synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationTicketLink"
   /v1/remediation-exceptions/{exceptionId}/approve:
     post:
       operationId: approveRemediationException
@@ -1197,6 +1277,108 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RemediationException"
+  /v1/remediation-assignments/{requestId}/approve:
+    post:
+      operationId: approveRemediationAssignment
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRemediationAssignmentRequest"
+      responses:
+        "200":
+          description: Remediation assignment request approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAssignmentRequest"
+  /v1/remediation-assignments/{requestId}/deny:
+    post:
+      operationId: denyRemediationAssignment
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRemediationAssignmentRequest"
+      responses:
+        "200":
+          description: Remediation assignment request denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationAssignmentRequest"
+  /v1/notifications:
+    get:
+      operationId: listNotifications
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Remediation notification events
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationEvent"
+  /v1/notifications/{notificationId}/ack:
+    post:
+      operationId: acknowledgeNotification
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Notification acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationEvent"
+  /v1/remediation-escalations/sweep:
+    post:
+      operationId: sweepRemediationEscalations
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Remediation escalations processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationSweepResult"
 components:
   securitySchemes:
     BearerToken:
@@ -2335,6 +2517,132 @@ components:
           type: string
         status:
           type: string
+    SyncRemediationTicketLinkRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+        url:
+          type: string
+        status:
+          type: string
+    RemediationAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - finding_id
+        - requested_owner
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        finding_id:
+          type: string
+        requested_by:
+          type: string
+        requested_owner:
+          type: string
+        reason:
+          type: string
+        status:
+          type: string
+        decided_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateRemediationAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - requested_owner
+      properties:
+        requested_owner:
+          type: string
+        reason:
+          type: string
+    DecideRemediationAssignmentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    NotificationEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - category
+        - severity
+        - channel
+        - status
+        - subject
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        finding_id:
+          type: string
+        category:
+          type: string
+        severity:
+          type: string
+        channel:
+          type: string
+        status:
+          type: string
+        recipient:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+        acknowledged_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        acknowledged_at:
+          type: string
+          format: date-time
+          nullable: true
+    NotificationSweepResult:
+      type: object
+      additionalProperties: false
+      required:
+        - created
+        - items
+      properties:
+        created:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationEvent"
     WorkerCapability:
       type: object
       additionalProperties: false

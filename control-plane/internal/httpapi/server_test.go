@@ -30,9 +30,12 @@ type stubAPIStore struct {
 	riskSummary              models.RiskSummary
 	remediation              models.RemediationAction
 	remediationActivities    []models.RemediationActivity
+	remediationAssignments   []models.RemediationAssignmentRequest
 	remediationVerifications []models.RemediationVerification
 	remediationExceptions    []models.RemediationException
 	remediationTickets       []models.RemediationTicketLink
+	notifications            []models.NotificationEvent
+	notificationSweep        models.NotificationSweepResult
 	policy                   models.Policy
 	policies                 []models.Policy
 	policyVersions           []models.PolicyVersion
@@ -281,6 +284,46 @@ func (s *stubAPIStore) CreateRemediationTicketLinkForTenant(context.Context, str
 		return models.RemediationTicketLink{}, nil
 	}
 	return s.remediationTickets[0], nil
+}
+
+func (s *stubAPIStore) SyncRemediationTicketLinkForTenant(context.Context, string, string, string, models.SyncRemediationTicketLinkRequest) (models.RemediationTicketLink, bool, error) {
+	if len(s.remediationTickets) == 0 {
+		return models.RemediationTicketLink{}, false, nil
+	}
+	return s.remediationTickets[0], true, nil
+}
+
+func (s *stubAPIStore) ListRemediationAssignmentRequestsForTenant(context.Context, string, string, int) ([]models.RemediationAssignmentRequest, error) {
+	return s.remediationAssignments, nil
+}
+
+func (s *stubAPIStore) CreateRemediationAssignmentRequestForTenant(context.Context, string, string, string, models.CreateRemediationAssignmentRequest) (models.RemediationAssignmentRequest, error) {
+	if len(s.remediationAssignments) == 0 {
+		return models.RemediationAssignmentRequest{}, nil
+	}
+	return s.remediationAssignments[0], nil
+}
+
+func (s *stubAPIStore) DecideRemediationAssignmentRequestForTenant(context.Context, string, string, bool, string, string) (models.RemediationAssignmentRequest, bool, error) {
+	if len(s.remediationAssignments) == 0 {
+		return models.RemediationAssignmentRequest{}, false, nil
+	}
+	return s.remediationAssignments[0], true, nil
+}
+
+func (s *stubAPIStore) ListNotificationEventsForTenant(context.Context, string, int) ([]models.NotificationEvent, error) {
+	return s.notifications, nil
+}
+
+func (s *stubAPIStore) AcknowledgeNotificationEventForTenant(context.Context, string, string, string) (models.NotificationEvent, bool, error) {
+	if len(s.notifications) == 0 {
+		return models.NotificationEvent{}, false, nil
+	}
+	return s.notifications[0], true, nil
+}
+
+func (s *stubAPIStore) SweepRemediationEscalationsForTenant(context.Context, string, string) (models.NotificationSweepResult, error) {
+	return s.notificationSweep, nil
 }
 
 func TestAuthSessionRequiresBearerToken(t *testing.T) {

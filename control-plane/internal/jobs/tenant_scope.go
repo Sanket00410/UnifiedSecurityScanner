@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -411,12 +412,24 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 	if item.Status == "" {
 		item.Status = "open"
 	}
-	if item.DueAt == nil {
-		derivedDueAt, err := s.deriveRemediationDueAt(ctx, item.TenantID, item.FindingID)
-		if err != nil {
+
+	if item.Owner == "" || item.DueAt == nil {
+		finding, err := s.loadFindingForTenant(ctx, item.TenantID, item.FindingID)
+		if err != nil && !errors.Is(err, ErrTaskNotFound) {
 			return models.RemediationAction{}, err
 		}
-		item.DueAt = derivedDueAt
+		if err == nil {
+			if item.Owner == "" && strings.TrimSpace(finding.Asset.OwnerTeam) != "" {
+				item.Owner = strings.TrimSpace(finding.Asset.OwnerTeam)
+			}
+			if item.DueAt == nil && finding.Risk.SLADueAt != nil {
+				dueAt := finding.Risk.SLADueAt.UTC()
+				item.DueAt = &dueAt
+			}
+		}
+	}
+	if item.Owner == "" {
+		item.Owner = "unassigned"
 	}
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})

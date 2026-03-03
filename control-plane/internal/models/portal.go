@@ -510,3 +510,56 @@ type CreateRemediationTicketLinkRequest struct {
 	URL        string `json:"url,omitempty"`
 	Status     string `json:"status,omitempty"`
 }
+
+type SyncRemediationTicketLinkRequest struct {
+	Title  string `json:"title,omitempty"`
+	URL    string `json:"url,omitempty"`
+	Status string `json:"status,omitempty"`
+}
+
+type RemediationAssignmentRequest struct {
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenant_id,omitempty"`
+	RemediationID  string     `json:"remediation_id"`
+	FindingID      string     `json:"finding_id"`
+	RequestedBy    string     `json:"requested_by,omitempty"`
+	RequestedOwner string     `json:"requested_owner"`
+	Reason         string     `json:"reason,omitempty"`
+	Status         string     `json:"status"`
+	DecidedBy      string     `json:"decided_by,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DecidedAt      *time.Time `json:"decided_at,omitempty"`
+}
+
+type CreateRemediationAssignmentRequest struct {
+	RequestedOwner string `json:"requested_owner"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+type DecideRemediationAssignmentRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type NotificationEvent struct {
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenant_id,omitempty"`
+	RemediationID  string     `json:"remediation_id,omitempty"`
+	FindingID      string     `json:"finding_id,omitempty"`
+	Category       string     `json:"category"`
+	Severity       string     `json:"severity"`
+	Channel        string     `json:"channel"`
+	Status         string     `json:"status"`
+	Recipient      string     `json:"recipient,omitempty"`
+	Subject        string     `json:"subject"`
+	Body           string     `json:"body,omitempty"`
+	AcknowledgedBy string     `json:"acknowledged_by,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+}
+
+type NotificationSweepResult struct {
+	Created int                 `json:"created"`
+	Items   []NotificationEvent `json:"items"`
+}
