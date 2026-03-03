@@ -1,0 +1,14 @@
+adapter_id: trivy-secrets
+display_name: Trivy Secret Scanner Adapter
+execution_modes:
+  - passive
+requires_human_approval: false
+requires_target_scope_match: true
+supports_target_kinds:
+  - repo
+  - filesystem
+default_timeout_seconds: 240
+evidence_requirements:
+  - json_report
+  - redacted_secret_summary
+  - source_location

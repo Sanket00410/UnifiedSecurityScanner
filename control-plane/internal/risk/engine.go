@@ -231,11 +231,11 @@ func normalizeLayer(current string, adapterID string) string {
 	switch strings.ToLower(strings.TrimSpace(adapterID)) {
 	case "semgrep":
 		return "sast"
-	case "trivy":
+	case "trivy", "trivy-image":
 		return "sca"
-	case "gitleaks":
+	case "trivy-secrets", "gitleaks":
 		return "secrets"
-	case "checkov":
+	case "trivy-config", "checkov":
 		return "iac"
 	case "zap":
 		return "dast"
@@ -395,12 +395,16 @@ func calculateExploitability(finding models.CanonicalFinding) float64 {
 		score = 9.0
 	case "dependency_vulnerability":
 		score = 7.0
+	case "container_image_vulnerability":
+		score = 7.5
 	case "web_application_exposure":
 		score = 7.0
 	case "open_network_service":
 		score = 6.0
 	case "iac_misconfiguration":
 		score = 6.0
+	case "container_misconfiguration":
+		score = 6.5
 	case "sast_rule_match":
 		score = 5.0
 	}
@@ -462,10 +466,14 @@ func calculatePolicyImpact(finding models.CanonicalFinding) float64 {
 		score = 9.0
 	case "dependency_vulnerability":
 		score = 6.5
+	case "container_image_vulnerability":
+		score = 7.0
 	case "web_application_exposure":
 		score = 7.0
 	case "iac_misconfiguration":
 		score = 6.0
+	case "container_misconfiguration":
+		score = 6.5
 	case "open_network_service":
 		score = 5.5
 	case "sast_rule_match":

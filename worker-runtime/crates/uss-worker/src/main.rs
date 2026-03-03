@@ -390,6 +390,31 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "trivy-image".to_string(),
+            supported_target_kinds: vec!["image".to_string(), "container_image".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["image".to_string(), "sca".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "trivy-config".to_string(),
+            supported_target_kinds: vec![
+                "repo".to_string(),
+                "filesystem".to_string(),
+                "image".to_string(),
+            ],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["iac".to_string(), "config".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
+            adapter_id: "trivy-secrets".to_string(),
+            supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
+            supported_modes: vec![ProtoExecutionMode::Passive as i32],
+            labels: vec!["secrets".to_string(), "code".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "gitleaks".to_string(),
             supported_target_kinds: vec!["repo".to_string(), "filesystem".to_string()],
             supported_modes: vec![ProtoExecutionMode::Passive as i32],

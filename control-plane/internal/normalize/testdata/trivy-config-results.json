@@ -1,0 +1,23 @@
+{
+  "Results": [
+    {
+      "Target": "infra/kubernetes/deployment.yaml",
+      "Type": "kubernetes",
+      "Misconfigurations": [
+        {
+          "ID": "AVD-KSV-0012",
+          "Type": "Kubernetes Security Check",
+          "Title": "Container allows privilege escalation",
+          "Description": "The deployment allows containers to run with privilege escalation enabled.",
+          "Resolution": "Set allowPrivilegeEscalation to false.",
+          "Severity": "HIGH",
+          "PrimaryURL": "https://avd.aquasec.com/misconfig/ksv0012",
+          "CauseMetadata": {
+            "Resource": "Deployment.default.api",
+            "StartLine": 18
+          }
+        }
+      ]
+    }
+  ]
+}

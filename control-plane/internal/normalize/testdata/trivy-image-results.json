@@ -1,0 +1,20 @@
+{
+  "Results": [
+    {
+      "Target": "ghcr.io/acme/payments:1.4.2",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2026-1111",
+          "PkgName": "openssl",
+          "InstalledVersion": "3.0.1-r0",
+          "FixedVersion": "3.0.1-r3",
+          "Severity": "HIGH",
+          "Title": "OpenSSL package vulnerability",
+          "Description": "A vulnerable OpenSSL build is present in the container image.",
+          "PrimaryURL": "https://security.example.com/CVE-2026-1111"
+        }
+      ]
+    }
+  ]
+}

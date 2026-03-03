@@ -13,6 +13,9 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "metasploit" => MetasploitAdapter.execute(request),
         "semgrep" => SemgrepAdapter.execute(request),
         "trivy" => TrivyAdapter.execute(request),
+        "trivy-image" => TrivyImageAdapter.execute(request),
+        "trivy-config" => TrivyConfigAdapter.execute(request),
+        "trivy-secrets" => TrivySecretsAdapter.execute(request),
         "gitleaks" => GitleaksAdapter.execute(request),
         "checkov" => CheckovAdapter.execute(request),
         unsupported => Err(format!("unsupported adapter: {unsupported}")),
@@ -24,6 +27,9 @@ struct NmapAdapter;
 struct MetasploitAdapter;
 struct SemgrepAdapter;
 struct TrivyAdapter;
+struct TrivyImageAdapter;
+struct TrivyConfigAdapter;
+struct TrivySecretsAdapter;
 struct GitleaksAdapter;
 struct CheckovAdapter;
 
@@ -211,29 +217,123 @@ impl ScannerAdapter for TrivyAdapter {
 
     fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
         self.validate(request)?;
-
-        let report_path = ensure_evidence_path(&request.evidence_dir, "trivy-results.json")?;
-        let log_path = ensure_evidence_path(&request.evidence_dir, "trivy-exec.log")?;
-        let binary = env::var("USS_TRIVY_CMD").unwrap_or_else(|_| "trivy".to_string());
-        let args = vec![
-            "fs".to_string(),
-            "--quiet".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-            "--output".to_string(),
-            report_path.to_string_lossy().to_string(),
-            "--scanners".to_string(),
-            "vuln".to_string(),
-            request.target.clone(),
-        ];
-
-        run_process(
+        run_trivy_adapter(
             self.id(),
-            &binary,
-            &args,
-            &log_path,
-            request.max_runtime_seconds,
-            vec![report_path],
+            request,
+            "trivy-results.json",
+            "trivy-exec.log",
+            vec![
+                "fs".to_string(),
+                "--quiet".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                "--output".to_string(),
+                "__REPORT__".to_string(),
+                "--scanners".to_string(),
+                "vuln".to_string(),
+                request.target.clone(),
+            ],
+        )
+    }
+}
+
+impl ScannerAdapter for TrivyImageAdapter {
+    fn id(&self) -> &'static str {
+        "trivy-image"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+        run_trivy_adapter(
+            self.id(),
+            request,
+            "trivy-image-results.json",
+            "trivy-image-exec.log",
+            vec![
+                "image".to_string(),
+                "--quiet".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                "--output".to_string(),
+                "__REPORT__".to_string(),
+                request.target.clone(),
+            ],
+        )
+    }
+}
+
+impl ScannerAdapter for TrivyConfigAdapter {
+    fn id(&self) -> &'static str {
+        "trivy-config"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+        run_trivy_adapter(
+            self.id(),
+            request,
+            "trivy-config-results.json",
+            "trivy-config-exec.log",
+            vec![
+                "config".to_string(),
+                "--quiet".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                "--output".to_string(),
+                "__REPORT__".to_string(),
+                request.target.clone(),
+            ],
+        )
+    }
+}
+
+impl ScannerAdapter for TrivySecretsAdapter {
+    fn id(&self) -> &'static str {
+        "trivy-secrets"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(mode, ExecutionMode::Passive)
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+        run_trivy_adapter(
+            self.id(),
+            request,
+            "trivy-secrets-results.json",
+            "trivy-secrets-exec.log",
+            vec![
+                "fs".to_string(),
+                "--quiet".to_string(),
+                "--format".to_string(),
+                "json".to_string(),
+                "--output".to_string(),
+                "__REPORT__".to_string(),
+                "--scanners".to_string(),
+                "secret".to_string(),
+                request.target.clone(),
+            ],
         )
     }
 }
@@ -342,6 +442,38 @@ fn ensure_evidence_path(dir: &str, filename: &str) -> Result<PathBuf, String> {
     let root = Path::new(dir);
     fs::create_dir_all(root).map_err(|err| format!("create evidence directory: {err}"))?;
     Ok(root.join(filename))
+}
+
+fn run_trivy_adapter(
+    adapter_id: &str,
+    request: &AdapterRequest,
+    report_filename: &str,
+    log_filename: &str,
+    arg_template: Vec<String>,
+) -> Result<AdapterResult, String> {
+    let report_path = ensure_evidence_path(&request.evidence_dir, report_filename)?;
+    let log_path = ensure_evidence_path(&request.evidence_dir, log_filename)?;
+    let binary = env::var("USS_TRIVY_CMD").unwrap_or_else(|_| "trivy".to_string());
+    let report_value = report_path.to_string_lossy().to_string();
+    let args = arg_template
+        .into_iter()
+        .map(|value| {
+            if value == "__REPORT__" {
+                report_value.clone()
+            } else {
+                value
+            }
+        })
+        .collect::<Vec<_>>();
+
+    run_process(
+        adapter_id,
+        &binary,
+        &args,
+        &log_path,
+        request.max_runtime_seconds,
+        vec![report_path],
+    )
 }
 
 fn run_process(

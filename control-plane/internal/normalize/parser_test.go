@@ -147,6 +147,102 @@ func TestParseTrivyFixture(t *testing.T) {
 	}
 }
 
+func TestParseTrivyImageFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("trivy-image", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-trivy-image",
+		AdapterID:  "trivy-image",
+		TargetKind: "image",
+		Target:     "ghcr.io/acme/payments:1.4.2",
+	}, []string{filepath.Join("testdata", "trivy-image-results.json")})
+	if err != nil {
+		t.Fatalf("parse trivy image fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "sca" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "container_image_vulnerability" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for image vulnerability, got %s", finding.Risk.Priority)
+	}
+	if finding.Remediation == nil || !finding.Remediation.FixAvailable {
+		t.Fatal("expected trivy image finding to include a fixable remediation")
+	}
+}
+
+func TestParseTrivyConfigFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("trivy-config", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-trivy-config",
+		AdapterID:  "trivy-config",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "trivy-config-results.json")})
+	if err != nil {
+		t.Fatalf("parse trivy config fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "iac" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "iac_misconfiguration" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Locations[0].Line != 18 {
+		t.Fatalf("unexpected finding line: %d", finding.Locations[0].Line)
+	}
+	if finding.Risk.Priority != "p3" {
+		t.Fatalf("expected p3 priority for config finding, got %s", finding.Risk.Priority)
+	}
+}
+
+func TestParseTrivySecretsFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("trivy-secrets", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-trivy-secrets",
+		AdapterID:  "trivy-secrets",
+		TargetKind: "repo",
+		Target:     "c:/repo",
+	}, []string{filepath.Join("testdata", "trivy-secrets-results.json")})
+	if err != nil {
+		t.Fatalf("parse trivy secrets fixture: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+
+	finding := findings[0]
+	if finding.Source.Layer != "secrets" {
+		t.Fatalf("unexpected source layer: %s", finding.Source.Layer)
+	}
+	if finding.Category != "secret_exposure" {
+		t.Fatalf("unexpected finding category: %s", finding.Category)
+	}
+	if finding.Risk.Priority != "p2" {
+		t.Fatalf("expected p2 priority for trivy secret finding, got %s", finding.Risk.Priority)
+	}
+}
+
 func TestParseGitleaksFixture(t *testing.T) {
 	t.Parallel()
 
