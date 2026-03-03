@@ -419,3 +419,94 @@ type TransitionRemediationRequest struct {
 	DueAt  *time.Time `json:"due_at,omitempty"`
 	Notes  string     `json:"notes,omitempty"`
 }
+
+type RemediationActivity struct {
+	ID            string         `json:"id"`
+	TenantID      string         `json:"tenant_id,omitempty"`
+	RemediationID string         `json:"remediation_id"`
+	EventType     string         `json:"event_type"`
+	Actor         string         `json:"actor,omitempty"`
+	Comment       string         `json:"comment,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+}
+
+type CreateRemediationCommentRequest struct {
+	Comment string `json:"comment"`
+}
+
+type RemediationVerification struct {
+	ID            string     `json:"id"`
+	TenantID      string     `json:"tenant_id,omitempty"`
+	RemediationID string     `json:"remediation_id"`
+	FindingID     string     `json:"finding_id"`
+	ScanJobID     string     `json:"scan_job_id,omitempty"`
+	Status        string     `json:"status"`
+	Outcome       string     `json:"outcome,omitempty"`
+	RequestedBy   string     `json:"requested_by,omitempty"`
+	VerifiedBy    string     `json:"verified_by,omitempty"`
+	Notes         string     `json:"notes,omitempty"`
+	RequestedAt   time.Time  `json:"requested_at"`
+	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+type CreateRetestRequest struct {
+	Notes string `json:"notes,omitempty"`
+}
+
+type RecordRemediationVerificationRequest struct {
+	VerificationID string `json:"verification_id"`
+	Outcome        string `json:"outcome"`
+	Notes          string `json:"notes,omitempty"`
+}
+
+type RemediationException struct {
+	ID            string     `json:"id"`
+	TenantID      string     `json:"tenant_id,omitempty"`
+	RemediationID string     `json:"remediation_id"`
+	FindingID     string     `json:"finding_id"`
+	Reason        string     `json:"reason"`
+	Reduction     float64    `json:"reduction"`
+	Notes         string     `json:"notes,omitempty"`
+	Status        string     `json:"status"`
+	RequestedBy   string     `json:"requested_by,omitempty"`
+	DecidedBy     string     `json:"decided_by,omitempty"`
+	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DecidedAt     *time.Time `json:"decided_at,omitempty"`
+}
+
+type CreateRemediationExceptionRequest struct {
+	Reason    string     `json:"reason"`
+	Reduction float64    `json:"reduction"`
+	Notes     string     `json:"notes,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+type DecideRemediationExceptionRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type RemediationTicketLink struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id,omitempty"`
+	RemediationID string    `json:"remediation_id"`
+	Provider      string    `json:"provider"`
+	ExternalID    string    `json:"external_id"`
+	Title         string    `json:"title,omitempty"`
+	URL           string    `json:"url,omitempty"`
+	Status        string    `json:"status,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type CreateRemediationTicketLinkRequest struct {
+	Provider   string `json:"provider"`
+	ExternalID string `json:"external_id"`
+	Title      string `json:"title,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Status     string `json:"status,omitempty"`
+}

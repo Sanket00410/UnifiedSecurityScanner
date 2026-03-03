@@ -29,11 +29,17 @@ var (
 	controlSequence                 uint64
 	waiverSequence                  uint64
 	occurrenceSequence              uint64
+	activitySequence                uint64
+	verificationSequence            uint64
+	exceptionSequence               uint64
+	ticketSequence                  uint64
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
 	ErrTaskNotFound                 = errors.New("task not found")
 	ErrProtectedToken               = errors.New("protected token")
 	ErrInvalidWaiver                = errors.New("invalid finding waiver")
 	ErrInvalidRemediationTransition = errors.New("invalid remediation transition")
+	ErrInvalidVerification          = errors.New("invalid remediation verification")
+	ErrInvalidExceptionDecision     = errors.New("invalid remediation exception")
 )
 
 type PolicyDeniedError struct {
@@ -1017,6 +1023,26 @@ func nextWaiverID() string {
 func nextOccurrenceID() string {
 	sequence := atomic.AddUint64(&occurrenceSequence, 1)
 	return fmt.Sprintf("finding-occurrence-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextActivityID() string {
+	sequence := atomic.AddUint64(&activitySequence, 1)
+	return fmt.Sprintf("remediation-activity-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextVerificationID() string {
+	sequence := atomic.AddUint64(&verificationSequence, 1)
+	return fmt.Sprintf("remediation-verification-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextExceptionID() string {
+	sequence := atomic.AddUint64(&exceptionSequence, 1)
+	return fmt.Sprintf("remediation-exception-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextTicketID() string {
+	sequence := atomic.AddUint64(&ticketSequence, 1)
+	return fmt.Sprintf("remediation-ticket-%d-%06d", time.Now().UTC().Unix(), sequence)
 }
 
 func sanitizeTools(tools []string) []string {

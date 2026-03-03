@@ -157,6 +157,7 @@ func ApplyTemporalSignals(finding models.CanonicalFinding, reference time.Time) 
 		finding.Risk.AgingBucket = agingBucketForDays(ageDays)
 	}
 
+	finding.Risk.Overdue = false
 	if finding.Risk.SLADueAt != nil && !resolvedLikeStatus(finding.Status) {
 		finding.Risk.Overdue = reference.After(finding.Risk.SLADueAt.UTC())
 	}

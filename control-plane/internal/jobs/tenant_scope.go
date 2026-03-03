@@ -419,7 +419,13 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 		item.DueAt = derivedDueAt
 	}
 
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.RemediationAction{}, fmt.Errorf("begin tenant remediation tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO remediation_actions (
 			id, tenant_id, finding_id, title, status, owner, due_at, notes, created_at, updated_at
 		) VALUES (
@@ -428,6 +434,26 @@ func (s *Store) CreateRemediationForTenant(ctx context.Context, organizationID s
 	`, item.ID, item.TenantID, item.FindingID, item.Title, item.Status, item.Owner, item.DueAt, item.Notes, now)
 	if err != nil {
 		return models.RemediationAction{}, fmt.Errorf("insert tenant remediation: %w", err)
+	}
+
+	if err := insertRemediationActivityTx(ctx, tx, models.RemediationActivity{
+		ID:            nextActivityID(),
+		TenantID:      item.TenantID,
+		RemediationID: item.ID,
+		EventType:     "created",
+		Actor:         item.Owner,
+		Comment:       item.Notes,
+		Metadata: map[string]any{
+			"status":     item.Status,
+			"finding_id": item.FindingID,
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return models.RemediationAction{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.RemediationAction{}, fmt.Errorf("commit tenant remediation tx: %w", err)
 	}
 
 	return item, nil
@@ -471,6 +497,7 @@ func (s *Store) TransitionRemediationForTenant(ctx context.Context, organization
 	if !isValidRemediationTransition(item.Status, nextStatus) {
 		return models.RemediationAction{}, false, ErrInvalidRemediationTransition
 	}
+	previousStatus := item.Status
 
 	if strings.TrimSpace(request.Owner) != "" {
 		item.Owner = strings.TrimSpace(request.Owner)
@@ -499,6 +526,22 @@ func (s *Store) TransitionRemediationForTenant(ctx context.Context, organization
 	`, item.ID, item.Status, item.Owner, item.DueAt, item.Notes, item.UpdatedAt)
 	if err != nil {
 		return models.RemediationAction{}, false, fmt.Errorf("update remediation transition: %w", err)
+	}
+
+	if err := insertRemediationActivityTx(ctx, tx, models.RemediationActivity{
+		ID:            nextActivityID(),
+		TenantID:      item.TenantID,
+		RemediationID: item.ID,
+		EventType:     "status_transition",
+		Actor:         item.Owner,
+		Comment:       strings.TrimSpace(request.Notes),
+		Metadata: map[string]any{
+			"from": previousStatus,
+			"to":   item.Status,
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return models.RemediationAction{}, false, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {

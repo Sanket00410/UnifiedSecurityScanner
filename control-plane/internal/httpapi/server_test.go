@@ -16,30 +16,34 @@ import (
 )
 
 type stubAPIStore struct {
-	authPrincipal    models.AuthPrincipal
-	authenticated    bool
-	authErr          error
-	createScanJobErr error
-	auditEvents      []models.AuditEvent
-	apiTokens        []models.APIToken
-	assetProfile     models.AssetProfile
-	assetSummaries   []models.AssetSummary
-	assetControls    []models.CompensatingControl
-	syncedAssets     models.SyncAssetProfilesResult
-	findingWaivers   []models.FindingWaiver
-	riskSummary      models.RiskSummary
-	remediation      models.RemediationAction
-	policy           models.Policy
-	policies         []models.Policy
-	policyVersions   []models.PolicyVersion
-	policyApprovals  []models.PolicyApproval
-	scanJob          models.ScanJob
-	createdOIDC      models.CreatedAPIToken
-	oidcProvider     string
-	oidcSubject      string
-	oidcEmail        string
-	oidcDisplayName  string
-	registerResponse models.WorkerRegistrationResponse
+	authPrincipal            models.AuthPrincipal
+	authenticated            bool
+	authErr                  error
+	createScanJobErr         error
+	auditEvents              []models.AuditEvent
+	apiTokens                []models.APIToken
+	assetProfile             models.AssetProfile
+	assetSummaries           []models.AssetSummary
+	assetControls            []models.CompensatingControl
+	syncedAssets             models.SyncAssetProfilesResult
+	findingWaivers           []models.FindingWaiver
+	riskSummary              models.RiskSummary
+	remediation              models.RemediationAction
+	remediationActivities    []models.RemediationActivity
+	remediationVerifications []models.RemediationVerification
+	remediationExceptions    []models.RemediationException
+	remediationTickets       []models.RemediationTicketLink
+	policy                   models.Policy
+	policies                 []models.Policy
+	policyVersions           []models.PolicyVersion
+	policyApprovals          []models.PolicyApproval
+	scanJob                  models.ScanJob
+	createdOIDC              models.CreatedAPIToken
+	oidcProvider             string
+	oidcSubject              string
+	oidcEmail                string
+	oidcDisplayName          string
+	registerResponse         models.WorkerRegistrationResponse
 }
 
 func (s *stubAPIStore) Ping(context.Context) error {
@@ -218,6 +222,65 @@ func (s *stubAPIStore) TransitionRemediationForTenant(context.Context, string, s
 		return models.RemediationAction{}, false, nil
 	}
 	return s.remediation, true, nil
+}
+
+func (s *stubAPIStore) ListRemediationActivityForTenant(context.Context, string, string, int) ([]models.RemediationActivity, error) {
+	return s.remediationActivities, nil
+}
+
+func (s *stubAPIStore) CreateRemediationCommentForTenant(context.Context, string, string, string, models.CreateRemediationCommentRequest) (models.RemediationActivity, error) {
+	if len(s.remediationActivities) == 0 {
+		return models.RemediationActivity{}, nil
+	}
+	return s.remediationActivities[0], nil
+}
+
+func (s *stubAPIStore) ListRemediationVerificationsForTenant(context.Context, string, string, int) ([]models.RemediationVerification, error) {
+	return s.remediationVerifications, nil
+}
+
+func (s *stubAPIStore) RequestRemediationRetestForTenant(context.Context, string, string, string, models.CreateRetestRequest) (models.RemediationVerification, models.ScanJob, error) {
+	var verification models.RemediationVerification
+	if len(s.remediationVerifications) > 0 {
+		verification = s.remediationVerifications[0]
+	}
+	return verification, s.scanJob, nil
+}
+
+func (s *stubAPIStore) RecordRemediationVerificationForTenant(context.Context, string, string, string, models.RecordRemediationVerificationRequest) (models.RemediationVerification, bool, error) {
+	if len(s.remediationVerifications) == 0 {
+		return models.RemediationVerification{}, false, nil
+	}
+	return s.remediationVerifications[0], true, nil
+}
+
+func (s *stubAPIStore) ListRemediationExceptionsForTenant(context.Context, string, string, int) ([]models.RemediationException, error) {
+	return s.remediationExceptions, nil
+}
+
+func (s *stubAPIStore) CreateRemediationExceptionForTenant(context.Context, string, string, string, models.CreateRemediationExceptionRequest) (models.RemediationException, error) {
+	if len(s.remediationExceptions) == 0 {
+		return models.RemediationException{}, nil
+	}
+	return s.remediationExceptions[0], nil
+}
+
+func (s *stubAPIStore) DecideRemediationExceptionForTenant(context.Context, string, string, bool, string, string) (models.RemediationException, bool, error) {
+	if len(s.remediationExceptions) == 0 {
+		return models.RemediationException{}, false, nil
+	}
+	return s.remediationExceptions[0], true, nil
+}
+
+func (s *stubAPIStore) ListRemediationTicketLinksForTenant(context.Context, string, string, int) ([]models.RemediationTicketLink, error) {
+	return s.remediationTickets, nil
+}
+
+func (s *stubAPIStore) CreateRemediationTicketLinkForTenant(context.Context, string, string, models.CreateRemediationTicketLinkRequest) (models.RemediationTicketLink, error) {
+	if len(s.remediationTickets) == 0 {
+		return models.RemediationTicketLink{}, nil
+	}
+	return s.remediationTickets[0], nil
 }
 
 func TestAuthSessionRequiresBearerToken(t *testing.T) {

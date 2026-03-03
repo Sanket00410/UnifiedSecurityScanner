@@ -63,6 +63,16 @@ type apiStore interface {
 	GetRemediationForTenant(ctx context.Context, tenantID string, remediationID string) (models.RemediationAction, bool, error)
 	CreateRemediationForTenant(ctx context.Context, tenantID string, request models.CreateRemediationRequest) (models.RemediationAction, error)
 	TransitionRemediationForTenant(ctx context.Context, tenantID string, remediationID string, request models.TransitionRemediationRequest) (models.RemediationAction, bool, error)
+	ListRemediationActivityForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationActivity, error)
+	CreateRemediationCommentForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRemediationCommentRequest) (models.RemediationActivity, error)
+	ListRemediationVerificationsForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationVerification, error)
+	RequestRemediationRetestForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRetestRequest) (models.RemediationVerification, models.ScanJob, error)
+	RecordRemediationVerificationForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.RecordRemediationVerificationRequest) (models.RemediationVerification, bool, error)
+	ListRemediationExceptionsForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationException, error)
+	CreateRemediationExceptionForTenant(ctx context.Context, tenantID string, remediationID string, actor string, request models.CreateRemediationExceptionRequest) (models.RemediationException, error)
+	DecideRemediationExceptionForTenant(ctx context.Context, tenantID string, exceptionID string, approved bool, actor string, reason string) (models.RemediationException, bool, error)
+	ListRemediationTicketLinksForTenant(ctx context.Context, tenantID string, remediationID string, limit int) ([]models.RemediationTicketLink, error)
+	CreateRemediationTicketLinkForTenant(ctx context.Context, tenantID string, remediationID string, request models.CreateRemediationTicketLinkRequest) (models.RemediationTicketLink, error)
 }
 
 func New(cfg config.Config, store apiStore) *Server {
@@ -127,6 +137,7 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionRemediationsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
 	}, "remediation", "remediation", server.handleRemediationRoute))
+	mux.HandleFunc("/v1/remediation-exceptions/", server.withUserAuth(auth.PermissionRemediationsWrite, "remediation_exception.decide", "remediation_exception", server.handleRemediationExceptionDecision))
 	mux.HandleFunc("/v1/workers/register", server.withWorkerAuth(server.handleWorkerRegister))
 	mux.HandleFunc("/v1/workers/heartbeat", server.withWorkerAuth(server.handleWorkerHeartbeat))
 	mux.HandleFunc("/app", server.handleAppRoot)
@@ -1057,43 +1068,300 @@ func (s *Server) handleRemediationRoute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if len(parts) == 2 && parts[1] == "transition" {
-		if r.Method != http.MethodPost {
-			s.writeMethodNotAllowed(w)
-			return
-		}
-
-		defer r.Body.Close()
-
-		var request models.TransitionRemediationRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
-			return
-		}
-		if strings.TrimSpace(request.Status) == "" {
-			s.writeError(w, http.StatusBadRequest, "validation_error", "status is required")
-			return
-		}
-
-		item, found, err := s.store.TransitionRemediationForTenant(r.Context(), principal.OrganizationID, remediationID, request)
-		if err != nil {
-			if errors.Is(err, jobs.ErrInvalidRemediationTransition) {
-				s.writeError(w, http.StatusConflict, "invalid_remediation_transition", "the requested remediation transition is not allowed")
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "transition":
+			if r.Method != http.MethodPost {
+				s.writeMethodNotAllowed(w)
 				return
 			}
-			s.writeError(w, http.StatusInternalServerError, "transition_remediation_failed", "remediation action could not be transitioned")
-			return
-		}
-		if !found {
-			s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
-			return
-		}
 
-		s.writeJSON(w, http.StatusOK, item)
-		return
+			defer r.Body.Close()
+
+			var request models.TransitionRemediationRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.Status) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "status is required")
+				return
+			}
+
+			item, found, err := s.store.TransitionRemediationForTenant(r.Context(), principal.OrganizationID, remediationID, request)
+			if err != nil {
+				if errors.Is(err, jobs.ErrInvalidRemediationTransition) {
+					s.writeError(w, http.StatusConflict, "invalid_remediation_transition", "the requested remediation transition is not allowed")
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "transition_remediation_failed", "remediation action could not be transitioned")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, item)
+			return
+		case "activity":
+			if r.Method != http.MethodGet {
+				s.writeMethodNotAllowed(w)
+				return
+			}
+
+			items, err := s.store.ListRemediationActivityForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "list_remediation_activity_failed", "remediation activity could not be loaded")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			return
+		case "comments":
+			if r.Method != http.MethodPost {
+				s.writeMethodNotAllowed(w)
+				return
+			}
+			defer r.Body.Close()
+
+			var request models.CreateRemediationCommentRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.Comment) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "comment is required")
+				return
+			}
+
+			item, err := s.store.CreateRemediationCommentForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+			if err != nil {
+				if errors.Is(err, jobs.ErrTaskNotFound) {
+					s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "create_remediation_comment_failed", "remediation comment could not be created")
+				return
+			}
+
+			s.writeJSON(w, http.StatusCreated, item)
+			return
+		case "verifications":
+			if r.Method != http.MethodGet {
+				s.writeMethodNotAllowed(w)
+				return
+			}
+
+			items, err := s.store.ListRemediationVerificationsForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "list_remediation_verifications_failed", "remediation verifications could not be loaded")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			return
+		case "retest":
+			if r.Method != http.MethodPost {
+				s.writeMethodNotAllowed(w)
+				return
+			}
+			defer r.Body.Close()
+
+			var request models.CreateRetestRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			verification, job, err := s.store.RequestRemediationRetestForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+			if err != nil {
+				switch {
+				case errors.Is(err, jobs.ErrTaskNotFound):
+					s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+				case errors.Is(err, jobs.ErrInvalidVerification), errors.Is(err, jobs.ErrInvalidRemediationTransition):
+					s.writeError(w, http.StatusConflict, "invalid_retest_request", "the remediation is not in a state that allows retest")
+				default:
+					s.writeError(w, http.StatusInternalServerError, "request_retest_failed", "retest could not be requested")
+				}
+				return
+			}
+
+			s.writeJSON(w, http.StatusCreated, map[string]any{
+				"verification": verification,
+				"scan_job":     job,
+			})
+			return
+		case "verify":
+			if r.Method != http.MethodPost {
+				s.writeMethodNotAllowed(w)
+				return
+			}
+			defer r.Body.Close()
+
+			var request models.RecordRemediationVerificationRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+			if strings.TrimSpace(request.VerificationID) == "" || strings.TrimSpace(request.Outcome) == "" {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "verification_id and outcome are required")
+				return
+			}
+
+			item, found, err := s.store.RecordRemediationVerificationForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+			if err != nil {
+				if errors.Is(err, jobs.ErrInvalidVerification) {
+					s.writeError(w, http.StatusConflict, "invalid_remediation_verification", "the remediation verification could not be completed")
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "complete_remediation_verification_failed", "remediation verification could not be completed")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "remediation_verification_not_found", "remediation verification was not found")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, item)
+			return
+		case "exceptions":
+			switch r.Method {
+			case http.MethodGet:
+				items, err := s.store.ListRemediationExceptionsForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+				if err != nil {
+					s.writeError(w, http.StatusInternalServerError, "list_remediation_exceptions_failed", "remediation exceptions could not be loaded")
+					return
+				}
+				s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			case http.MethodPost:
+				defer r.Body.Close()
+
+				var request models.CreateRemediationExceptionRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+					return
+				}
+				if strings.TrimSpace(request.Reason) == "" || request.Reduction <= 0 {
+					s.writeError(w, http.StatusBadRequest, "validation_error", "reason and a positive reduction are required")
+					return
+				}
+
+				item, err := s.store.CreateRemediationExceptionForTenant(r.Context(), principal.OrganizationID, remediationID, principal.Email, request)
+				if err != nil {
+					switch {
+					case errors.Is(err, jobs.ErrTaskNotFound):
+						s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+					case errors.Is(err, jobs.ErrInvalidExceptionDecision):
+						s.writeError(w, http.StatusConflict, "invalid_remediation_exception", "the remediation exception is not valid")
+					default:
+						s.writeError(w, http.StatusInternalServerError, "create_remediation_exception_failed", "remediation exception could not be created")
+					}
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, item)
+			default:
+				s.writeMethodNotAllowed(w)
+			}
+			return
+		case "tickets":
+			switch r.Method {
+			case http.MethodGet:
+				items, err := s.store.ListRemediationTicketLinksForTenant(r.Context(), principal.OrganizationID, remediationID, 200)
+				if err != nil {
+					s.writeError(w, http.StatusInternalServerError, "list_remediation_tickets_failed", "remediation tickets could not be loaded")
+					return
+				}
+				s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			case http.MethodPost:
+				defer r.Body.Close()
+
+				var request models.CreateRemediationTicketLinkRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+					return
+				}
+				if strings.TrimSpace(request.Provider) == "" || strings.TrimSpace(request.ExternalID) == "" {
+					s.writeError(w, http.StatusBadRequest, "validation_error", "provider and external_id are required")
+					return
+				}
+
+				item, err := s.store.CreateRemediationTicketLinkForTenant(r.Context(), principal.OrganizationID, remediationID, request)
+				if err != nil {
+					switch {
+					case errors.Is(err, jobs.ErrTaskNotFound):
+						s.writeError(w, http.StatusNotFound, "remediation_not_found", "remediation action was not found")
+					case errors.Is(err, jobs.ErrInvalidExceptionDecision):
+						s.writeError(w, http.StatusConflict, "invalid_remediation_ticket", "the remediation ticket link is not valid")
+					default:
+						s.writeError(w, http.StatusInternalServerError, "create_remediation_ticket_failed", "remediation ticket could not be created")
+					}
+					return
+				}
+				s.writeJSON(w, http.StatusCreated, item)
+			default:
+				s.writeMethodNotAllowed(w)
+			}
+			return
+		}
 	}
 
 	s.writeError(w, http.StatusNotFound, "remediation_route_not_found", "the requested remediation route was not found")
+}
+
+func (s *Server) handleRemediationExceptionDecision(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediation-exceptions/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "remediation_exception_route_not_found", "the requested remediation exception route was not found")
+		return
+	}
+
+	approved := false
+	switch parts[1] {
+	case "approve":
+		approved = true
+	case "deny":
+		approved = false
+	default:
+		s.writeError(w, http.StatusNotFound, "remediation_exception_route_not_found", "the requested remediation exception route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.DecideRemediationExceptionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, found, err := s.store.DecideRemediationExceptionForTenant(r.Context(), principal.OrganizationID, parts[0], approved, principal.Email, request.Reason)
+	if err != nil {
+		if errors.Is(err, jobs.ErrInvalidExceptionDecision) {
+			s.writeError(w, http.StatusConflict, "invalid_remediation_exception_decision", "the remediation exception could not be decided")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "decide_remediation_exception_failed", "remediation exception could not be updated")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "remediation_exception_not_found", "remediation exception was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal) {
@@ -1270,6 +1538,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/remediations/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediations/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/remediation-exceptions/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/remediation-exceptions/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

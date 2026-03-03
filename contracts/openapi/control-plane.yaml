@@ -906,6 +906,297 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/remediations/{remediationId}/activity:
+    get:
+      operationId: listRemediationActivity
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation activity timeline
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationActivity"
+  /v1/remediations/{remediationId}/comments:
+    post:
+      operationId: createRemediationComment
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationCommentRequest"
+      responses:
+        "201":
+          description: Remediation comment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationActivity"
+  /v1/remediations/{remediationId}/verifications:
+    get:
+      operationId: listRemediationVerifications
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation verification history
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationVerification"
+  /v1/remediations/{remediationId}/retest:
+    post:
+      operationId: requestRemediationRetest
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRetestRequest"
+      responses:
+        "201":
+          description: Retest requested
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - verification
+                  - scan_job
+                properties:
+                  verification:
+                    $ref: "#/components/schemas/RemediationVerification"
+                  scan_job:
+                    $ref: "#/components/schemas/ScanJob"
+  /v1/remediations/{remediationId}/verify:
+    post:
+      operationId: completeRemediationVerification
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordRemediationVerificationRequest"
+      responses:
+        "200":
+          description: Verification completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationVerification"
+        "409":
+          description: Invalid verification completion
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/remediations/{remediationId}/exceptions:
+    get:
+      operationId: listRemediationExceptions
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation exceptions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationException"
+    post:
+      operationId: createRemediationException
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationExceptionRequest"
+      responses:
+        "201":
+          description: Remediation exception created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationException"
+  /v1/remediations/{remediationId}/tickets:
+    get:
+      operationId: listRemediationTickets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Remediation external ticket links
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RemediationTicketLink"
+    post:
+      operationId: createRemediationTicket
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: remediationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRemediationTicketLinkRequest"
+      responses:
+        "201":
+          description: Remediation external ticket linked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationTicketLink"
+  /v1/remediation-exceptions/{exceptionId}/approve:
+    post:
+      operationId: approveRemediationException
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: exceptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRemediationExceptionRequest"
+      responses:
+        "200":
+          description: Remediation exception approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationException"
+  /v1/remediation-exceptions/{exceptionId}/deny:
+    post:
+      operationId: denyRemediationException
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: exceptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRemediationExceptionRequest"
+      responses:
+        "200":
+          description: Remediation exception denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemediationException"
 components:
   securitySchemes:
     BearerToken:
@@ -1824,6 +2115,225 @@ components:
           format: date-time
           nullable: true
         notes:
+          type: string
+    RemediationActivity:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - event_type
+        - created_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        event_type:
+          type: string
+        actor:
+          type: string
+        comment:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    CreateRemediationCommentRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - comment
+      properties:
+        comment:
+          type: string
+    RemediationVerification:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - finding_id
+        - status
+        - requested_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        finding_id:
+          type: string
+        scan_job_id:
+          type: string
+        status:
+          type: string
+        outcome:
+          type: string
+        requested_by:
+          type: string
+        verified_by:
+          type: string
+        notes:
+          type: string
+        requested_at:
+          type: string
+          format: date-time
+        verified_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateRetestRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        notes:
+          type: string
+    RecordRemediationVerificationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - verification_id
+        - outcome
+      properties:
+        verification_id:
+          type: string
+        outcome:
+          type: string
+        notes:
+          type: string
+    RemediationException:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - finding_id
+        - reason
+        - reduction
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        finding_id:
+          type: string
+        reason:
+          type: string
+        reduction:
+          type: number
+        notes:
+          type: string
+        status:
+          type: string
+        requested_by:
+          type: string
+        decided_by:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        decided_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateRemediationExceptionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - reason
+        - reduction
+      properties:
+        reason:
+          type: string
+        reduction:
+          type: number
+        notes:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+    DecideRemediationExceptionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
+          type: string
+    RemediationTicketLink:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - remediation_id
+        - provider
+        - external_id
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        remediation_id:
+          type: string
+        provider:
+          type: string
+        external_id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateRemediationTicketLinkRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - provider
+        - external_id
+      properties:
+        provider:
+          type: string
+        external_id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        status:
           type: string
     WorkerCapability:
       type: object
