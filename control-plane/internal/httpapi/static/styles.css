@@ -197,6 +197,11 @@ textarea {
   padding: 9px 10px;
 }
 
+textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -434,6 +439,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  max-height: 78vh;
+  overflow: auto;
 }
 
 .detail-pane h3 {
@@ -545,11 +552,28 @@ button:disabled {
   gap: 9px;
 }
 
+.form-stack.compact {
+  gap: 7px;
+}
+
 .form-stack label {
   display: grid;
   gap: 4px;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+.form-block {
+  border: 1px solid rgba(215, 201, 177, 0.85);
+  border-radius: 11px;
+  padding: 10px;
+  background: #fffdf8;
+  display: grid;
+  gap: 8px;
+}
+
+.form-block h4 {
+  margin: 0;
 }
 
 @media (max-width: 1340px) {

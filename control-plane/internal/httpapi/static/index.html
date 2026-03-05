@@ -163,6 +163,42 @@
             <div id="asset-detail" class="stack-list empty-box">Select an asset.</div>
             <h4>Compensating Controls</h4>
             <div id="asset-controls" class="stack-list empty-box">No controls loaded.</div>
+
+            <section class="form-block">
+              <h4>Update Asset Profile</h4>
+              <form id="asset-profile-form" class="form-stack compact">
+                <label>Asset Type <input name="asset_type" required></label>
+                <label>Asset Name <input name="asset_name" required></label>
+                <label>Environment <input name="environment" placeholder="production"></label>
+                <label>Exposure <input name="exposure" placeholder="internal"></label>
+                <label>Criticality (0-10) <input name="criticality" type="number" min="0" max="10" step="0.1"></label>
+                <label>Owner Team <input name="owner_team"></label>
+                <label>Owner Hierarchy (comma separated) <input name="owner_hierarchy" placeholder="security,appsec,platform"></label>
+                <label>Service Name <input name="service_name"></label>
+                <label>Service Tier <input name="service_tier"></label>
+                <label>Service Criticality Class <input name="service_criticality_class"></label>
+                <label>External Source <input name="external_source"></label>
+                <label>External Reference <input name="external_reference"></label>
+                <label>Tags (comma separated) <input name="tags"></label>
+                <button type="submit">Save Profile</button>
+              </form>
+            </section>
+
+            <section class="form-block">
+              <h4>Add Compensating Control</h4>
+              <form id="asset-control-form" class="form-stack compact">
+                <label>Name <input name="name" required></label>
+                <label>Control Type <input name="control_type" placeholder="network"></label>
+                <label>Scope Layer <input name="scope_layer" placeholder="asset"></label>
+                <label>Effectiveness (0-10) <input name="effectiveness" type="number" min="0" max="10" step="0.1"></label>
+                <label>Notes <textarea name="notes" rows="2"></textarea></label>
+                <label class="inline-check">
+                  <input name="enabled" type="checkbox" checked>
+                  <span>Enabled</span>
+                </label>
+                <button type="submit">Add Control</button>
+              </form>
+            </section>
           </aside>
         </div>
       </section>
@@ -188,6 +224,54 @@
             <div id="policy-detail" class="stack-list empty-box">Select a policy.</div>
             <button id="load-policy-versions" disabled>Load Version History</button>
             <div id="policy-versions" class="stack-list empty-box">No version history loaded.</div>
+
+            <section class="form-block">
+              <h4>Create Policy</h4>
+              <form id="policy-create-form" class="form-stack compact">
+                <label>Name <input name="name" required></label>
+                <label>Scope <input name="scope" placeholder="global"></label>
+                <label>Mode
+                  <select name="mode">
+                    <option value="enforced">enforced</option>
+                    <option value="monitor">monitor</option>
+                  </select>
+                </label>
+                <label class="inline-check">
+                  <input name="enabled" type="checkbox" checked>
+                  <span>Enabled</span>
+                </label>
+                <label class="inline-check">
+                  <input name="global" type="checkbox">
+                  <span>Global Policy</span>
+                </label>
+                <label>Rules JSON
+                  <textarea name="rules_json" rows="4" placeholder='[{"effect":"allow","field":"tool","match":"exact","values":["semgrep"]}]'></textarea>
+                </label>
+                <button type="submit">Create Policy</button>
+              </form>
+            </section>
+
+            <section class="form-block">
+              <h4>Update Selected Policy</h4>
+              <form id="policy-update-form" class="form-stack compact">
+                <label>Name <input name="name" required></label>
+                <label>Scope <input name="scope"></label>
+                <label>Mode
+                  <select name="mode">
+                    <option value="enforced">enforced</option>
+                    <option value="monitor">monitor</option>
+                  </select>
+                </label>
+                <label class="inline-check">
+                  <input name="enabled" type="checkbox">
+                  <span>Enabled</span>
+                </label>
+                <label>Rules JSON
+                  <textarea name="rules_json" rows="4"></textarea>
+                </label>
+                <button id="policy-update-submit" type="submit" disabled>Update Policy</button>
+              </form>
+            </section>
           </aside>
         </div>
       </section>
@@ -248,6 +332,88 @@
               <button id="add-comment-btn" disabled>Add Comment</button>
             </div>
             <div id="remediation-activity" class="stack-list empty-box">No activity loaded.</div>
+            <h4>Verifications</h4>
+            <div id="remediation-verifications" class="stack-list empty-box">No verifications loaded.</div>
+            <h4>Evidence</h4>
+            <div id="remediation-evidence" class="stack-list empty-box">No evidence loaded.</div>
+            <h4>Exceptions</h4>
+            <div id="remediation-exceptions" class="stack-list empty-box">No exceptions loaded.</div>
+            <h4>Tickets</h4>
+            <div id="remediation-tickets" class="stack-list empty-box">No tickets loaded.</div>
+            <h4>Assignment Requests</h4>
+            <div id="remediation-assignments" class="stack-list empty-box">No assignment requests loaded.</div>
+
+            <section class="form-block">
+              <h4>Transition / Retest / Comment</h4>
+              <form id="remediation-transition-form" class="form-stack compact">
+                <label>Next Status
+                  <select name="status">
+                    <option value="assigned">assigned</option>
+                    <option value="in_progress">in_progress</option>
+                    <option value="blocked">blocked</option>
+                    <option value="ready_for_verify">ready_for_verify</option>
+                    <option value="verified">verified</option>
+                    <option value="accepted_risk">accepted_risk</option>
+                    <option value="closed">closed</option>
+                  </select>
+                </label>
+                <label>Notes <textarea name="notes" rows="2"></textarea></label>
+                <button id="remediation-transition-submit" type="submit" disabled>Transition</button>
+              </form>
+              <form id="remediation-retest-form" class="form-stack compact">
+                <label>Retest Notes <textarea name="notes" rows="2"></textarea></label>
+                <button id="remediation-retest-submit" type="submit" disabled>Request Retest</button>
+              </form>
+              <form id="remediation-comment-form" class="form-stack compact">
+                <label>Comment <textarea name="comment" rows="2" required></textarea></label>
+                <button id="remediation-comment-submit" type="submit" disabled>Add Comment</button>
+              </form>
+            </section>
+
+            <section class="form-block">
+              <h4>Exception / Assignment</h4>
+              <form id="remediation-exception-form" class="form-stack compact">
+                <label>Reason <input name="reason" required></label>
+                <label>Reduction (0-100) <input name="reduction" type="number" min="0" max="100" step="0.1" required></label>
+                <label>Notes <textarea name="notes" rows="2"></textarea></label>
+                <button id="remediation-exception-submit" type="submit" disabled>Create Exception</button>
+              </form>
+              <form id="remediation-assignment-form" class="form-stack compact">
+                <label>Requested Owner <input name="requested_owner" required></label>
+                <label>Reason <textarea name="reason" rows="2"></textarea></label>
+                <button id="remediation-assignment-submit" type="submit" disabled>Request Assignment</button>
+              </form>
+            </section>
+
+            <section class="form-block">
+              <h4>Ticket / Evidence / Verification</h4>
+              <form id="remediation-ticket-form" class="form-stack compact">
+                <label>Provider <input name="provider" placeholder="jira" required></label>
+                <label>External ID <input name="external_id" required></label>
+                <label>Title <input name="title"></label>
+                <label>URL <input name="url"></label>
+                <label>Status <input name="status"></label>
+                <button id="remediation-ticket-submit" type="submit" disabled>Add Ticket Link</button>
+              </form>
+              <form id="remediation-evidence-form" class="form-stack compact">
+                <label>Kind <input name="kind" placeholder="log" required></label>
+                <label>Name <input name="name"></label>
+                <label>Reference <input name="ref" placeholder="s3://..." required></label>
+                <label>Summary <textarea name="summary" rows="2"></textarea></label>
+                <button id="remediation-evidence-submit" type="submit" disabled>Add Evidence</button>
+              </form>
+              <form id="remediation-verify-form" class="form-stack compact">
+                <label>Verification ID <input name="verification_id" required></label>
+                <label>Outcome
+                  <select name="outcome">
+                    <option value="passed">passed</option>
+                    <option value="failed">failed</option>
+                  </select>
+                </label>
+                <label>Notes <textarea name="notes" rows="2"></textarea></label>
+                <button id="remediation-verify-submit" type="submit" disabled>Record Verification</button>
+              </form>
+            </section>
           </aside>
         </div>
       </section>
@@ -271,6 +437,10 @@
               <button type="submit">Create Scan Job</button>
             </form>
             <div id="scanjob-result" class="empty-box">No scan job created in this session.</div>
+          </section>
+          <section class="panel">
+            <header><h2>Audit Events</h2></header>
+            <div id="audit-events-list" class="stack-list"></div>
           </section>
         </div>
       </section>

@@ -43,6 +43,7 @@ const state = {
   policyApprovals: [],
   remediations: [],
   notifications: [],
+  auditEvents: [],
   scanJobs: [],
   riskSummary: null,
   selectedFindingID: "",
@@ -62,6 +63,10 @@ const state = {
   pendingExceptionRequests: []
 };
 
+function byId(id) {
+  return document.getElementById(id);
+}
+
 function currentToken() {
   return window.localStorage.getItem(TOKEN_STORAGE_KEY) || "";
 }
@@ -74,13 +79,30 @@ function clearToken() {
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
-function setStatus(message, isError = false) {
-  const node = document.getElementById("status-strip");
-  if (!node) {
-    return;
+function listItems(payload) {
+  if (!payload || !Array.isArray(payload.items)) {
+    return [];
   }
-  node.textContent = message;
-  node.classList.toggle("error", isError);
+  return payload.items;
+}
+
+function splitCSV(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseRulesJSON(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return [];
+  }
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed)) {
+    throw new Error("rules_json must be a JSON array");
+  }
+  return parsed;
 }
 
 function formatDateTime(value) {
@@ -105,11 +127,13 @@ function formatDate(value) {
   return date.toLocaleDateString();
 }
 
-function listItems(payload) {
-  if (!payload || !Array.isArray(payload.items)) {
-    return [];
+function setStatus(message, isError = false) {
+  const node = byId("status-strip");
+  if (!node) {
+    return;
   }
-  return payload.items;
+  node.textContent = message;
+  node.classList.toggle("error", isError);
 }
 
 function authHeaders(base = {}) {
@@ -169,11 +193,27 @@ function putJSON(path, body) {
   });
 }
 
-function pill(value, className) {
-  const span = document.createElement("span");
-  span.className = `pill ${className || ""}`.trim();
-  span.textContent = value;
-  return span;
+function clearNode(node) {
+  if (node) {
+    node.innerHTML = "";
+  }
+}
+
+function emptyNode() {
+  const template = byId("empty-state-template");
+  if (template) {
+    return template.content.cloneNode(true);
+  }
+  const fallback = document.createElement("article");
+  fallback.className = "empty-box";
+  fallback.textContent = "No records.";
+  return fallback;
+}
+
+function appendCell(row, value) {
+  const cell = document.createElement("td");
+  cell.textContent = String(value ?? "");
+  row.appendChild(cell);
 }
 
 function card(title, description, metaValues) {
@@ -202,36 +242,6 @@ function card(title, description, metaValues) {
   return node;
 }
 
-function clearNode(node) {
-  if (node) {
-    node.innerHTML = "";
-  }
-}
-
-function emptyNode() {
-  const template = document.getElementById("empty-state-template");
-  if (!template) {
-    const fallback = document.createElement("article");
-    fallback.className = "empty-box";
-    fallback.textContent = "No records.";
-    return fallback;
-  }
-  return template.content.cloneNode(true);
-}
-
-function upsertMetric(id, value) {
-  const node = document.getElementById(id);
-  if (node) {
-    node.textContent = String(value);
-  }
-}
-
-function appendCell(row, value) {
-  const cell = document.createElement("td");
-  cell.textContent = String(value ?? "");
-  row.appendChild(cell);
-}
-
 function severityClass(severity) {
   const normalized = String(severity || "").toLowerCase();
   switch (normalized) {
@@ -244,6 +254,22 @@ function severityClass(severity) {
     default:
       return "pill-low";
   }
+}
+
+function pill(value, className) {
+  const span = document.createElement("span");
+  span.className = `pill ${className || ""}`.trim();
+  span.textContent = value;
+  return span;
+}
+
+function setDisabled(ids, disabled) {
+  ids.forEach((id) => {
+    const node = byId(id);
+    if (node) {
+      node.disabled = Boolean(disabled);
+    }
+  });
 }
 
 function sortFindings(items) {
@@ -260,6 +286,11 @@ function sortFindings(items) {
   });
 }
 
+function routeFromHash() {
+  const hash = (window.location.hash || "").replace(/^#\/?/, "").trim().toLowerCase();
+  return ROUTES.includes(hash) ? hash : "dashboard";
+}
+
 function setRoute(route, updateHash = true) {
   if (!ROUTES.includes(route)) {
     route = "dashboard";
@@ -274,17 +305,30 @@ function setRoute(route, updateHash = true) {
   }
 }
 
-function routeFromHash() {
-  const hash = (window.location.hash || "").replace(/^#\/?/, "").trim().toLowerCase();
-  if (ROUTES.includes(hash)) {
-    return hash;
+function renderRoute() {
+  const titleNode = byId("route-title");
+  if (titleNode) {
+    titleNode.textContent = ROUTE_TITLES[state.route] || "Dashboard";
   }
-  return "dashboard";
+
+  document.querySelectorAll("#route-nav button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.route === state.route);
+  });
+
+  document.querySelectorAll(".view").forEach((view) => {
+    view.classList.remove("active");
+  });
+
+  const active = byId(`view-${state.route}`);
+  if (active) {
+    active.classList.add("active");
+  }
 }
 
-function updateSession(session) {
-  const userNode = document.getElementById("session-user");
-  const metaNode = document.getElementById("session-meta");
+function updateSession() {
+  const session = state.session;
+  const userNode = byId("session-user");
+  const metaNode = byId("session-meta");
   if (!userNode || !metaNode) {
     return;
   }
@@ -310,56 +354,11 @@ function updateSession(session) {
   metaNode.textContent = extras.join(" | ");
 }
 
-function renderRoute() {
-  const titleNode = document.getElementById("route-title");
-  if (titleNode) {
-    titleNode.textContent = ROUTE_TITLES[state.route] || "Dashboard";
+function upsertMetric(id, value) {
+  const node = byId(id);
+  if (node) {
+    node.textContent = String(value);
   }
-
-  document.querySelectorAll("#route-nav button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.route === state.route);
-  });
-
-  document.querySelectorAll(".view").forEach((view) => {
-    view.classList.remove("active");
-  });
-  const active = document.getElementById(`view-${state.route}`);
-  if (active) {
-    active.classList.add("active");
-  }
-}
-
-function applyFindingFilters() {
-  const search = (document.getElementById("findings-search")?.value || "").trim().toLowerCase();
-  const severity = (document.getElementById("filter-severity")?.value || "").trim().toLowerCase();
-  const priority = (document.getElementById("filter-priority")?.value || "").trim().toLowerCase();
-  const layer = (document.getElementById("filter-layer")?.value || "").trim().toLowerCase();
-  const overdueOnly = Boolean(document.getElementById("filter-overdue")?.checked);
-
-  return sortFindings(state.findings).filter((item) => {
-    const title = String(item.title || "").toLowerCase();
-    const category = String(item.category || "").toLowerCase();
-    const assetName = String((item.asset && (item.asset.asset_name || item.asset.asset_id)) || "").toLowerCase();
-    const textMatch = !search || title.includes(search) || category.includes(search) || assetName.includes(search);
-    if (!textMatch) {
-      return false;
-    }
-
-    if (severity && String(item.severity || "").toLowerCase() !== severity) {
-      return false;
-    }
-    if (priority && String(item.risk?.priority || "").toLowerCase() !== priority) {
-      return false;
-    }
-    if (layer && String(item.source?.layer || "").toLowerCase() !== layer) {
-      return false;
-    }
-    if (overdueOnly && !item.risk?.overdue) {
-      return false;
-    }
-
-    return true;
-  });
 }
 
 function renderDashboard() {
@@ -372,9 +371,9 @@ function renderDashboard() {
   upsertMetric("metric-notifications", state.notifications.filter((item) => item.status !== "acknowledged").length);
   upsertMetric("metric-jobs", state.scanJobs.filter((item) => item.status !== "completed" && item.status !== "failed").length);
 
-  const priorityBars = document.getElementById("priority-bars");
-  const agingBars = document.getElementById("aging-bars");
-  const hotFindings = document.getElementById("hot-findings");
+  const priorityBars = byId("priority-bars");
+  const agingBars = byId("aging-bars");
+  const hotFindings = byId("hot-findings");
   clearNode(priorityBars);
   clearNode(agingBars);
   clearNode(hotFindings);
@@ -383,10 +382,10 @@ function renderDashboard() {
   const priorities = ["p0", "p1", "p2", "p3", "p4"];
   const totalPriority = priorities.reduce((sum, key) => sum + Number(priorityCounts[key] || 0), 0) || 1;
   priorities.forEach((key) => {
-    const value = Number(priorityCounts[key] || 0);
     if (!priorityBars) {
       return;
     }
+    const value = Number(priorityCounts[key] || 0);
     const row = document.createElement("div");
     row.className = "bar-row";
     const labels = document.createElement("div");
@@ -410,10 +409,10 @@ function renderDashboard() {
   const agingKeys = ["new", "active", "stale", "chronic"];
   const totalAging = agingKeys.reduce((sum, key) => sum + Number(agingCounts[key] || 0), 0) || 1;
   agingKeys.forEach((key) => {
-    const value = Number(agingCounts[key] || 0);
     if (!agingBars) {
       return;
     }
+    const value = Number(agingCounts[key] || 0);
     const row = document.createElement("div");
     row.className = "bar-row";
     const labels = document.createElement("div");
@@ -433,10 +432,10 @@ function renderDashboard() {
     agingBars.appendChild(row);
   });
 
-  const hottest = sortFindings(state.findings).slice(0, 8);
   if (!hotFindings) {
     return;
   }
+  const hottest = sortFindings(state.findings).slice(0, 8);
   if (!hottest.length) {
     hotFindings.appendChild(emptyNode());
     return;
@@ -454,17 +453,47 @@ function renderDashboard() {
   });
 }
 
+function applyFindingFilters() {
+  const search = String(byId("findings-search")?.value || "").trim().toLowerCase();
+  const severity = String(byId("filter-severity")?.value || "").trim().toLowerCase();
+  const priority = String(byId("filter-priority")?.value || "").trim().toLowerCase();
+  const layer = String(byId("filter-layer")?.value || "").trim().toLowerCase();
+  const overdueOnly = Boolean(byId("filter-overdue")?.checked);
+
+  return sortFindings(state.findings).filter((item) => {
+    const title = String(item.title || "").toLowerCase();
+    const category = String(item.category || "").toLowerCase();
+    const assetName = String((item.asset && (item.asset.asset_name || item.asset.asset_id)) || "").toLowerCase();
+    if (search && !title.includes(search) && !category.includes(search) && !assetName.includes(search)) {
+      return false;
+    }
+    if (severity && String(item.severity || "").toLowerCase() !== severity) {
+      return false;
+    }
+    if (priority && String(item.risk?.priority || "").toLowerCase() !== priority) {
+      return false;
+    }
+    if (layer && String(item.source?.layer || "").toLowerCase() !== layer) {
+      return false;
+    }
+    if (overdueOnly && !item.risk?.overdue) {
+      return false;
+    }
+    return true;
+  });
+}
+
 function renderFindings() {
-  const tbody = document.getElementById("findings-table");
-  const detail = document.getElementById("finding-detail");
-  const actionButton = document.getElementById("create-remediation-btn");
+  const tbody = byId("findings-table");
+  const detail = byId("finding-detail");
   clearNode(tbody);
   clearNode(detail);
 
-  const filtered = applyFindingFilters();
   if (!tbody) {
     return;
   }
+
+  const filtered = applyFindingFilters();
   if (!filtered.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
@@ -475,42 +504,25 @@ function renderFindings() {
     if (detail) {
       detail.appendChild(emptyNode());
     }
-    if (actionButton) {
-      actionButton.disabled = true;
-    }
+    setDisabled(["create-remediation-btn"], true);
     return;
   }
 
   filtered.forEach((item) => {
     const row = document.createElement("tr");
     row.dataset.id = item.finding_id;
-    if (state.selectedFindingID && state.selectedFindingID === item.finding_id) {
+    if (state.selectedFindingID === item.finding_id) {
       row.classList.add("selected");
     }
 
     const priorityCell = document.createElement("td");
     priorityCell.appendChild(pill((item.risk?.priority || "p4").toUpperCase(), severityClass(item.severity)));
     row.appendChild(priorityCell);
-
-    const sevCell = document.createElement("td");
-    sevCell.textContent = item.severity || "unknown";
-    row.appendChild(sevCell);
-
-    const titleCell = document.createElement("td");
-    titleCell.textContent = item.title || item.category || "Untitled finding";
-    row.appendChild(titleCell);
-
-    const layerCell = document.createElement("td");
-    layerCell.textContent = item.source?.layer || "unknown";
-    row.appendChild(layerCell);
-
-    const assetCell = document.createElement("td");
-    assetCell.textContent = item.asset?.asset_name || item.asset?.asset_id || "unknown";
-    row.appendChild(assetCell);
-
-    const slaCell = document.createElement("td");
-    slaCell.textContent = `${item.risk?.sla_class || "n/a"} (${formatDate(item.risk?.sla_due_at)})`;
-    row.appendChild(slaCell);
+    appendCell(row, item.severity || "unknown");
+    appendCell(row, item.title || item.category || "Untitled finding");
+    appendCell(row, item.source?.layer || "unknown");
+    appendCell(row, item.asset?.asset_name || item.asset?.asset_id || "unknown");
+    appendCell(row, `${item.risk?.sla_class || "n/a"} (${formatDate(item.risk?.sla_due_at)})`);
 
     row.addEventListener("click", () => {
       state.selectedFindingID = item.finding_id;
@@ -522,6 +534,7 @@ function renderFindings() {
 
   const selected = filtered.find((item) => item.finding_id === state.selectedFindingID) || filtered[0];
   state.selectedFindingID = selected.finding_id;
+  setDisabled(["create-remediation-btn"], false);
   if (!detail) {
     return;
   }
@@ -537,62 +550,49 @@ function renderFindings() {
     ]
   ));
 
-  const lines = document.createElement("article");
-  lines.className = "card";
   const loc = selected.locations && selected.locations[0] ? selected.locations[0] : {};
   const evidence = selected.evidence && selected.evidence[0] ? selected.evidence[0] : {};
-  const linesHeading = document.createElement("strong");
-  linesHeading.textContent = "Operational Context";
-  lines.appendChild(linesHeading);
-  const linesBody = [
-    `SLA: ${selected.risk?.sla_class || "n/a"} | Due: ${formatDate(selected.risk?.sla_due_at)} | Overdue: ${selected.risk?.overdue ? "yes" : "no"}`,
-    `Exposure: ${selected.asset?.exposure || "unknown"} | Environment: ${selected.asset?.environment || "unknown"}`,
-    `Location: ${loc.path || loc.endpoint || "n/a"}${loc.line ? `:${loc.line}` : ""}`,
-    `Evidence: ${evidence.ref || "n/a"}`
-  ];
-  linesBody.forEach((value) => {
-    const para = document.createElement("p");
-    para.textContent = value;
-    lines.appendChild(para);
-  });
-  detail.appendChild(lines);
-
-  if (actionButton) {
-    actionButton.disabled = false;
-  }
+  detail.appendChild(card(
+    "Operational Context",
+    `SLA ${selected.risk?.sla_class || "n/a"}, due ${formatDate(selected.risk?.sla_due_at)}, overdue ${selected.risk?.overdue ? "yes" : "no"}`,
+    [
+      `exposure: ${selected.asset?.exposure || "unknown"}`,
+      `environment: ${selected.asset?.environment || "unknown"}`,
+      `location: ${loc.path || loc.endpoint || "n/a"}${loc.line ? `:${loc.line}` : ""}`,
+      `evidence: ${evidence.ref || "n/a"}`
+    ]
+  ));
 }
 
-async function createRemediationFromSelectedFinding() {
-  const finding = state.findings.find((item) => item.finding_id === state.selectedFindingID);
-  if (!finding) {
+function populateAssetProfileForm(profile) {
+  const form = byId("asset-profile-form");
+  if (!form) {
+    return;
+  }
+  if (!profile) {
+    form.reset();
     return;
   }
 
-  const title = window.prompt("Remediation title", `Mitigate: ${finding.title || finding.category}`);
-  if (!title || !title.trim()) {
-    return;
-  }
-
-  try {
-    setStatus("Creating remediation...");
-    await postJSON("/v1/remediations", {
-      finding_id: finding.finding_id,
-      title: title.trim(),
-      status: "open",
-      notes: `Created from finding ${finding.finding_id}`
-    });
-    await refreshAllData();
-    setRoute("remediations");
-    setStatus("Remediation created.");
-  } catch (error) {
-    setStatus(error.message, true);
-  }
+  form.asset_type.value = profile.asset_type || "";
+  form.asset_name.value = profile.asset_name || profile.asset_id || "";
+  form.environment.value = profile.environment || "";
+  form.exposure.value = profile.exposure || "";
+  form.criticality.value = Number(profile.criticality || 0).toFixed(1);
+  form.owner_team.value = profile.owner_team || "";
+  form.owner_hierarchy.value = Array.isArray(profile.owner_hierarchy) ? profile.owner_hierarchy.join(",") : "";
+  form.service_name.value = profile.service_name || "";
+  form.service_tier.value = profile.service_tier || "";
+  form.service_criticality_class.value = profile.service_criticality_class || "";
+  form.external_source.value = profile.external_source || "";
+  form.external_reference.value = profile.external_reference || "";
+  form.tags.value = Array.isArray(profile.tags) ? profile.tags.join(",") : "";
 }
 
 function renderAssets() {
-  const tbody = document.getElementById("assets-table");
-  const detail = document.getElementById("asset-detail");
-  const controlsNode = document.getElementById("asset-controls");
+  const tbody = byId("assets-table");
+  const detail = byId("asset-detail");
+  const controlsNode = byId("asset-controls");
   clearNode(tbody);
   clearNode(detail);
   clearNode(controlsNode);
@@ -610,6 +610,7 @@ function renderAssets() {
     if (detail) {
       detail.appendChild(emptyNode());
     }
+    populateAssetProfileForm(null);
     return;
   }
 
@@ -633,23 +634,23 @@ function renderAssets() {
     tbody.appendChild(row);
   });
 
-  if (!state.selectedAssetID && state.assets.length) {
+  if (!state.selectedAssetID) {
     state.selectedAssetID = state.assets[0].asset_id;
   }
-  const selectedSummary = state.assets.find((item) => item.asset_id === state.selectedAssetID);
-  const profile = state.assetProfilesByID[state.selectedAssetID] || selectedSummary;
+  const summary = state.assets.find((item) => item.asset_id === state.selectedAssetID);
+  const profile = state.assetProfilesByID[state.selectedAssetID] || summary;
+  populateAssetProfileForm(profile);
+
   if (detail && profile) {
     detail.appendChild(card(
-      profile.asset_name || profile.asset_id || profile.asset_id,
-      `Type: ${profile.asset_type || "unknown"} | Exposure: ${profile.exposure || "unknown"} | Environment: ${profile.environment || "unknown"}`,
+      profile.asset_name || profile.asset_id || state.selectedAssetID,
+      `type ${profile.asset_type || "unknown"}, exposure ${profile.exposure || "unknown"}, environment ${profile.environment || "unknown"}`,
       [
         `criticality: ${Number(profile.criticality || 0).toFixed(1)}`,
         `owner: ${profile.owner_team || "unassigned"}`,
         `service: ${profile.service_name || "n/a"}`
       ]
     ));
-  } else if (detail) {
-    detail.appendChild(emptyNode());
   }
 
   const controls = state.assetControlsByID[state.selectedAssetID] || [];
@@ -677,12 +678,12 @@ async function loadAssetDetails(assetID) {
     return;
   }
   try {
-    const [profile, controlsResponse] = await Promise.all([
+    const [profile, controls] = await Promise.all([
       getJSON(`/v1/assets/${encodeURIComponent(assetID)}`),
       getJSON(`/v1/assets/${encodeURIComponent(assetID)}/controls`)
     ]);
     state.assetProfilesByID[assetID] = profile;
-    state.assetControlsByID[assetID] = listItems(controlsResponse);
+    state.assetControlsByID[assetID] = listItems(controls);
   } catch (error) {
     setStatus(`Asset detail load failed: ${error.message}`, true);
   }
@@ -701,21 +702,41 @@ function formatPolicyRule(rule) {
   if (!exceptions.length) {
     return base;
   }
-  const details = exceptions.map((item) => {
-    const exceptValues = Array.isArray(item.values) && item.values.length ? item.values.join("|") : "*";
-    return `except ${item.field || rule.field || "field"} ${item.match || "exact"} ${exceptValues}`;
+  const rendered = exceptions.map((item) => {
+    const v = Array.isArray(item.values) && item.values.length ? item.values.join("|") : "*";
+    return `except ${item.field || rule.field || "field"} ${item.match || "exact"} ${v}`;
   });
-  return `${base}; ${details.join("; ")}`;
+  return `${base}; ${rendered.join("; ")}`;
+}
+
+function populatePolicyForms(policy) {
+  const updateForm = byId("policy-update-form");
+  const updateButton = byId("policy-update-submit");
+  if (!updateForm || !updateButton) {
+    return;
+  }
+  if (!policy) {
+    updateForm.reset();
+    updateButton.disabled = true;
+    return;
+  }
+
+  updateForm.name.value = policy.name || "";
+  updateForm.scope.value = policy.scope || "";
+  updateForm.mode.value = policy.mode || "monitor";
+  updateForm.enabled.checked = Boolean(policy.enabled);
+  updateForm.rules_json.value = JSON.stringify(Array.isArray(policy.rules) ? policy.rules : [], null, 2);
+  updateButton.disabled = false;
 }
 
 function renderPolicies() {
-  const tbody = document.getElementById("policies-table");
-  const detail = document.getElementById("policy-detail");
-  const versions = document.getElementById("policy-versions");
-  const versionsButton = document.getElementById("load-policy-versions");
+  const tbody = byId("policies-table");
+  const detail = byId("policy-detail");
+  const versionsNode = byId("policy-versions");
+  const versionsButton = byId("load-policy-versions");
   clearNode(tbody);
   clearNode(detail);
-  clearNode(versions);
+  clearNode(versionsNode);
 
   if (!tbody) {
     return;
@@ -733,6 +754,7 @@ function renderPolicies() {
     if (versionsButton) {
       versionsButton.disabled = true;
     }
+    populatePolicyForms(null);
     return;
   }
 
@@ -775,14 +797,14 @@ function renderPolicies() {
   if (versionsButton) {
     versionsButton.disabled = false;
   }
-  const cached = state.policyVersionsByID[selected.id];
-  if (versions) {
-    if (!cached || !cached.length) {
-      versions.appendChild(emptyNode());
+  const versions = state.policyVersionsByID[selected.id] || [];
+  if (versionsNode) {
+    if (!versions.length) {
+      versionsNode.appendChild(emptyNode());
     } else {
-      cached.forEach((item) => {
+      versions.forEach((item) => {
         const node = card(
-          `v${item.version_number} · ${item.change_type || "change"}`,
+          `v${item.version_number} | ${item.change_type || "change"}`,
           `by ${item.created_by || "unknown"}`,
           [formatDateTime(item.created_at)]
         );
@@ -792,42 +814,22 @@ function renderPolicies() {
           rollback.addEventListener("click", () => rollbackPolicy(selected.id, item.version_number));
           node.appendChild(rollback);
         }
-        versions.appendChild(node);
+        versionsNode.appendChild(node);
       });
     }
   }
+
+  populatePolicyForms(selected);
 }
 
-async function loadPolicyVersions() {
-  if (!state.selectedPolicyID) {
-    return;
-  }
-  try {
-    const response = await getJSON(`/v1/policies/${encodeURIComponent(state.selectedPolicyID)}/versions`);
-    state.policyVersionsByID[state.selectedPolicyID] = listItems(response);
-    renderPolicies();
-    setStatus("Policy versions loaded.");
-  } catch (error) {
-    setStatus(`Policy versions load failed: ${error.message}`, true);
-  }
-}
-
-async function rollbackPolicy(policyID, versionNumber) {
-  const ok = window.confirm(`Rollback policy to version ${versionNumber}?`);
-  if (!ok) {
-    return;
-  }
-  try {
-    await postJSON(`/v1/policies/${encodeURIComponent(policyID)}/rollback`, { version_number: versionNumber });
-    await refreshAllData();
-    setStatus(`Policy rolled back to v${versionNumber}.`);
-  } catch (error) {
-    setStatus(`Policy rollback failed: ${error.message}`, true);
-  }
+function flattenPendingRequests(collectionByRemediation, desiredStatus) {
+  return Object.values(collectionByRemediation)
+    .flat()
+    .filter((item) => String(item.status || "").toLowerCase() === desiredStatus);
 }
 
 function renderPolicyApprovalsList() {
-  const node = document.getElementById("policy-approvals-list");
+  const node = byId("policy-approvals-list");
   clearNode(node);
   if (!node) {
     return;
@@ -839,7 +841,7 @@ function renderPolicyApprovalsList() {
 
   state.policyApprovals.forEach((item) => {
     const entry = card(
-      `${item.action || "approval"} · ${item.status || "pending"}`,
+      `${item.action || "approval"} | ${item.status || "pending"}`,
       item.reason || "No approval note provided.",
       [item.policy_id || "no policy", item.requested_by || "unknown", formatDateTime(item.created_at)]
     );
@@ -861,32 +863,23 @@ function renderPolicyApprovalsList() {
   });
 }
 
-function flattenPendingRequests(collectionByRemediation, desiredStatus) {
-  return Object.values(collectionByRemediation)
-    .flat()
-    .filter((item) => String(item.status || "").toLowerCase() === desiredStatus);
-}
-
 function renderApprovalQueues() {
   renderPolicyApprovalsList();
 
-  const assignmentNode = document.getElementById("assignment-requests-list");
-  const exceptionNode = document.getElementById("exception-requests-list");
+  const assignmentNode = byId("assignment-requests-list");
+  const exceptionNode = byId("exception-requests-list");
   clearNode(assignmentNode);
   clearNode(exceptionNode);
 
-  const assignments = state.pendingAssignmentRequests;
-  const exceptions = state.pendingExceptionRequests;
-
   if (assignmentNode) {
-    if (!assignments.length) {
+    if (!state.pendingAssignmentRequests.length) {
       assignmentNode.appendChild(emptyNode());
     } else {
-      assignments.forEach((item) => {
+      state.pendingAssignmentRequests.forEach((item) => {
         const entry = card(
           `Assign ${item.requested_owner || "unassigned"}`,
           item.reason || "No reason provided.",
-          [item.remediation_id, item.requested_by || "unknown", formatDateTime(item.created_at)]
+          [item.remediation_id || "n/a", item.requested_by || "unknown", formatDateTime(item.created_at)]
         );
         const actions = document.createElement("div");
         actions.className = "action-row";
@@ -906,14 +899,14 @@ function renderApprovalQueues() {
   }
 
   if (exceptionNode) {
-    if (!exceptions.length) {
+    if (!state.pendingExceptionRequests.length) {
       exceptionNode.appendChild(emptyNode());
     } else {
-      exceptions.forEach((item) => {
+      state.pendingExceptionRequests.forEach((item) => {
         const entry = card(
           `Exception request (${Number(item.reduction || 0).toFixed(1)} reduction)`,
           item.reason || "No reason provided.",
-          [item.remediation_id, item.requested_by || "unknown", formatDateTime(item.created_at)]
+          [item.remediation_id || "n/a", item.requested_by || "unknown", formatDateTime(item.created_at)]
         );
         const actions = document.createElement("div");
         actions.className = "action-row";
@@ -933,95 +926,49 @@ function renderApprovalQueues() {
   }
 }
 
-async function refreshApprovalWorkQueues() {
-  if (!state.remediations.length) {
-    state.pendingAssignmentRequests = [];
-    state.pendingExceptionRequests = [];
-    renderApprovalQueues();
-    return;
-  }
-
-  setStatus("Loading assignment and exception approval queues...");
-  const assignmentTasks = state.remediations.map((item) =>
-    getJSON(`/v1/remediations/${encodeURIComponent(item.id)}/assignment-requests`)
-      .then((payload) => ({ remediationID: item.id, items: listItems(payload) }))
-      .catch(() => ({ remediationID: item.id, items: [] }))
-  );
-  const exceptionTasks = state.remediations.map((item) =>
-    getJSON(`/v1/remediations/${encodeURIComponent(item.id)}/exceptions`)
-      .then((payload) => ({ remediationID: item.id, items: listItems(payload) }))
-      .catch(() => ({ remediationID: item.id, items: [] }))
-  );
-
-  const [assignmentResults, exceptionResults] = await Promise.all([
-    Promise.all(assignmentTasks),
-    Promise.all(exceptionTasks)
-  ]);
-
-  assignmentResults.forEach((result) => {
-    state.remediationAssignmentsByID[result.remediationID] = result.items;
-  });
-  exceptionResults.forEach((result) => {
-    state.remediationExceptionsByID[result.remediationID] = result.items;
-  });
-
-  state.pendingAssignmentRequests = flattenPendingRequests(state.remediationAssignmentsByID, "pending");
-  state.pendingExceptionRequests = flattenPendingRequests(state.remediationExceptionsByID, "pending");
-  renderApprovalQueues();
-  setStatus("Approval queues loaded.");
-}
-
-async function decidePolicyApproval(approvalID, approved) {
-  const reason = window.prompt(approved ? "Approval reason" : "Denial reason", "") || "";
-  try {
-    await postJSON(`/v1/policy-approvals/${encodeURIComponent(approvalID)}/${approved ? "approve" : "deny"}`, { reason });
-    await refreshAllData();
-    setStatus(`Policy approval ${approved ? "approved" : "denied"}.`);
-  } catch (error) {
-    setStatus(`Policy approval decision failed: ${error.message}`, true);
-  }
-}
-
-async function decideAssignment(requestID, approved) {
-  const reason = window.prompt(approved ? "Assignment approval note" : "Assignment denial note", "") || "";
-  try {
-    await postJSON(`/v1/remediation-assignments/${encodeURIComponent(requestID)}/${approved ? "approve" : "deny"}`, { reason });
-    await refreshApprovalWorkQueues();
-    await refreshAllData();
-    setStatus(`Assignment request ${approved ? "approved" : "denied"}.`);
-  } catch (error) {
-    setStatus(`Assignment decision failed: ${error.message}`, true);
-  }
-}
-
-async function decideException(exceptionID, approved) {
-  const reason = window.prompt(approved ? "Exception approval note" : "Exception denial note", "") || "";
-  try {
-    await postJSON(`/v1/remediation-exceptions/${encodeURIComponent(exceptionID)}/${approved ? "approve" : "deny"}`, { reason });
-    await refreshApprovalWorkQueues();
-    await refreshAllData();
-    setStatus(`Exception request ${approved ? "approved" : "denied"}.`);
-  } catch (error) {
-    setStatus(`Exception decision failed: ${error.message}`, true);
-  }
-}
-
 function currentRemediationItems() {
-  const filter = (document.getElementById("remediation-status-filter")?.value || "").trim().toLowerCase();
+  const filter = String(byId("remediation-status-filter")?.value || "").trim().toLowerCase();
   if (!filter) {
     return [...state.remediations];
   }
   return state.remediations.filter((item) => String(item.status || "").toLowerCase() === filter);
 }
 
-function renderRemediations() {
-  const tbody = document.getElementById("remediations-table");
-  const detail = document.getElementById("remediation-detail");
-  const activity = document.getElementById("remediation-activity");
-  const transitionButton = document.getElementById("transition-remediation-btn");
-  const retestButton = document.getElementById("request-retest-btn");
-  const commentButton = document.getElementById("add-comment-btn");
+function renderRemediationCollection(nodeID, items, titleFn, bodyFn, metaFn) {
+  const node = byId(nodeID);
+  clearNode(node);
+  if (!node) {
+    return;
+  }
+  if (!items.length) {
+    node.appendChild(emptyNode());
+    return;
+  }
+  items.forEach((item) => {
+    node.appendChild(card(titleFn(item), bodyFn(item), metaFn(item)));
+  });
+}
 
+function setRemediationControlsEnabled(enabled) {
+  setDisabled([
+    "transition-remediation-btn",
+    "request-retest-btn",
+    "add-comment-btn",
+    "remediation-transition-submit",
+    "remediation-retest-submit",
+    "remediation-comment-submit",
+    "remediation-exception-submit",
+    "remediation-assignment-submit",
+    "remediation-ticket-submit",
+    "remediation-evidence-submit",
+    "remediation-verify-submit"
+  ], !enabled);
+}
+
+function renderRemediations() {
+  const tbody = byId("remediations-table");
+  const detail = byId("remediation-detail");
+  const activity = byId("remediation-activity");
   clearNode(tbody);
   clearNode(detail);
   clearNode(activity);
@@ -1044,11 +991,12 @@ function renderRemediations() {
     if (activity) {
       activity.appendChild(emptyNode());
     }
-    [transitionButton, retestButton, commentButton].forEach((button) => {
-      if (button) {
-        button.disabled = true;
-      }
-    });
+    renderRemediationCollection("remediation-verifications", [], () => "", () => "", () => []);
+    renderRemediationCollection("remediation-evidence", [], () => "", () => "", () => []);
+    renderRemediationCollection("remediation-exceptions", [], () => "", () => "", () => []);
+    renderRemediationCollection("remediation-tickets", [], () => "", () => "", () => []);
+    renderRemediationCollection("remediation-assignments", [], () => "", () => "", () => []);
+    setRemediationControlsEnabled(false);
     return;
   }
 
@@ -1073,6 +1021,7 @@ function renderRemediations() {
 
   const selected = items.find((item) => item.id === state.selectedRemediationID) || items[0];
   state.selectedRemediationID = selected.id;
+  setRemediationControlsEnabled(true);
 
   if (detail) {
     detail.appendChild(card(
@@ -1085,22 +1034,10 @@ function renderRemediations() {
         `finding: ${selected.finding_id || "n/a"}`
       ]
     ));
-
-    const verificationItems = state.remediationVerificationsByID[selected.id] || [];
-    const evidenceItems = state.remediationEvidenceByID[selected.id] || [];
-    const exceptionItems = state.remediationExceptionsByID[selected.id] || [];
-    const ticketItems = state.remediationTicketsByID[selected.id] || [];
-    const assignmentItems = state.remediationAssignmentsByID[selected.id] || [];
-
-    detail.appendChild(card("Verifications", `${verificationItems.length} records`, []));
-    detail.appendChild(card("Evidence", `${evidenceItems.length} records`, []));
-    detail.appendChild(card("Exceptions", `${exceptionItems.length} records`, []));
-    detail.appendChild(card("Tickets", `${ticketItems.length} links`, []));
-    detail.appendChild(card("Assignment Requests", `${assignmentItems.length} requests`, []));
   }
 
+  const activityItems = state.remediationActivityByID[selected.id] || [];
   if (activity) {
-    const activityItems = state.remediationActivityByID[selected.id] || [];
     if (!activityItems.length) {
       activity.appendChild(emptyNode());
     } else {
@@ -1114,11 +1051,61 @@ function renderRemediations() {
     }
   }
 
-  [transitionButton, retestButton, commentButton].forEach((button) => {
-    if (button) {
-      button.disabled = false;
-    }
-  });
+  const verifications = state.remediationVerificationsByID[selected.id] || [];
+  renderRemediationCollection(
+    "remediation-verifications",
+    verifications,
+    (item) => `${item.status || "unknown"} | ${item.outcome || "pending"}`,
+    (item) => item.notes || "No verification notes.",
+    (item) => [item.id || "n/a", item.scan_job_id || "no scan job", formatDateTime(item.updated_at)]
+  );
+
+  const evidence = state.remediationEvidenceByID[selected.id] || [];
+  renderRemediationCollection(
+    "remediation-evidence",
+    evidence,
+    (item) => `${item.kind || "evidence"} | ${item.name || "unnamed"}`,
+    (item) => item.summary || item.ref || "No evidence summary.",
+    (item) => [item.ref || "n/a", item.created_by || "unknown", formatDateTime(item.created_at)]
+  );
+
+  const exceptions = state.remediationExceptionsByID[selected.id] || [];
+  renderRemediationCollection(
+    "remediation-exceptions",
+    exceptions,
+    (item) => `${item.status || "pending"} | reduction ${Number(item.reduction || 0).toFixed(1)}`,
+    (item) => item.reason || "No reason provided.",
+    (item) => [item.requested_by || "unknown", item.decided_by || "n/a", formatDateTime(item.updated_at)]
+  );
+
+  const tickets = state.remediationTicketsByID[selected.id] || [];
+  renderRemediationCollection(
+    "remediation-tickets",
+    tickets,
+    (item) => `${item.provider || "provider"} | ${item.external_id || "external id"}`,
+    (item) => item.title || item.url || "No ticket details.",
+    (item) => [item.status || "unknown", formatDateTime(item.updated_at)]
+  );
+
+  const assignments = state.remediationAssignmentsByID[selected.id] || [];
+  renderRemediationCollection(
+    "remediation-assignments",
+    assignments,
+    (item) => `${item.status || "pending"} | ${item.requested_owner || "unassigned"}`,
+    (item) => item.reason || "No reason provided.",
+    (item) => [item.requested_by || "unknown", item.decided_by || "n/a", formatDateTime(item.updated_at)]
+  );
+
+  const transitionForm = byId("remediation-transition-form");
+  if (transitionForm) {
+    transitionForm.status.value = REMEDIATION_STATUS_FLOW[selected.status] || selected.status || "in_progress";
+  }
+
+  const verifyForm = byId("remediation-verify-form");
+  if (verifyForm) {
+    const latest = verifications.length ? verifications[0] : null;
+    verifyForm.verification_id.value = latest ? (latest.id || "") : "";
+  }
 }
 
 async function loadRemediationDetails(remediationID) {
@@ -1134,7 +1121,6 @@ async function loadRemediationDetails(remediationID) {
       getJSON(`/v1/remediations/${encodeURIComponent(remediationID)}/tickets`),
       getJSON(`/v1/remediations/${encodeURIComponent(remediationID)}/assignment-requests`)
     ]);
-
     state.remediationActivityByID[remediationID] = listItems(activity);
     state.remediationVerificationsByID[remediationID] = listItems(verifications);
     state.remediationEvidenceByID[remediationID] = listItems(evidence);
@@ -1146,121 +1132,53 @@ async function loadRemediationDetails(remediationID) {
   }
 }
 
-async function transitionSelectedRemediation() {
-  const remediation = state.remediations.find((item) => item.id === state.selectedRemediationID);
-  if (!remediation) {
-    return;
-  }
-  const defaultTarget = REMEDIATION_STATUS_FLOW[remediation.status] || remediation.status;
-  const status = window.prompt("Next remediation status", defaultTarget);
-  if (!status || !status.trim()) {
-    return;
-  }
-
-  const notes = window.prompt("Transition notes", "") || "";
-  try {
-    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/transition`, {
-      status: status.trim(),
-      notes
-    });
-    await refreshAllData();
-    await loadRemediationDetails(remediation.id);
-    renderRemediations();
-    setStatus(`Remediation transitioned to ${status.trim()}.`);
-  } catch (error) {
-    setStatus(`Remediation transition failed: ${error.message}`, true);
-  }
-}
-
-async function requestRetestForSelectedRemediation() {
-  const remediation = state.remediations.find((item) => item.id === state.selectedRemediationID);
-  if (!remediation) {
-    return;
-  }
-  const notes = window.prompt("Retest notes", "") || "";
-  try {
-    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/retest`, { notes });
-    await refreshAllData();
-    await loadRemediationDetails(remediation.id);
-    renderRemediations();
-    setStatus("Retest requested.");
-  } catch (error) {
-    setStatus(`Retest request failed: ${error.message}`, true);
-  }
-}
-
-async function addCommentForSelectedRemediation() {
-  const remediation = state.remediations.find((item) => item.id === state.selectedRemediationID);
-  if (!remediation) {
-    return;
-  }
-  const comment = window.prompt("Comment", "");
-  if (!comment || !comment.trim()) {
-    return;
-  }
-  try {
-    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/comments`, { comment: comment.trim() });
-    await loadRemediationDetails(remediation.id);
-    renderRemediations();
-    setStatus("Comment added.");
-  } catch (error) {
-    setStatus(`Comment creation failed: ${error.message}`, true);
-  }
-}
-
 function renderOperations() {
-  const node = document.getElementById("notifications-list");
-  clearNode(node);
-  if (!node) {
-    return;
-  }
-  if (!state.notifications.length) {
-    node.appendChild(emptyNode());
-    return;
-  }
+  const notificationsNode = byId("notifications-list");
+  const auditNode = byId("audit-events-list");
+  clearNode(notificationsNode);
+  clearNode(auditNode);
 
-  state.notifications.forEach((item) => {
-    const entry = card(
-      `${item.category || "notification"} · ${item.status || "open"}`,
-      item.subject || item.body || "No notification text",
-      [item.severity || "info", item.recipient || "n/a", formatDateTime(item.created_at)]
-    );
-    if (item.status !== "acknowledged") {
-      const ack = document.createElement("button");
-      ack.textContent = "Acknowledge";
-      ack.addEventListener("click", () => acknowledgeNotification(item.id));
-      entry.appendChild(ack);
+  if (notificationsNode) {
+    if (!state.notifications.length) {
+      notificationsNode.appendChild(emptyNode());
+    } else {
+      state.notifications.forEach((item) => {
+        const entry = card(
+          `${item.category || "notification"} | ${item.status || "open"}`,
+          item.subject || item.body || "No notification text.",
+          [item.severity || "info", item.recipient || "n/a", formatDateTime(item.created_at)]
+        );
+        if (item.status !== "acknowledged") {
+          const ack = document.createElement("button");
+          ack.textContent = "Acknowledge";
+          ack.addEventListener("click", () => acknowledgeNotification(item.id));
+          entry.appendChild(ack);
+        }
+        notificationsNode.appendChild(entry);
+      });
     }
-    node.appendChild(entry);
-  });
-}
-
-async function acknowledgeNotification(notificationID) {
-  try {
-    await postJSON(`/v1/notifications/${encodeURIComponent(notificationID)}/ack`, {});
-    await refreshAllData();
-    setStatus("Notification acknowledged.");
-  } catch (error) {
-    setStatus(`Notification acknowledgment failed: ${error.message}`, true);
   }
-}
 
-async function runEscalationSweep() {
-  try {
-    const result = await postJSON("/v1/remediation-escalations/sweep", {});
-    await refreshAllData();
-    setStatus(`Escalation sweep complete: ${Number(result.created || 0)} notifications created.`);
-  } catch (error) {
-    setStatus(`Escalation sweep failed: ${error.message}`, true);
+  if (auditNode) {
+    if (!state.auditEvents.length) {
+      auditNode.appendChild(emptyNode());
+    } else {
+      state.auditEvents.slice(0, 40).forEach((item) => {
+        auditNode.appendChild(card(
+          `${item.action || "action"} | ${item.status || "status"}`,
+          `${item.resource_type || "resource"} ${item.resource_id || ""}`.trim(),
+          [item.actor_email || "system", item.request_method || "n/a", formatDateTime(item.created_at)]
+        ));
+      });
+    }
   }
 }
 
 function renderReportPreview(payload) {
-  const node = document.getElementById("report-preview");
-  if (!node) {
-    return;
+  const node = byId("report-preview");
+  if (node) {
+    node.textContent = JSON.stringify(payload, null, 2);
   }
-  node.textContent = JSON.stringify(payload, null, 2);
 }
 
 function downloadJSONFile(filename, payload) {
@@ -1286,47 +1204,15 @@ function buildSummarySnapshot() {
       policies: state.policies.length,
       approvals: state.policyApprovals.length,
       notifications: state.notifications.length,
+      audit_events: state.auditEvents.length,
       scan_jobs: state.scanJobs.length
     },
     risk_summary: state.riskSummary
   };
 }
 
-async function createScanJobFromForm(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const resultNode = document.getElementById("scanjob-result");
-  const formData = new FormData(form);
-  const targetKind = String(formData.get("target_kind") || "").trim();
-  const target = String(formData.get("target") || "").trim();
-  const profile = String(formData.get("profile") || "").trim();
-  const toolsInput = String(formData.get("tools") || "").trim();
-  const tools = toolsInput ? toolsInput.split(",").map((item) => item.trim()).filter(Boolean) : [];
-
-  if (!targetKind || !target || !profile) {
-    setStatus("target_kind, target, and profile are required.", true);
-    return;
-  }
-
-  try {
-    const job = await postJSON("/v1/scan-jobs", {
-      target_kind: targetKind,
-      target,
-      profile,
-      tools
-    });
-    if (resultNode) {
-      resultNode.textContent = `Created ${job.id} (${job.status}) with approval mode ${job.approval_mode}`;
-    }
-    await refreshAllData();
-    setStatus(`Scan job ${job.id} created.`);
-  } catch (error) {
-    setStatus(`Scan job creation failed: ${error.message}`, true);
-  }
-}
-
 function renderAll() {
-  updateSession(state.session);
+  updateSession();
   renderRoute();
   renderDashboard();
   renderFindings();
@@ -1336,6 +1222,40 @@ function renderAll() {
   renderRemediations();
   renderOperations();
   renderReportPreview(buildSummarySnapshot());
+}
+
+async function refreshApprovalWorkQueues() {
+  if (!state.remediations.length) {
+    state.pendingAssignmentRequests = [];
+    state.pendingExceptionRequests = [];
+    renderApprovalQueues();
+    return;
+  }
+
+  setStatus("Loading assignment and exception approval queues...");
+  const assignmentTasks = state.remediations.map((item) =>
+    getJSON(`/v1/remediations/${encodeURIComponent(item.id)}/assignment-requests`)
+      .then((payload) => ({ remediationID: item.id, items: listItems(payload) }))
+      .catch(() => ({ remediationID: item.id, items: [] }))
+  );
+  const exceptionTasks = state.remediations.map((item) =>
+    getJSON(`/v1/remediations/${encodeURIComponent(item.id)}/exceptions`)
+      .then((payload) => ({ remediationID: item.id, items: listItems(payload) }))
+      .catch(() => ({ remediationID: item.id, items: [] }))
+  );
+
+  const [assignments, exceptions] = await Promise.all([Promise.all(assignmentTasks), Promise.all(exceptionTasks)]);
+  assignments.forEach((item) => {
+    state.remediationAssignmentsByID[item.remediationID] = item.items;
+  });
+  exceptions.forEach((item) => {
+    state.remediationExceptionsByID[item.remediationID] = item.items;
+  });
+
+  state.pendingAssignmentRequests = flattenPendingRequests(state.remediationAssignmentsByID, "pending");
+  state.pendingExceptionRequests = flattenPendingRequests(state.remediationExceptionsByID, "pending");
+  renderApprovalQueues();
+  setStatus("Approval queues loaded.");
 }
 
 async function refreshAllData() {
@@ -1349,11 +1269,12 @@ async function refreshAllData() {
     getJSON("/v1/policy-approvals"),
     getJSON("/v1/remediations"),
     getJSON("/v1/notifications"),
+    getJSON("/v1/audit-events"),
     getJSON("/v1/scan-jobs"),
     getJSON("/v1/risk/summary")
   ]);
 
-  const [sessionRes, findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, scanJobsRes, riskSummaryRes] = tasks;
+  const [sessionRes, findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, riskRes] = tasks;
 
   if (sessionRes.status === "fulfilled") {
     state.session = sessionRes.value;
@@ -1374,8 +1295,9 @@ async function refreshAllData() {
   state.policyApprovals = approvalsRes.status === "fulfilled" ? listItems(approvalsRes.value) : [];
   state.remediations = remediationsRes.status === "fulfilled" ? listItems(remediationsRes.value) : [];
   state.notifications = notificationsRes.status === "fulfilled" ? listItems(notificationsRes.value) : [];
-  state.scanJobs = scanJobsRes.status === "fulfilled" ? listItems(scanJobsRes.value) : [];
-  state.riskSummary = riskSummaryRes.status === "fulfilled" ? riskSummaryRes.value : null;
+  state.auditEvents = auditRes.status === "fulfilled" ? listItems(auditRes.value) : [];
+  state.scanJobs = jobsRes.status === "fulfilled" ? listItems(jobsRes.value) : [];
+  state.riskSummary = riskRes.status === "fulfilled" ? riskRes.value : null;
 
   if (state.selectedAssetID) {
     await loadAssetDetails(state.selectedAssetID);
@@ -1394,23 +1316,591 @@ async function refreshAllData() {
   setStatus("Data refreshed.");
 }
 
+function parseNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return numeric;
+}
+
+async function createRemediationFromSelectedFinding() {
+  const finding = state.findings.find((item) => item.finding_id === state.selectedFindingID);
+  if (!finding) {
+    setStatus("Select a finding before creating remediation.", true);
+    return;
+  }
+
+  try {
+    setStatus("Creating remediation...");
+    const created = await postJSON("/v1/remediations", {
+      finding_id: finding.finding_id,
+      title: `Mitigate: ${finding.title || finding.category || finding.finding_id}`,
+      status: "open",
+      notes: `Created from finding ${finding.finding_id}`
+    });
+    if (created && created.id) {
+      state.selectedRemediationID = created.id;
+    }
+    await refreshAllData();
+    setRoute("remediations");
+    setStatus("Remediation created.");
+  } catch (error) {
+    setStatus(`Remediation creation failed: ${error.message}`, true);
+  }
+}
+
+async function upsertSelectedAssetProfile(event) {
+  event.preventDefault();
+  const assetID = state.selectedAssetID;
+  if (!assetID) {
+    setStatus("Select an asset before updating profile.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const body = {
+    asset_type: String(formData.get("asset_type") || "").trim(),
+    asset_name: String(formData.get("asset_name") || "").trim(),
+    environment: String(formData.get("environment") || "").trim(),
+    exposure: String(formData.get("exposure") || "").trim(),
+    criticality: parseNumber(formData.get("criticality"), 0),
+    owner_team: String(formData.get("owner_team") || "").trim(),
+    owner_hierarchy: splitCSV(formData.get("owner_hierarchy")),
+    service_name: String(formData.get("service_name") || "").trim(),
+    service_tier: String(formData.get("service_tier") || "").trim(),
+    service_criticality_class: String(formData.get("service_criticality_class") || "").trim(),
+    external_source: String(formData.get("external_source") || "").trim(),
+    external_reference: String(formData.get("external_reference") || "").trim(),
+    tags: splitCSV(formData.get("tags"))
+  };
+
+  if (!body.asset_type) {
+    setStatus("asset_type is required.", true);
+    return;
+  }
+
+  try {
+    await putJSON(`/v1/assets/${encodeURIComponent(assetID)}`, body);
+    await loadAssetDetails(assetID);
+    await refreshAllData();
+    setStatus(`Asset profile ${assetID} updated.`);
+  } catch (error) {
+    setStatus(`Asset profile update failed: ${error.message}`, true);
+  }
+}
+
+async function createCompensatingControlForSelectedAsset(event) {
+  event.preventDefault();
+  const assetID = state.selectedAssetID;
+  if (!assetID) {
+    setStatus("Select an asset before adding a control.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const body = {
+    name: String(formData.get("name") || "").trim(),
+    control_type: String(formData.get("control_type") || "").trim(),
+    scope_layer: String(formData.get("scope_layer") || "").trim(),
+    effectiveness: parseNumber(formData.get("effectiveness"), 0),
+    enabled: formData.get("enabled") === "on",
+    notes: String(formData.get("notes") || "").trim()
+  };
+
+  if (!body.name) {
+    setStatus("Control name is required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/assets/${encodeURIComponent(assetID)}/controls`, body);
+    event.currentTarget.reset();
+    await loadAssetDetails(assetID);
+    await refreshAllData();
+    setStatus("Compensating control added.");
+  } catch (error) {
+    setStatus(`Compensating control creation failed: ${error.message}`, true);
+  }
+}
+
+async function createPolicyFromForm(event) {
+  event.preventDefault();
+  const formData = new FormData(event.currentTarget);
+  const name = String(formData.get("name") || "").trim();
+  if (!name) {
+    setStatus("Policy name is required.", true);
+    return;
+  }
+
+  let rules = [];
+  try {
+    rules = parseRulesJSON(formData.get("rules_json"));
+  } catch (error) {
+    setStatus(error.message, true);
+    return;
+  }
+
+  try {
+    const created = await postJSON("/v1/policies", {
+      name,
+      scope: String(formData.get("scope") || "").trim(),
+      mode: String(formData.get("mode") || "enforced").trim(),
+      enabled: formData.get("enabled") === "on",
+      global: formData.get("global") === "on",
+      rules
+    });
+    if (created && created.id) {
+      state.selectedPolicyID = created.id;
+    }
+    await refreshAllData();
+    setStatus("Policy created.");
+  } catch (error) {
+    setStatus(`Policy creation failed: ${error.message}`, true);
+  }
+}
+
+async function updateSelectedPolicyFromForm(event) {
+  event.preventDefault();
+  if (!state.selectedPolicyID) {
+    setStatus("Select a policy before updating.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const name = String(formData.get("name") || "").trim();
+  if (!name) {
+    setStatus("Policy name is required.", true);
+    return;
+  }
+
+  let rules = [];
+  try {
+    rules = parseRulesJSON(formData.get("rules_json"));
+  } catch (error) {
+    setStatus(error.message, true);
+    return;
+  }
+
+  try {
+    await putJSON(`/v1/policies/${encodeURIComponent(state.selectedPolicyID)}`, {
+      name,
+      scope: String(formData.get("scope") || "").trim(),
+      mode: String(formData.get("mode") || "monitor").trim(),
+      enabled: formData.get("enabled") === "on",
+      rules
+    });
+    await refreshAllData();
+    setStatus("Policy updated.");
+  } catch (error) {
+    setStatus(`Policy update failed: ${error.message}`, true);
+  }
+}
+
+async function loadPolicyVersions() {
+  if (!state.selectedPolicyID) {
+    setStatus("Select a policy before loading versions.", true);
+    return;
+  }
+  try {
+    const response = await getJSON(`/v1/policies/${encodeURIComponent(state.selectedPolicyID)}/versions`);
+    state.policyVersionsByID[state.selectedPolicyID] = listItems(response);
+    renderPolicies();
+    setStatus("Policy versions loaded.");
+  } catch (error) {
+    setStatus(`Policy versions load failed: ${error.message}`, true);
+  }
+}
+
+async function rollbackPolicy(policyID, versionNumber) {
+  const confirmed = window.confirm(`Rollback policy to version ${versionNumber}?`);
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/policies/${encodeURIComponent(policyID)}/rollback`, { version_number: versionNumber });
+    await refreshAllData();
+    setStatus(`Policy rolled back to v${versionNumber}.`);
+  } catch (error) {
+    setStatus(`Policy rollback failed: ${error.message}`, true);
+  }
+}
+
+async function decidePolicyApproval(approvalID, approved) {
+  const reason = window.prompt(approved ? "Approval reason" : "Denial reason", "") || "";
+  try {
+    await postJSON(`/v1/policy-approvals/${encodeURIComponent(approvalID)}/${approved ? "approve" : "deny"}`, { reason });
+    await refreshAllData();
+    if (state.route === "approvals") {
+      await refreshApprovalWorkQueues();
+    }
+    setStatus(`Policy approval ${approved ? "approved" : "denied"}.`);
+  } catch (error) {
+    setStatus(`Policy approval decision failed: ${error.message}`, true);
+  }
+}
+
+async function decideAssignment(requestID, approved) {
+  const reason = window.prompt(approved ? "Assignment approval note" : "Assignment denial note", "") || "";
+  try {
+    await postJSON(`/v1/remediation-assignments/${encodeURIComponent(requestID)}/${approved ? "approve" : "deny"}`, { reason });
+    await refreshAllData();
+    if (state.route === "approvals") {
+      await refreshApprovalWorkQueues();
+    }
+    setStatus(`Assignment request ${approved ? "approved" : "denied"}.`);
+  } catch (error) {
+    setStatus(`Assignment decision failed: ${error.message}`, true);
+  }
+}
+
+async function decideException(exceptionID, approved) {
+  const reason = window.prompt(approved ? "Exception approval note" : "Exception denial note", "") || "";
+  try {
+    await postJSON(`/v1/remediation-exceptions/${encodeURIComponent(exceptionID)}/${approved ? "approve" : "deny"}`, { reason });
+    await refreshAllData();
+    if (state.route === "approvals") {
+      await refreshApprovalWorkQueues();
+    }
+    setStatus(`Exception request ${approved ? "approved" : "denied"}.`);
+  } catch (error) {
+    setStatus(`Exception decision failed: ${error.message}`, true);
+  }
+}
+
+function selectedRemediation() {
+  return state.remediations.find((item) => item.id === state.selectedRemediationID) || null;
+}
+
+async function transitionSelectedRemediationFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before transitioning.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const status = String(formData.get("status") || "").trim();
+  if (!status) {
+    setStatus("Next status is required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/transition`, {
+      status,
+      notes: String(formData.get("notes") || "").trim()
+    });
+    await refreshAllData();
+    setStatus(`Remediation transitioned to ${status}.`);
+  } catch (error) {
+    setStatus(`Remediation transition failed: ${error.message}`, true);
+  }
+}
+
+async function requestRetestForSelectedRemediationFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before requesting retest.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  try {
+    const result = await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/retest`, {
+      notes: String(formData.get("notes") || "").trim()
+    });
+    await refreshAllData();
+    const jobID = result && result.scan_job ? result.scan_job.id : "";
+    if (jobID) {
+      setStatus(`Retest requested. Scan job ${jobID} created.`);
+    } else {
+      setStatus("Retest requested.");
+    }
+  } catch (error) {
+    setStatus(`Retest request failed: ${error.message}`, true);
+  }
+}
+
+async function addCommentForSelectedRemediationFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before adding a comment.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const comment = String(formData.get("comment") || "").trim();
+  if (!comment) {
+    setStatus("Comment is required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/comments`, { comment });
+    event.currentTarget.reset();
+    await refreshAllData();
+    setStatus("Comment added.");
+  } catch (error) {
+    setStatus(`Comment creation failed: ${error.message}`, true);
+  }
+}
+
+async function createRemediationExceptionFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before creating an exception.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const reason = String(formData.get("reason") || "").trim();
+  const reduction = parseNumber(formData.get("reduction"), 0);
+  if (!reason || reduction <= 0) {
+    setStatus("Exception reason and positive reduction are required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/exceptions`, {
+      reason,
+      reduction,
+      notes: String(formData.get("notes") || "").trim()
+    });
+    event.currentTarget.reset();
+    await refreshAllData();
+    if (state.route === "approvals") {
+      await refreshApprovalWorkQueues();
+    }
+    setStatus("Exception request created.");
+  } catch (error) {
+    setStatus(`Exception creation failed: ${error.message}`, true);
+  }
+}
+
+async function createRemediationAssignmentFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before requesting assignment.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const requestedOwner = String(formData.get("requested_owner") || "").trim();
+  if (!requestedOwner) {
+    setStatus("Requested owner is required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/assignment-requests`, {
+      requested_owner: requestedOwner,
+      reason: String(formData.get("reason") || "").trim()
+    });
+    event.currentTarget.reset();
+    await refreshAllData();
+    if (state.route === "approvals") {
+      await refreshApprovalWorkQueues();
+    }
+    setStatus("Assignment request created.");
+  } catch (error) {
+    setStatus(`Assignment request failed: ${error.message}`, true);
+  }
+}
+
+async function createRemediationTicketFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before linking ticket.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const provider = String(formData.get("provider") || "").trim();
+  const externalID = String(formData.get("external_id") || "").trim();
+  if (!provider || !externalID) {
+    setStatus("Provider and external ID are required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/tickets`, {
+      provider,
+      external_id: externalID,
+      title: String(formData.get("title") || "").trim(),
+      url: String(formData.get("url") || "").trim(),
+      status: String(formData.get("status") || "").trim()
+    });
+    event.currentTarget.reset();
+    await refreshAllData();
+    setStatus("Ticket link created.");
+  } catch (error) {
+    setStatus(`Ticket link creation failed: ${error.message}`, true);
+  }
+}
+
+async function createRemediationEvidenceFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before adding evidence.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const kind = String(formData.get("kind") || "").trim();
+  const ref = String(formData.get("ref") || "").trim();
+  if (!kind || !ref) {
+    setStatus("Evidence kind and reference are required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/evidence`, {
+      kind,
+      name: String(formData.get("name") || "").trim(),
+      ref,
+      summary: String(formData.get("summary") || "").trim()
+    });
+    event.currentTarget.reset();
+    await refreshAllData();
+    setStatus("Evidence added.");
+  } catch (error) {
+    setStatus(`Evidence creation failed: ${error.message}`, true);
+  }
+}
+
+async function recordRemediationVerificationFromForm(event) {
+  event.preventDefault();
+  const remediation = selectedRemediation();
+  if (!remediation) {
+    setStatus("Select a remediation before recording verification.", true);
+    return;
+  }
+
+  const formData = new FormData(event.currentTarget);
+  const verificationID = String(formData.get("verification_id") || "").trim();
+  const outcome = String(formData.get("outcome") || "").trim();
+  if (!verificationID || !outcome) {
+    setStatus("Verification ID and outcome are required.", true);
+    return;
+  }
+
+  try {
+    await postJSON(`/v1/remediations/${encodeURIComponent(remediation.id)}/verify`, {
+      verification_id: verificationID,
+      outcome,
+      notes: String(formData.get("notes") || "").trim()
+    });
+    await refreshAllData();
+    setStatus("Verification recorded.");
+  } catch (error) {
+    setStatus(`Verification recording failed: ${error.message}`, true);
+  }
+}
+
+async function transitionSelectedRemediation() {
+  const form = byId("remediation-transition-form");
+  if (!form) {
+    return;
+  }
+  form.requestSubmit();
+}
+
+async function requestRetestForSelectedRemediation() {
+  const form = byId("remediation-retest-form");
+  if (!form) {
+    return;
+  }
+  form.requestSubmit();
+}
+
+async function addCommentForSelectedRemediation() {
+  const form = byId("remediation-comment-form");
+  if (!form) {
+    return;
+  }
+  form.requestSubmit();
+}
+
+async function acknowledgeNotification(notificationID) {
+  try {
+    await postJSON(`/v1/notifications/${encodeURIComponent(notificationID)}/ack`, {});
+    await refreshAllData();
+    setStatus("Notification acknowledged.");
+  } catch (error) {
+    setStatus(`Notification acknowledgment failed: ${error.message}`, true);
+  }
+}
+
+async function runEscalationSweep() {
+  try {
+    const result = await postJSON("/v1/remediation-escalations/sweep", {});
+    await refreshAllData();
+    setStatus(`Escalation sweep complete: ${Number(result.created || 0)} notifications created.`);
+  } catch (error) {
+    setStatus(`Escalation sweep failed: ${error.message}`, true);
+  }
+}
+
+async function createScanJobFromForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const resultNode = byId("scanjob-result");
+  const formData = new FormData(form);
+  const targetKind = String(formData.get("target_kind") || "").trim();
+  const target = String(formData.get("target") || "").trim();
+  const profile = String(formData.get("profile") || "").trim();
+  const tools = splitCSV(formData.get("tools"));
+
+  if (!targetKind || !target || !profile) {
+    setStatus("target_kind, target, and profile are required.", true);
+    return;
+  }
+
+  try {
+    const job = await postJSON("/v1/scan-jobs", {
+      target_kind: targetKind,
+      target,
+      profile,
+      tools
+    });
+    if (resultNode) {
+      resultNode.textContent = `Created ${job.id} (${job.status}) with approval mode ${job.approval_mode}`;
+    }
+    form.reset();
+    await refreshAllData();
+    setStatus(`Scan job ${job.id} created.`);
+  } catch (error) {
+    setStatus(`Scan job creation failed: ${error.message}`, true);
+  }
+}
+
 function bindRouteNav() {
   document.querySelectorAll("#route-nav button").forEach((button) => {
     button.addEventListener("click", () => {
       setRoute(button.dataset.route || "dashboard");
     });
   });
+
   window.addEventListener("hashchange", () => {
     setRoute(routeFromHash(), false);
   });
 }
 
 function bindAuthControls() {
-  const tokenInput = document.getElementById("token-input");
-  const saveButton = document.getElementById("token-save");
-  const clearButton = document.getElementById("token-clear");
-  const ssoButton = document.getElementById("sso-start");
-  const logoutButton = document.getElementById("session-logout");
+  const tokenInput = byId("token-input");
+  const saveButton = byId("token-save");
+  const clearButton = byId("token-clear");
+  const ssoButton = byId("sso-start");
+  const logoutButton = byId("session-logout");
 
   if (tokenInput) {
     tokenInput.value = currentToken();
@@ -1451,29 +1941,42 @@ function bindAuthControls() {
 }
 
 function bindViewControls() {
-  document.getElementById("refresh-all")?.addEventListener("click", () => refreshAllData());
-  document.getElementById("create-remediation-btn")?.addEventListener("click", () => createRemediationFromSelectedFinding());
-  document.getElementById("load-policy-versions")?.addEventListener("click", () => loadPolicyVersions());
-  document.getElementById("transition-remediation-btn")?.addEventListener("click", () => transitionSelectedRemediation());
-  document.getElementById("request-retest-btn")?.addEventListener("click", () => requestRetestForSelectedRemediation());
-  document.getElementById("add-comment-btn")?.addEventListener("click", () => addCommentForSelectedRemediation());
-  document.getElementById("sweep-escalations-btn")?.addEventListener("click", () => runEscalationSweep());
-  document.getElementById("scanjob-form")?.addEventListener("submit", (event) => createScanJobFromForm(event));
+  byId("refresh-all")?.addEventListener("click", () => refreshAllData());
+  byId("create-remediation-btn")?.addEventListener("click", () => createRemediationFromSelectedFinding());
+  byId("load-policy-versions")?.addEventListener("click", () => loadPolicyVersions());
+  byId("transition-remediation-btn")?.addEventListener("click", () => transitionSelectedRemediation());
+  byId("request-retest-btn")?.addEventListener("click", () => requestRetestForSelectedRemediation());
+  byId("add-comment-btn")?.addEventListener("click", () => addCommentForSelectedRemediation());
+  byId("sweep-escalations-btn")?.addEventListener("click", () => runEscalationSweep());
+
+  byId("scanjob-form")?.addEventListener("submit", (event) => createScanJobFromForm(event));
+  byId("asset-profile-form")?.addEventListener("submit", (event) => upsertSelectedAssetProfile(event));
+  byId("asset-control-form")?.addEventListener("submit", (event) => createCompensatingControlForSelectedAsset(event));
+  byId("policy-create-form")?.addEventListener("submit", (event) => createPolicyFromForm(event));
+  byId("policy-update-form")?.addEventListener("submit", (event) => updateSelectedPolicyFromForm(event));
+  byId("remediation-transition-form")?.addEventListener("submit", (event) => transitionSelectedRemediationFromForm(event));
+  byId("remediation-retest-form")?.addEventListener("submit", (event) => requestRetestForSelectedRemediationFromForm(event));
+  byId("remediation-comment-form")?.addEventListener("submit", (event) => addCommentForSelectedRemediationFromForm(event));
+  byId("remediation-exception-form")?.addEventListener("submit", (event) => createRemediationExceptionFromForm(event));
+  byId("remediation-assignment-form")?.addEventListener("submit", (event) => createRemediationAssignmentFromForm(event));
+  byId("remediation-ticket-form")?.addEventListener("submit", (event) => createRemediationTicketFromForm(event));
+  byId("remediation-evidence-form")?.addEventListener("submit", (event) => createRemediationEvidenceFromForm(event));
+  byId("remediation-verify-form")?.addEventListener("submit", (event) => recordRemediationVerificationFromForm(event));
 
   ["findings-search", "filter-severity", "filter-priority", "filter-layer", "filter-overdue"].forEach((id) => {
-    document.getElementById(id)?.addEventListener("input", () => renderFindings());
-    document.getElementById(id)?.addEventListener("change", () => renderFindings());
+    byId(id)?.addEventListener("input", () => renderFindings());
+    byId(id)?.addEventListener("change", () => renderFindings());
   });
 
-  document.getElementById("remediation-status-filter")?.addEventListener("change", () => renderRemediations());
+  byId("remediation-status-filter")?.addEventListener("change", () => renderRemediations());
 
-  document.getElementById("export-summary-json")?.addEventListener("click", () => {
+  byId("export-summary-json")?.addEventListener("click", () => {
     const payload = buildSummarySnapshot();
     renderReportPreview(payload);
     downloadJSONFile(`uss-summary-${Date.now()}.json`, payload);
   });
 
-  document.getElementById("export-findings-json")?.addEventListener("click", () => {
+  byId("export-findings-json")?.addEventListener("click", () => {
     const payload = {
       generated_at: new Date().toISOString(),
       count: state.findings.length,
