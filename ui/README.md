@@ -8,12 +8,16 @@ This is the dedicated TypeScript frontend for the enterprise operator console.
 - Policy management and approval queues
 - Remediation workflow operations
 - Notifications, scan job operations, audit trail, report export
+- Role/scope-adaptive route and action controls from `/v1/auth/me` session scopes
 
 ## Runtime
 
 - Tooling: Vite + React + TypeScript
 - API target: same-origin `/v1/*` control-plane APIs
 - Auth model: bearer token and SSO session reuse (`/auth/oidc/start`, `/auth/logout`)
+- Server-backed reporting endpoints:
+  - `/v1/reports/summary`
+  - `/v1/reports/findings/export?format=json|csv`
 
 ## Local Development
 

@@ -77,6 +77,9 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
   - target: local repo path or allowed target
   - profile: `balanced`
   - tools: `semgrep,gitleaks,trivy`
+- Go to **Reports** to load server summary and export findings via:
+  - `/v1/reports/summary`
+  - `/v1/reports/findings/export?format=json|csv`
 
 ## When You Can Run End-to-End
 

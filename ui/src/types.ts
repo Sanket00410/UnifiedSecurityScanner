@@ -18,6 +18,7 @@ export type Session = {
     email?: string;
     role?: string;
     organization_name?: string;
+    scopes?: string[];
   };
   bootstrap_token?: boolean;
   sso_enabled?: boolean;
@@ -129,3 +130,23 @@ export type RiskSummary = {
   aging_buckets?: Record<string, number>;
 };
 
+export type ReportSummary = {
+  generated_at?: string;
+  sample_size?: number;
+  filter?: {
+    severity?: string;
+    priority?: string;
+    layer?: string;
+    status?: string;
+    search?: string;
+    overdue?: boolean;
+  };
+  filtered?: {
+    total_findings?: number;
+    overdue?: number;
+    priority?: Record<string, number>;
+    severity?: Record<string, number>;
+    layer?: Record<string, number>;
+  };
+  risk_summary?: RiskSummary;
+};

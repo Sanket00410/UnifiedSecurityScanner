@@ -26,3 +26,5 @@ fallback_runtime_entry:
 notes:
   - Dedicated TypeScript UI is now available under ui/
   - Embedded static UI remains for transitional fallback
+  - Route visibility and write actions are now scoped by session permissions
+  - Reports use server-backed summary and findings export endpoints

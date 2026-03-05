@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { clearToken, getJSON, postJSON, putJSON, readToken, saveToken } from "./api";
+import { clearToken, getBlob, getJSON, postJSON, putJSON, readToken, saveToken } from "./api";
 import {
   Asset,
   AuditEvent,
@@ -8,6 +8,7 @@ import {
   Notification,
   Policy,
   PolicyApproval,
+  ReportSummary,
   Remediation,
   RiskSummary,
   RouteKey,
@@ -20,15 +21,21 @@ type StatusState = {
   error: boolean;
 };
 
-const ROUTES: { key: RouteKey; label: string }[] = [
-  { key: "dashboard", label: "Dashboard" },
-  { key: "findings", label: "Findings" },
-  { key: "assets", label: "Assets" },
-  { key: "policies", label: "Policies" },
-  { key: "approvals", label: "Approvals" },
-  { key: "remediations", label: "Remediation" },
-  { key: "operations", label: "Operations" },
-  { key: "reports", label: "Reports" }
+type RouteDefinition = {
+  key: RouteKey;
+  label: string;
+  anyScope: string[];
+};
+
+const ROUTES: RouteDefinition[] = [
+  { key: "dashboard", label: "Dashboard", anyScope: ["findings:read", "assets:read", "policies:read", "remediations:read", "scan_jobs:read"] },
+  { key: "findings", label: "Findings", anyScope: ["findings:read"] },
+  { key: "assets", label: "Assets", anyScope: ["assets:read"] },
+  { key: "policies", label: "Policies", anyScope: ["policies:read"] },
+  { key: "approvals", label: "Approvals", anyScope: ["policies:read", "remediations:read"] },
+  { key: "remediations", label: "Remediation", anyScope: ["remediations:read"] },
+  { key: "operations", label: "Operations", anyScope: ["scan_jobs:read", "remediations:read", "audit:read"] },
+  { key: "reports", label: "Reports", anyScope: ["findings:read"] }
 ];
 
 const ROUTE_TITLES: Record<RouteKey, string> = {
@@ -43,6 +50,8 @@ const ROUTE_TITLES: Record<RouteKey, string> = {
 };
 
 const PRIORITY_WEIGHT: Record<string, number> = { p0: 0, p1: 1, p2: 2, p3: 3, p4: 4 };
+
+const WILDCARD_SCOPE = "*";
 
 function fmtDate(value?: string) {
   if (!value) return "n/a";
@@ -83,8 +92,29 @@ function parseRulesJSON(raw: FormDataEntryValue | null) {
   return parsed;
 }
 
+function normalizedScopes(session: Session | null) {
+  return (session?.principal?.scopes || [])
+    .map((scope) => String(scope || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function sessionHasScope(session: Session | null, scope: string) {
+  const scopes = normalizedScopes(session);
+  if (scopes.includes(WILDCARD_SCOPE)) return true;
+  return scopes.includes(scope.toLowerCase());
+}
+
+function sessionHasAnyScope(session: Session | null, scopes: string[]) {
+  if (!scopes.length) return true;
+  return scopes.some((scope) => sessionHasScope(session, scope));
+}
+
 function downloadJSON(name: string, payload: unknown) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  downloadBlob(name, blob);
+}
+
+function downloadBlob(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const node = document.createElement("a");
   node.href = url;
@@ -136,40 +166,59 @@ export function App() {
   });
   const [pendingAssignmentRequests, setPendingAssignmentRequests] = useState<any[]>([]);
   const [pendingExceptionRequests, setPendingExceptionRequests] = useState<any[]>([]);
-  const [reportPreview, setReportPreview] = useState<any>(null);
+  const [reportPreview, setReportPreview] = useState<ReportSummary | Record<string, any> | null>(null);
   const [scanJobResult, setScanJobResult] = useState("");
+  const [reportExportFormat, setReportExportFormat] = useState<"json" | "csv">("json");
 
   const selectedFinding = findings.find((item) => item.finding_id === selectedFindingID) || null;
   const selectedPolicy = policies.find((item) => item.id === selectedPolicyID) || null;
   const selectedRemediation = remediations.find((item) => item.id === selectedRemediationID) || null;
+  const visibleRoutes = ROUTES.filter((item) => sessionHasAnyScope(session, item.anyScope));
+  const visibleRouteKeys = visibleRoutes.map((item) => item.key);
+
+  const canReadFindings = sessionHasScope(session, "findings:read");
+
+  const canWriteAssets = sessionHasScope(session, "assets:write");
+  const canWritePolicies = sessionHasScope(session, "policies:write");
+  const canWriteRemediations = sessionHasScope(session, "remediations:write");
+  const canWriteScanJobs = sessionHasScope(session, "scan_jobs:write");
 
   async function refreshAllData() {
     setStatus({ message: "Loading tenant data...", error: false });
-    const tasks = await Promise.allSettled([
-      getJSON<Session>("/v1/auth/me"),
-      getJSON<ListResponse<Finding>>("/v1/findings"),
-      getJSON<ListResponse<Asset>>("/v1/assets"),
-      getJSON<ListResponse<Policy>>("/v1/policies"),
-      getJSON<ListResponse<PolicyApproval>>("/v1/policy-approvals"),
-      getJSON<ListResponse<Remediation>>("/v1/remediations"),
-      getJSON<ListResponse<Notification>>("/v1/notifications"),
-      getJSON<ListResponse<AuditEvent>>("/v1/audit-events"),
-      getJSON<ListResponse<ScanJob>>("/v1/scan-jobs"),
-      getJSON<RiskSummary>("/v1/risk/summary")
-    ]);
-
-    const [sessionRes, findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, riskRes] = tasks;
-    if (sessionRes.status === "fulfilled") {
-      setSession(sessionRes.value);
-    } else {
+    let nextSession: Session;
+    try {
+      nextSession = await getJSON<Session>("/v1/auth/me");
+      setSession(nextSession);
+    } catch (error: any) {
       setSession(null);
-      const code = (sessionRes.reason as any)?.status ?? 0;
+      const code = error?.status ?? 0;
       setStatus({
-        message: code === 401 ? "Authentication required. Use SSO or token." : `Session load failed: ${sessionRes.reason.message}`,
+        message: code === 401 ? "Authentication required. Use SSO or token." : `Session load failed: ${error.message}`,
         error: true
       });
       return;
     }
+
+    const sessionCanReadFindings = sessionHasScope(nextSession, "findings:read");
+    const sessionCanReadAssets = sessionHasScope(nextSession, "assets:read");
+    const sessionCanReadPolicies = sessionHasScope(nextSession, "policies:read");
+    const sessionCanReadRemediations = sessionHasScope(nextSession, "remediations:read");
+    const sessionCanReadAudit = sessionHasScope(nextSession, "audit:read");
+    const sessionCanReadScanJobs = sessionHasScope(nextSession, "scan_jobs:read");
+
+    const tasks = await Promise.allSettled([
+      sessionCanReadFindings ? getJSON<ListResponse<Finding>>("/v1/findings") : Promise.resolve({ items: [] }),
+      sessionCanReadAssets ? getJSON<ListResponse<Asset>>("/v1/assets") : Promise.resolve({ items: [] }),
+      sessionCanReadPolicies ? getJSON<ListResponse<Policy>>("/v1/policies") : Promise.resolve({ items: [] }),
+      sessionCanReadPolicies ? getJSON<ListResponse<PolicyApproval>>("/v1/policy-approvals") : Promise.resolve({ items: [] }),
+      sessionCanReadRemediations ? getJSON<ListResponse<Remediation>>("/v1/remediations") : Promise.resolve({ items: [] }),
+      sessionCanReadRemediations ? getJSON<ListResponse<Notification>>("/v1/notifications") : Promise.resolve({ items: [] }),
+      sessionCanReadAudit ? getJSON<ListResponse<AuditEvent>>("/v1/audit-events") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<ScanJob>>("/v1/scan-jobs") : Promise.resolve({ items: [] }),
+      sessionCanReadFindings ? getJSON<RiskSummary>("/v1/risk/summary") : Promise.resolve(null)
+    ]);
+
+    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, riskRes] = tasks;
 
     const nextFindings = findingsRes.status === "fulfilled" ? toItems(findingsRes.value) : [];
     const nextAssets = assetsRes.status === "fulfilled" ? toItems(assetsRes.value) : [];
@@ -288,6 +337,13 @@ export function App() {
     if (route === "approvals") loadApprovalQueues();
   }, [route, remediations]);
 
+  useEffect(() => {
+    if (!visibleRoutes.length) return;
+    if (!visibleRoutes.some((item) => item.key === route)) {
+      setRoute(visibleRoutes[0].key);
+    }
+  }, [route, visibleRouteKeys.join(",")]);
+
   const filteredFindings = [...findings]
     .sort((a, b) => {
       const ap = PRIORITY_WEIGHT[(a.risk?.priority || "p4").toLowerCase()] ?? 9;
@@ -321,6 +377,14 @@ export function App() {
     }
   }
 
+  function requirePermission(allowed: boolean, message: string) {
+    if (!allowed) {
+      setStatus({ message, error: true });
+      return false;
+    }
+    return true;
+  }
+
   function handleSaveToken() {
     if (!tokenInput.trim()) {
       setStatus({ message: "Token is required.", error: true });
@@ -337,6 +401,7 @@ export function App() {
   }
 
   function handleCreateRemediationFromFinding() {
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     if (!selectedFinding) {
       setStatus({ message: "Select a finding first.", error: true });
       return;
@@ -358,6 +423,7 @@ export function App() {
 
   function handleSubmitAssetProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWriteAssets, "Permission denied: assets:write scope is required.")) return;
     if (!selectedAssetID) {
       setStatus({ message: "Select an asset first.", error: true });
       return;
@@ -387,6 +453,7 @@ export function App() {
 
   function handleCreatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWritePolicies, "Permission denied: policies:write scope is required.")) return;
     const formData = new FormData(event.currentTarget);
     withRefresh(
       async () => {
@@ -406,6 +473,7 @@ export function App() {
 
   function handleUpdatePolicy(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWritePolicies, "Permission denied: policies:write scope is required.")) return;
     if (!selectedPolicyID) {
       setStatus({ message: "Select a policy first.", error: true });
       return;
@@ -427,6 +495,7 @@ export function App() {
 
   function handleTransitionRemediation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     if (!selectedRemediationID) {
       setStatus({ message: "Select a remediation first.", error: true });
       return;
@@ -445,6 +514,7 @@ export function App() {
 
   function handleRetest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     if (!selectedRemediationID) {
       setStatus({ message: "Select a remediation first.", error: true });
       return;
@@ -463,6 +533,7 @@ export function App() {
 
   function handleComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     if (!selectedRemediationID) {
       setStatus({ message: "Select a remediation first.", error: true });
       return;
@@ -479,6 +550,7 @@ export function App() {
   }
 
   function handleDecidePolicyApproval(approvalID: string, approved: boolean) {
+    if (!requirePermission(canWritePolicies, "Permission denied: policies:write scope is required.")) return;
     const reason = window.prompt(approved ? "Approval reason" : "Denial reason", "") || "";
     withRefresh(
       async () => {
@@ -489,6 +561,7 @@ export function App() {
   }
 
   function handleDecideAssignment(requestID: string, approved: boolean) {
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     const reason = window.prompt(approved ? "Assignment approval note" : "Assignment denial note", "") || "";
     withRefresh(
       async () => {
@@ -499,6 +572,7 @@ export function App() {
   }
 
   function handleDecideException(exceptionID: string, approved: boolean) {
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     const reason = window.prompt(approved ? "Exception approval note" : "Exception denial note", "") || "";
     withRefresh(
       async () => {
@@ -509,6 +583,7 @@ export function App() {
   }
 
   function handleAcknowledgeNotification(id: string) {
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     withRefresh(
       async () => {
         await postJSON(`/v1/notifications/${encodeURIComponent(id)}/ack`, {});
@@ -518,6 +593,7 @@ export function App() {
   }
 
   function handleSweepEscalations() {
+    if (!requirePermission(canWriteRemediations, "Permission denied: remediations:write scope is required.")) return;
     withRefresh(
       async () => {
         await postJSON("/v1/remediation-escalations/sweep", {});
@@ -528,6 +604,7 @@ export function App() {
 
   function handleCreateScanJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
     const formData = new FormData(event.currentTarget);
     withRefresh(
       async () => {
@@ -543,6 +620,48 @@ export function App() {
     );
   }
 
+  function buildReportQuery() {
+    const query = new URLSearchParams();
+    if (findingSeverity) query.set("severity", findingSeverity);
+    if (findingPriority) query.set("priority", findingPriority);
+    if (findingLayer) query.set("layer", findingLayer);
+    if (findingSearch.trim()) query.set("search", findingSearch.trim());
+    if (findingOverdueOnly) query.set("overdue", "true");
+    return query.toString();
+  }
+
+  async function handleLoadReportSummary() {
+    if (!requirePermission(canReadFindings, "Permission denied: findings:read scope is required.")) return;
+    try {
+      const query = buildReportQuery();
+      const path = query ? `/v1/reports/summary?${query}` : "/v1/reports/summary";
+      const summary = await getJSON<ReportSummary>(path);
+      setReportPreview(summary);
+      setStatus({ message: "Server report summary loaded.", error: false });
+    } catch (error: any) {
+      setStatus({ message: `Report summary failed: ${error.message}`, error: true });
+    }
+  }
+
+  async function handleExportReportFindings(format: "json" | "csv") {
+    if (!requirePermission(canReadFindings, "Permission denied: findings:read scope is required.")) return;
+    try {
+      const query = buildReportQuery();
+      const suffix = query ? `&${query}` : "";
+      const path = `/v1/reports/findings/export?format=${format}${suffix}`;
+      if (format === "json") {
+        const payload = await getJSON<any>(path);
+        downloadJSON(`uss-findings-${Date.now()}.json`, payload);
+      } else {
+        const response = await getBlob(path);
+        downloadBlob(`uss-findings-${Date.now()}.csv`, response.blob);
+      }
+      setStatus({ message: `Findings ${format.toUpperCase()} export ready.`, error: false });
+    } catch (error: any) {
+      setStatus({ message: `Export failed: ${error.message}`, error: true });
+    }
+  }
+
   const sessionLabel = session?.principal
     ? `${session.principal.display_name || session.principal.email} (${session.principal.role || "unknown"})`
     : "Signed out";
@@ -555,7 +674,7 @@ export function App() {
           <span>Enterprise Console (TypeScript UI)</span>
         </div>
         <nav className="nav">
-          {ROUTES.map((item) => (
+          {visibleRoutes.map((item) => (
             <button key={item.key} className={route === item.key ? "active" : ""} onClick={() => setRoute(item.key)}>
               {item.label}
             </button>
@@ -564,6 +683,7 @@ export function App() {
         <div className="session">
           <strong>{sessionLabel}</strong>
           <span>{session?.principal?.organization_name || "No organization"}</span>
+          <span>{(session?.principal?.scopes || []).length} scopes</span>
         </div>
       </aside>
 
@@ -577,7 +697,7 @@ export function App() {
             <input value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="API token" type="password" />
             <button onClick={handleSaveToken}>Use Token</button>
             <button className="ghost" onClick={handleClearToken}>Clear</button>
-            <button className="ghost" onClick={() => (window.location.href = "/auth/oidc/start")}>SSO</button>
+            {session?.sso_enabled && <button className="ghost" onClick={() => (window.location.href = "/auth/oidc/start")}>SSO</button>}
             <button className="ghost" onClick={() => (window.location.href = "/auth/logout")}>Sign Out</button>
             <button onClick={() => refreshAllData()}>Refresh</button>
           </div>
@@ -632,7 +752,7 @@ export function App() {
                 ))}
               </tbody>
             </table>
-            <div className="actions left"><button disabled={!selectedFinding} onClick={handleCreateRemediationFromFinding}>Create Remediation</button></div>
+            <div className="actions left"><button disabled={!selectedFinding || !canWriteRemediations} onClick={handleCreateRemediationFromFinding}>Create Remediation</button></div>
           </section>
         )}
 
@@ -664,7 +784,7 @@ export function App() {
               <input name="external_source" placeholder="external_source" defaultValue={assetProfile?.external_source || ""} />
               <input name="external_reference" placeholder="external_reference" defaultValue={assetProfile?.external_reference || ""} />
               <input name="tags" placeholder="tags csv" defaultValue={(assetProfile?.tags || []).join(",")} />
-              <button type="submit">Save Profile</button>
+              <button type="submit" disabled={!canWriteAssets}>Save Profile</button>
               <div className="muted">Controls: {assetControls.length}</div>
             </form>
           </section>
@@ -700,7 +820,7 @@ export function App() {
                   <li key={item.id}>
                     v{item.version_number} ({item.change_type || "change"}) by {item.created_by || "unknown"}
                     {selectedPolicy && item.version_number !== selectedPolicy.version_number && (
-                      <button onClick={() => withRefresh(async () => {
+                      <button disabled={!canWritePolicies} onClick={() => withRefresh(async () => {
                         await postJSON(`/v1/policies/${encodeURIComponent(selectedPolicy.id)}/rollback`, { version_number: item.version_number });
                       }, `Policy rolled back to v${item.version_number}.`)}>Rollback</button>
                     )}
@@ -717,7 +837,7 @@ export function App() {
                 <label><input type="checkbox" name="enabled" defaultChecked /> enabled</label>
                 <label><input type="checkbox" name="global" /> global</label>
                 <textarea name="rules_json" rows={4} placeholder='[{"effect":"allow","field":"tool","match":"exact","values":["semgrep"]}]'></textarea>
-                <button type="submit">Create</button>
+                <button type="submit" disabled={!canWritePolicies}>Create</button>
               </form>
               <form className="form" onSubmit={handleUpdatePolicy}>
                 <h3>Update Selected</h3>
@@ -726,7 +846,7 @@ export function App() {
                 <select name="mode" defaultValue={selectedPolicy?.mode || "monitor"}><option value="enforced">enforced</option><option value="monitor">monitor</option></select>
                 <label><input type="checkbox" name="enabled" defaultChecked={!!selectedPolicy?.enabled} /> enabled</label>
                 <textarea name="rules_json" rows={4} defaultValue={JSON.stringify(selectedPolicy?.rules || [], null, 2)}></textarea>
-                <button type="submit" disabled={!selectedPolicyID}>Update</button>
+                <button type="submit" disabled={!selectedPolicyID || !canWritePolicies}>Update</button>
               </form>
             </div>
           </section>
@@ -742,8 +862,8 @@ export function App() {
                     {item.action || "approval"} | {item.status || "pending"} | {item.policy_id || "no-policy"}
                     {item.status === "pending" && (
                       <div className="inline-actions">
-                        <button onClick={() => handleDecidePolicyApproval(item.id, true)}>Approve</button>
-                        <button className="ghost" onClick={() => handleDecidePolicyApproval(item.id, false)}>Deny</button>
+                        <button disabled={!canWritePolicies} onClick={() => handleDecidePolicyApproval(item.id, true)}>Approve</button>
+                        <button className="ghost" disabled={!canWritePolicies} onClick={() => handleDecidePolicyApproval(item.id, false)}>Deny</button>
                       </div>
                     )}
                   </li>
@@ -757,8 +877,8 @@ export function App() {
                   <li key={item.id}>
                     {item.requested_owner || "unassigned"} | {item.remediation_id || "n/a"}
                     <div className="inline-actions">
-                      <button onClick={() => handleDecideAssignment(item.id, true)}>Approve</button>
-                      <button className="ghost" onClick={() => handleDecideAssignment(item.id, false)}>Deny</button>
+                      <button disabled={!canWriteRemediations} onClick={() => handleDecideAssignment(item.id, true)}>Approve</button>
+                      <button className="ghost" disabled={!canWriteRemediations} onClick={() => handleDecideAssignment(item.id, false)}>Deny</button>
                     </div>
                   </li>
                 ))}
@@ -769,8 +889,8 @@ export function App() {
                   <li key={item.id}>
                     reduction {Number(item.reduction || 0).toFixed(1)} | {item.remediation_id || "n/a"}
                     <div className="inline-actions">
-                      <button onClick={() => handleDecideException(item.id, true)}>Approve</button>
-                      <button className="ghost" onClick={() => handleDecideException(item.id, false)}>Deny</button>
+                      <button disabled={!canWriteRemediations} onClick={() => handleDecideException(item.id, true)}>Approve</button>
+                      <button className="ghost" disabled={!canWriteRemediations} onClick={() => handleDecideException(item.id, false)}>Deny</button>
                     </div>
                   </li>
                 ))}
@@ -806,17 +926,17 @@ export function App() {
                 <h3>Transition</h3>
                 <select name="status"><option value="assigned">assigned</option><option value="in_progress">in_progress</option><option value="blocked">blocked</option><option value="ready_for_verify">ready_for_verify</option><option value="verified">verified</option><option value="accepted_risk">accepted_risk</option><option value="closed">closed</option></select>
                 <textarea name="notes" rows={2} placeholder="notes"></textarea>
-                <button type="submit" disabled={!selectedRemediation}>Transition</button>
+                <button type="submit" disabled={!selectedRemediation || !canWriteRemediations}>Transition</button>
               </form>
               <form className="form" onSubmit={handleRetest}>
                 <h3>Request Retest</h3>
                 <textarea name="notes" rows={2} placeholder="retest notes"></textarea>
-                <button type="submit" disabled={!selectedRemediation}>Request</button>
+                <button type="submit" disabled={!selectedRemediation || !canWriteRemediations}>Request</button>
               </form>
               <form className="form" onSubmit={handleComment}>
                 <h3>Add Comment</h3>
                 <textarea name="comment" rows={2} placeholder="comment" required></textarea>
-                <button type="submit" disabled={!selectedRemediation}>Add</button>
+                <button type="submit" disabled={!selectedRemediation || !canWriteRemediations}>Add</button>
               </form>
               <div className="meta">
                 <strong>Activity:</strong> {remediationDetails.activity.length} | <strong>Verifications:</strong> {remediationDetails.verifications.length} | <strong>Evidence:</strong> {remediationDetails.evidence.length}
@@ -829,12 +949,12 @@ export function App() {
           <section className="panel split">
             <div>
               <h3>Notifications</h3>
-              <div className="actions left"><button onClick={handleSweepEscalations}>Run SLA Sweep</button></div>
+              <div className="actions left"><button disabled={!canWriteRemediations} onClick={handleSweepEscalations}>Run SLA Sweep</button></div>
               <ul className="list">
                 {notifications.map((item) => (
                   <li key={item.id}>
                     {item.category || "notification"} | {item.status || "open"} | {fmtDateTime(item.created_at)}
-                    {item.status !== "acknowledged" && <button onClick={() => handleAcknowledgeNotification(item.id)}>Acknowledge</button>}
+                    {item.status !== "acknowledged" && <button disabled={!canWriteRemediations} onClick={() => handleAcknowledgeNotification(item.id)}>Acknowledge</button>}
                   </li>
                 ))}
               </ul>
@@ -846,7 +966,7 @@ export function App() {
                 <input name="target" placeholder="c:/repo" required />
                 <input name="profile" defaultValue="balanced" required />
                 <input name="tools" placeholder="semgrep,trivy,gitleaks" />
-                <button type="submit">Create Job</button>
+                <button type="submit" disabled={!canWriteScanJobs}>Create Job</button>
               </form>
               <div className="meta">{scanJobResult || "No scan jobs created in this session."}</div>
               <h3>Audit Events</h3>
@@ -861,13 +981,20 @@ export function App() {
 
         {route === "reports" && (
           <section className="panel split">
-            <div className="actions left">
-              <button onClick={() => downloadJSON(`uss-summary-${Date.now()}.json`, reportPreview || {})}>Export Summary JSON</button>
-              <button onClick={() => {
-                const payload = { generated_at: new Date().toISOString(), count: filteredFindings.length, items: filteredFindings };
-                setReportPreview(payload);
-                downloadJSON(`uss-findings-${Date.now()}.json`, payload);
-              }}>Export Findings JSON</button>
+            <div>
+              <div className="actions left">
+                <button onClick={handleLoadReportSummary} disabled={!canReadFindings}>Load Server Summary</button>
+                <select value={reportExportFormat} onChange={(event) => setReportExportFormat(event.target.value as "json" | "csv")}>
+                  <option value="json">json</option>
+                  <option value="csv">csv</option>
+                </select>
+                <button onClick={() => handleExportReportFindings(reportExportFormat)} disabled={!canReadFindings}>
+                  Export Findings {reportExportFormat.toUpperCase()}
+                </button>
+              </div>
+              <div className="muted">
+                Uses current finding filters (search/severity/priority/layer/overdue) for report scope.
+              </div>
             </div>
             <pre className="code">{JSON.stringify(reportPreview, null, 2)}</pre>
           </section>

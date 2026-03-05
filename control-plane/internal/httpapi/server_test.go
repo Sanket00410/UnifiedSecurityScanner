@@ -22,6 +22,7 @@ type stubAPIStore struct {
 	authenticated            bool
 	authErr                  error
 	createScanJobErr         error
+	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
 	assetProfile             models.AssetProfile
@@ -113,7 +114,7 @@ func (s *stubAPIStore) RecordHeartbeat(context.Context, models.HeartbeatRequest)
 }
 
 func (s *stubAPIStore) ListFindingsForTenant(context.Context, string, int) ([]models.CanonicalFinding, error) {
-	return nil, nil
+	return s.findings, nil
 }
 
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
@@ -884,6 +885,175 @@ func TestOIDCCallbackCreatesSessionCookie(t *testing.T) {
 	}
 	if !foundSessionCookie {
 		t.Fatal("expected session cookie to be set")
+	}
+}
+
+func TestReportSummaryAppliesFilters(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"findings:read"},
+		},
+		findings: []models.CanonicalFinding{
+			{
+				FindingID: "finding-high",
+				Title:     "SQL Injection",
+				Category:  "injection",
+				Severity:  "high",
+				Status:    "open",
+				Source: models.CanonicalSourceInfo{
+					Layer: "dast",
+					Tool:  "zap",
+				},
+				Asset: models.CanonicalAssetInfo{
+					AssetID:   "asset-1",
+					AssetName: "api.example.com",
+				},
+				Risk: models.CanonicalRisk{
+					Priority: "p1",
+					Overdue:  true,
+				},
+				FirstSeenAt: now.Add(-72 * time.Hour),
+				LastSeenAt:  now,
+			},
+			{
+				FindingID: "finding-low",
+				Title:     "Verbose Error",
+				Category:  "info_leak",
+				Severity:  "low",
+				Status:    "open",
+				Source: models.CanonicalSourceInfo{
+					Layer: "dast",
+					Tool:  "zap",
+				},
+				Asset: models.CanonicalAssetInfo{
+					AssetID:   "asset-2",
+					AssetName: "app.example.com",
+				},
+				Risk: models.CanonicalRisk{
+					Priority: "p4",
+					Overdue:  false,
+				},
+				FirstSeenAt: now.Add(-24 * time.Hour),
+				LastSeenAt:  now,
+			},
+		},
+		riskSummary: models.RiskSummary{
+			GeneratedAt:     now,
+			TotalFindings:   2,
+			OverdueFindings: 1,
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/reports/summary?severity=high&overdue=true", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+
+	var payload struct {
+		Filtered struct {
+			TotalFindings int64 `json:"total_findings"`
+			Overdue       int64 `json:"overdue"`
+		} `json:"filtered"`
+		SampleSize int64 `json:"sample_size"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode report summary: %v", err)
+	}
+
+	if payload.SampleSize != 2 {
+		t.Fatalf("expected sample_size=2, got %d", payload.SampleSize)
+	}
+	if payload.Filtered.TotalFindings != 1 {
+		t.Fatalf("expected filtered total=1, got %d", payload.Filtered.TotalFindings)
+	}
+	if payload.Filtered.Overdue != 1 {
+		t.Fatalf("expected filtered overdue=1, got %d", payload.Filtered.Overdue)
+	}
+}
+
+func TestFindingsExportCSV(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"findings:read"},
+		},
+		findings: []models.CanonicalFinding{
+			{
+				FindingID: "finding-export",
+				Title:     "Hardcoded Secret",
+				Category:  "secrets",
+				Severity:  "critical",
+				Status:    "open",
+				Source: models.CanonicalSourceInfo{
+					Layer: "secrets",
+					Tool:  "gitleaks",
+				},
+				Asset: models.CanonicalAssetInfo{
+					AssetID:   "repo-1",
+					AssetName: "service-repo",
+				},
+				Risk: models.CanonicalRisk{
+					Priority:     "p0",
+					OverallScore: 9.8,
+					SLAClass:     "24h",
+					Overdue:      true,
+				},
+				Tags:        []string{"credential"},
+				FirstSeenAt: now.Add(-48 * time.Hour),
+				LastSeenAt:  now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/reports/findings/export?format=csv&priority=p0", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); !strings.Contains(contentType, "text/csv") {
+		t.Fatalf("expected csv content type, got %s", contentType)
+	}
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, "finding_id,title,category,severity,status,priority") {
+		t.Fatalf("expected csv header, got %s", body)
+	}
+	if !strings.Contains(body, "finding-export,Hardcoded Secret,secrets,critical,open,p0") {
+		t.Fatalf("expected exported finding row, got %s", body)
 	}
 }
 

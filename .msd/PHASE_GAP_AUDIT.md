@@ -77,8 +77,9 @@ This audit is based on the current code in:
   - dashboard, findings, assets, policies, approvals, remediations, operations, reports
   - API-backed actions for key workflows
   - export and operational controls
+- Session-scope adaptive route visibility and write-action controls in dedicated UI.
+- Server-backed report summary and findings export APIs (`/v1/reports/summary`, `/v1/reports/findings/export`).
 
 ### Remaining expansion
 - Complete migration from embedded `/app/` to dedicated UI deployment artifact and CI build/release pipeline.
-- SSO UX polishing and role-adaptive page-level controls in the dedicated UI.
-
+- Additional SSO UX polish (provider UX hints and tenant branding customization).

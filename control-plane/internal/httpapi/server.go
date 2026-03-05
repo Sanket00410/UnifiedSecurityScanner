@@ -3,14 +3,17 @@ package httpapi
 import (
 	"context"
 	"embed"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,6 +134,8 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost: auth.PermissionRemediationsWrite,
 	}, "finding", "finding", server.handleFindingRoute))
 	mux.HandleFunc("/v1/risk/summary", server.withUserAuth(auth.PermissionFindingsRead, "risk.summary", "risk_summary", server.handleRiskSummary))
+	mux.HandleFunc("/v1/reports/summary", server.withUserAuth(auth.PermissionFindingsRead, "reports.summary", "report", server.handleReportSummary))
+	mux.HandleFunc("/v1/reports/findings/export", server.withUserAuth(auth.PermissionFindingsRead, "reports.findings_export", "report", server.handleFindingsExport))
 	mux.HandleFunc("/v1/assets", server.withUserAuth(auth.PermissionAssetsRead, "assets.list", "asset", server.handleAssets))
 	mux.HandleFunc("/v1/assets/sync", server.withUserAuth(auth.PermissionAssetsWrite, "assets.sync", "asset", server.handleAssetSync))
 	mux.HandleFunc("/v1/assets/", server.withUserAuthForMethod(map[string]auth.Permission{
@@ -586,6 +591,247 @@ func (s *Server) handleRiskSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, summary)
+}
+
+type findingReportFilter struct {
+	Severity string `json:"severity,omitempty"`
+	Priority string `json:"priority,omitempty"`
+	Layer    string `json:"layer,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Search   string `json:"search,omitempty"`
+	Overdue  *bool  `json:"overdue,omitempty"`
+}
+
+func (s *Server) handleReportSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	findings, err := s.store.ListFindingsForTenant(r.Context(), principal.OrganizationID, 5000)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_findings_failed", "findings could not be loaded")
+		return
+	}
+
+	filter := parseFindingReportFilter(r.URL.Query())
+	filtered := applyFindingReportFilter(findings, filter)
+
+	globalRiskSummary, err := s.store.ListRiskSummaryForTenant(r.Context(), principal.OrganizationID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "risk_summary_failed", "risk summary could not be loaded")
+		return
+	}
+
+	filteredPriority := make(map[string]int64)
+	filteredSeverity := make(map[string]int64)
+	filteredLayer := make(map[string]int64)
+	var filteredOverdue int64
+	for _, finding := range filtered {
+		priority := strings.ToLower(strings.TrimSpace(finding.Risk.Priority))
+		if priority == "" {
+			priority = "unknown"
+		}
+		filteredPriority[priority]++
+
+		severity := strings.ToLower(strings.TrimSpace(finding.Severity))
+		if severity == "" {
+			severity = "unknown"
+		}
+		filteredSeverity[severity]++
+
+		layer := strings.ToLower(strings.TrimSpace(finding.Source.Layer))
+		if layer == "" {
+			layer = "unknown"
+		}
+		filteredLayer[layer]++
+
+		if finding.Risk.Overdue {
+			filteredOverdue++
+		}
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"generated_at": time.Now().UTC(),
+		"filter":       filter,
+		"sample_size":  len(findings),
+		"filtered": map[string]any{
+			"total_findings": len(filtered),
+			"overdue":        filteredOverdue,
+			"priority":       filteredPriority,
+			"severity":       filteredSeverity,
+			"layer":          filteredLayer,
+		},
+		"risk_summary": globalRiskSummary,
+	})
+}
+
+func (s *Server) handleFindingsExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "" {
+		format = "json"
+	}
+	if format != "json" && format != "csv" {
+		s.writeError(w, http.StatusBadRequest, "validation_error", "format must be either json or csv")
+		return
+	}
+
+	findings, err := s.store.ListFindingsForTenant(r.Context(), principal.OrganizationID, 5000)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_findings_failed", "findings could not be loaded")
+		return
+	}
+
+	filter := parseFindingReportFilter(r.URL.Query())
+	filtered := applyFindingReportFilter(findings, filter)
+	now := time.Now().UTC()
+
+	if format == "csv" {
+		filename := fmt.Sprintf("uss-findings-%s.csv", now.Format("20060102-150405"))
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		w.WriteHeader(http.StatusOK)
+
+		writer := csv.NewWriter(w)
+		_ = writer.Write([]string{
+			"finding_id",
+			"title",
+			"category",
+			"severity",
+			"status",
+			"priority",
+			"overall_score",
+			"sla_class",
+			"sla_due_at",
+			"overdue",
+			"layer",
+			"tool",
+			"asset_id",
+			"asset_name",
+			"asset_type",
+			"environment",
+			"exposure",
+			"owner_team",
+			"first_seen_at",
+			"last_seen_at",
+			"tags",
+		})
+		for _, item := range filtered {
+			slaDue := ""
+			if item.Risk.SLADueAt != nil {
+				slaDue = item.Risk.SLADueAt.UTC().Format(time.RFC3339)
+			}
+			_ = writer.Write([]string{
+				item.FindingID,
+				item.Title,
+				item.Category,
+				item.Severity,
+				item.Status,
+				item.Risk.Priority,
+				fmt.Sprintf("%.2f", item.Risk.OverallScore),
+				item.Risk.SLAClass,
+				slaDue,
+				strconv.FormatBool(item.Risk.Overdue),
+				item.Source.Layer,
+				item.Source.Tool,
+				item.Asset.AssetID,
+				item.Asset.AssetName,
+				item.Asset.AssetType,
+				item.Asset.Environment,
+				item.Asset.Exposure,
+				item.Asset.OwnerTeam,
+				item.FirstSeenAt.UTC().Format(time.RFC3339),
+				item.LastSeenAt.UTC().Format(time.RFC3339),
+				strings.Join(item.Tags, ";"),
+			})
+		}
+		writer.Flush()
+		return
+	}
+
+	filename := fmt.Sprintf("uss-findings-%s.json", now.Format("20060102-150405"))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"generated_at": now,
+		"format":       "json",
+		"filter":       filter,
+		"count":        len(filtered),
+		"items":        filtered,
+	})
+}
+
+func parseFindingReportFilter(values url.Values) findingReportFilter {
+	filter := findingReportFilter{
+		Severity: strings.ToLower(strings.TrimSpace(values.Get("severity"))),
+		Priority: strings.ToLower(strings.TrimSpace(values.Get("priority"))),
+		Layer:    strings.ToLower(strings.TrimSpace(values.Get("layer"))),
+		Status:   strings.ToLower(strings.TrimSpace(values.Get("status"))),
+		Search:   strings.ToLower(strings.TrimSpace(values.Get("search"))),
+	}
+
+	if raw := strings.ToLower(strings.TrimSpace(values.Get("overdue"))); raw != "" {
+		if raw == "true" || raw == "1" || raw == "yes" {
+			value := true
+			filter.Overdue = &value
+		} else if raw == "false" || raw == "0" || raw == "no" {
+			value := false
+			filter.Overdue = &value
+		}
+	}
+
+	return filter
+}
+
+func applyFindingReportFilter(items []models.CanonicalFinding, filter findingReportFilter) []models.CanonicalFinding {
+	out := make([]models.CanonicalFinding, 0, len(items))
+	for _, item := range items {
+		if filter.Severity != "" && strings.ToLower(strings.TrimSpace(item.Severity)) != filter.Severity {
+			continue
+		}
+		if filter.Priority != "" && strings.ToLower(strings.TrimSpace(item.Risk.Priority)) != filter.Priority {
+			continue
+		}
+		if filter.Layer != "" && strings.ToLower(strings.TrimSpace(item.Source.Layer)) != filter.Layer {
+			continue
+		}
+		if filter.Status != "" && strings.ToLower(strings.TrimSpace(item.Status)) != filter.Status {
+			continue
+		}
+		if filter.Overdue != nil && item.Risk.Overdue != *filter.Overdue {
+			continue
+		}
+		if filter.Search != "" {
+			title := strings.ToLower(strings.TrimSpace(item.Title))
+			category := strings.ToLower(strings.TrimSpace(item.Category))
+			assetID := strings.ToLower(strings.TrimSpace(item.Asset.AssetID))
+			assetName := strings.ToLower(strings.TrimSpace(item.Asset.AssetName))
+			if !strings.Contains(title, filter.Search) &&
+				!strings.Contains(category, filter.Search) &&
+				!strings.Contains(assetID, filter.Search) &&
+				!strings.Contains(assetName, filter.Search) {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
@@ -1904,6 +2150,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 			return path
 		}
 		return strings.TrimSpace(assetID)
+	case strings.HasPrefix(r.URL.Path, "/v1/reports/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/reports/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
 	default:
 		return ""
 	}
