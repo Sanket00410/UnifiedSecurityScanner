@@ -45,3 +45,7 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 4. Add finding correlation, reachability analysis, and business risk scoring.
 5. Add rule/template update services, target registry, and findings lifecycle management.
 6. Expose one unified UI plus APIs for CI/CD, ticketing, SIEM, and governance integrations.
+
+## Local End-to-End UI Run
+- Dedicated UI E2E guide: `docs/LOCAL_UI_E2E_SCAN.md`
+- One-command local stack starter: `ops/start-local-e2e.ps1`

@@ -18,9 +18,12 @@ This is the dedicated TypeScript frontend for the enterprise operator console.
 ## Local Development
 
 ```bash
+cp .env.example .env
 npm install
 npm run dev
 ```
+
+`VITE_CONTROL_PLANE_PROXY` defaults to `http://localhost:8080` and proxies `/v1/*` and `/auth/*` during local dev.
 
 ## Build
 
@@ -29,4 +32,3 @@ npm run build
 ```
 
 The current embedded UI under `control-plane/internal/httpapi/static/` remains available as fallback.
-
