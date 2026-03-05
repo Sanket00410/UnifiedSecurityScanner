@@ -1,2 +1,4 @@
 worker-runtime/crates/uss-worker/target/
 *.exe
+ui/node_modules/
+ui/dist/

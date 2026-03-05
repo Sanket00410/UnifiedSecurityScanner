@@ -16,6 +16,8 @@ import (
 	"unifiedsecurityscanner/control-plane/internal/config"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
+	"unifiedsecurityscanner/control-plane/internal/rbac"
+	"unifiedsecurityscanner/control-plane/internal/tenant"
 )
 
 //go:embed static/*
@@ -1688,18 +1690,24 @@ func (s *Server) withUserAuth(permission auth.Permission, action string, resourc
 			s.writeError(w, http.StatusUnauthorized, "invalid_bearer_token", "the supplied bearer token is invalid")
 			return
 		}
-		if !auth.Allowed(principal.Role, permission) {
+
+		if err := tenant.RequirePrincipalOrganization(principal); err != nil {
 			s.recordAuditEvent(r.Context(), principal, action, resourceType, "", "denied", r, map[string]any{
 				"permission": string(permission),
-				"reason":     "role",
+				"reason":     "tenant",
 			})
 			s.writeError(w, http.StatusForbidden, "permission_denied", "the current identity is not allowed to perform this action")
 			return
 		}
-		if !auth.ScopeAllows(principal.Scopes, permission) {
+
+		if err := rbac.Authorize(principal, permission); err != nil {
+			reason := rbac.Reason(err)
+			if reason == "" {
+				reason = "authorization"
+			}
 			s.recordAuditEvent(r.Context(), principal, action, resourceType, "", "denied", r, map[string]any{
 				"permission": string(permission),
-				"reason":     "scope",
+				"reason":     reason,
 			})
 			s.writeError(w, http.StatusForbidden, "permission_denied", "the current identity is not allowed to perform this action")
 			return

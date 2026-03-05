@@ -1,7 +1,7 @@
 name: ui
 runtime: typescript
 purpose: Web application for developers, AppSec teams, and platform administrators.
-delivery_stage: phase6_started
+delivery_stage: phase6_dedicated_ui_active
 responsibilities:
   - findings_exploration
   - remediation_workflows
@@ -18,8 +18,11 @@ primary_outputs:
   - workflow_updates
   - exported_reports
 current_runtime_entry:
+  path: ui/
+  mount: / (via dedicated ui service) or embedded dist mount
+fallback_runtime_entry:
   path: control-plane/internal/httpapi/static/
   mount: /app/
-next_runtime_target:
-  path: ui/
-  notes: Move the enterprise console into a dedicated TypeScript build once Node toolchain is installed in the environment.
+notes:
+  - Dedicated TypeScript UI is now available under ui/
+  - Embedded static UI remains for transitional fallback

@@ -25,13 +25,8 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 
 ## Current Delivery Status
 - Phases 1-5 are implemented in code (control plane, policy/risk/remediation workflows, and broad analyzer coverage).
-- Phase 6 has started with a route-driven enterprise console served at `/app/`, covering:
-  - risk and KPI dashboarding
-  - findings exploration
-  - asset inventory
-  - policy and approvals operations
-  - remediation workflow views
-  - notifications, scan operations, and report export
+- Phase 6 now has a dedicated TypeScript frontend under `ui/` (Vite + React + TS) for enterprise operator workflows.
+- The route-driven embedded console served at `/app/` remains available as a fallback/admin shell during transition.
 
 ## Recommended Structure
 - `control-plane/` API gateway, auth, orchestration, policy, tenancy
