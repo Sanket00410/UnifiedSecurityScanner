@@ -1,12 +1,15 @@
 name: ui
 runtime: typescript
 purpose: Web application for developers, AppSec teams, and platform administrators.
+delivery_stage: phase6_started
 responsibilities:
   - findings_exploration
   - remediation_workflows
   - scan_job_submission
   - approval_actions
   - reporting_and_exports
+  - policy_and_risk_dashboarding
+  - operations_notifications
 primary_inputs:
   - control_plane_api
   - risk_engine_views
@@ -14,3 +17,9 @@ primary_outputs:
   - user_actions
   - workflow_updates
   - exported_reports
+current_runtime_entry:
+  path: control-plane/internal/httpapi/static/
+  mount: /app/
+next_runtime_target:
+  path: ui/
+  notes: Move the enterprise console into a dedicated TypeScript build once Node toolchain is installed in the environment.

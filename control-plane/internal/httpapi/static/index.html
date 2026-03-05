@@ -3,101 +3,299 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Unified Security Scanner</title>
+  <title>Unified Security Scanner Console</title>
   <link rel="stylesheet" href="/app/styles.css">
 </head>
 <body>
-  <div class="shell">
-    <header class="hero">
-      <div class="eyebrow">Unified Security Scanner</div>
-      <h1>Findings, Assets, Policies, and Remediation</h1>
-      <p class="subtitle">A live control-plane view over normalized findings and operational policy.</p>
-      <div class="auth-strip">
-        <div class="auth-copy">
-          <strong id="session-user">Signed out</strong>
-          <span id="session-org" class="meta-line">Sign in with SSO or paste an API token to load tenant data.</span>
-        </div>
-        <label class="token-entry">
-          <span>API Token</span>
-          <input id="token-input" type="password" placeholder="uss-local-admin-token">
-        </label>
-        <div class="auth-actions">
-          <button id="sso-start" type="button" class="ghost">Use SSO</button>
-          <button id="token-save" type="button">Use Token</button>
-          <button id="token-clear" type="button" class="ghost">Clear</button>
-          <button id="session-logout" type="button" class="ghost">Sign Out</button>
+  <div class="app-bg"></div>
+  <div class="app-shell">
+    <aside class="nav-shell">
+      <div class="brand">
+        <div class="brand-mark">USS</div>
+        <div class="brand-copy">
+          <strong>Unified Security Scanner</strong>
+          <span>Enterprise Security Console</span>
         </div>
       </div>
-    </header>
 
-    <section class="metrics" id="metrics">
-      <article class="metric">
-        <span class="label">Findings</span>
-        <strong id="metric-findings">0</strong>
-      </article>
-      <article class="metric">
-        <span class="label">Assets</span>
-        <strong id="metric-assets">0</strong>
-      </article>
-      <article class="metric">
-        <span class="label">Policies</span>
-        <strong id="metric-policies">0</strong>
-      </article>
-      <article class="metric">
-        <span class="label">Approvals</span>
-        <strong id="metric-approvals">0</strong>
-      </article>
-      <article class="metric">
-        <span class="label">Remediations</span>
-        <strong id="metric-remediations">0</strong>
-      </article>
-    </section>
+      <nav class="nav-links" id="route-nav">
+        <button data-route="dashboard" class="active">Dashboard</button>
+        <button data-route="findings">Findings</button>
+        <button data-route="assets">Assets</button>
+        <button data-route="policies">Policies</button>
+        <button data-route="approvals">Approvals</button>
+        <button data-route="remediations">Remediation</button>
+        <button data-route="operations">Operations</button>
+        <button data-route="reports">Reports</button>
+      </nav>
 
-    <main class="grid">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Findings</h2>
-          <span class="tag">Risk</span>
+      <section class="session-box">
+        <strong id="session-user">Signed out</strong>
+        <span id="session-meta">Sign in with SSO or use an API token.</span>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-top">
+        <div>
+          <div class="eyebrow">Phase 6 Enterprise UI</div>
+          <h1 id="route-title">Dashboard</h1>
         </div>
-        <div id="findings" class="stack"></div>
+        <div class="top-actions">
+          <label class="token-input">
+            <span>API Token</span>
+            <input id="token-input" type="password" placeholder="uss-local-admin-token">
+          </label>
+          <button id="token-save">Use Token</button>
+          <button id="token-clear" class="ghost">Clear</button>
+          <button id="sso-start" class="ghost">SSO</button>
+          <button id="session-logout" class="ghost">Sign Out</button>
+          <button id="refresh-all">Refresh</button>
+        </div>
+      </header>
+
+      <section class="status-strip" id="status-strip">Ready.</section>
+
+      <section class="view active" id="view-dashboard">
+        <div class="metrics-grid">
+          <article class="metric-card"><span>Findings</span><strong id="metric-findings">0</strong></article>
+          <article class="metric-card"><span>Overdue</span><strong id="metric-overdue">0</strong></article>
+          <article class="metric-card"><span>Remediations</span><strong id="metric-remediations">0</strong></article>
+          <article class="metric-card"><span>Assets</span><strong id="metric-assets">0</strong></article>
+          <article class="metric-card"><span>Policies</span><strong id="metric-policies">0</strong></article>
+          <article class="metric-card"><span>Approvals</span><strong id="metric-approvals">0</strong></article>
+          <article class="metric-card"><span>Notifications</span><strong id="metric-notifications">0</strong></article>
+          <article class="metric-card"><span>Open Scan Jobs</span><strong id="metric-jobs">0</strong></article>
+        </div>
+
+        <div class="panel-grid">
+          <section class="panel">
+            <header><h2>Priority Mix</h2></header>
+            <div id="priority-bars" class="bar-stack"></div>
+          </section>
+          <section class="panel">
+            <header><h2>Aging Buckets</h2></header>
+            <div id="aging-bars" class="bar-stack"></div>
+          </section>
+          <section class="panel span-2">
+            <header><h2>Hot Findings</h2></header>
+            <div id="hot-findings" class="stack-list"></div>
+          </section>
+        </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Assets</h2>
-          <span class="tag">Inventory</span>
+      <section class="view" id="view-findings">
+        <div class="toolbar">
+          <input id="findings-search" type="search" placeholder="Search finding title, category, asset">
+          <select id="filter-severity">
+            <option value="">All severities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <select id="filter-priority">
+            <option value="">All priorities</option>
+            <option value="p0">P0</option>
+            <option value="p1">P1</option>
+            <option value="p2">P2</option>
+            <option value="p3">P3</option>
+            <option value="p4">P4</option>
+          </select>
+          <select id="filter-layer">
+            <option value="">All layers</option>
+            <option value="sast">SAST</option>
+            <option value="sca">SCA</option>
+            <option value="secrets">Secrets</option>
+            <option value="iac">IaC</option>
+            <option value="dast">DAST</option>
+            <option value="pentest">Pentest</option>
+          </select>
+          <label class="inline-check">
+            <input id="filter-overdue" type="checkbox">
+            <span>Overdue only</span>
+          </label>
         </div>
-        <div id="assets" class="stack"></div>
+
+        <div class="split-layout">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Priority</th>
+                  <th>Severity</th>
+                  <th>Title</th>
+                  <th>Layer</th>
+                  <th>Asset</th>
+                  <th>SLA</th>
+                </tr>
+              </thead>
+              <tbody id="findings-table"></tbody>
+            </table>
+          </div>
+          <aside class="detail-pane">
+            <h3>Finding Detail</h3>
+            <div id="finding-detail" class="stack-list empty-box">Select a finding.</div>
+            <button id="create-remediation-btn" disabled>Create Remediation</button>
+          </aside>
+        </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Policies</h2>
-          <span class="tag">Guardrails</span>
+      <section class="view" id="view-assets">
+        <div class="split-layout">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Asset ID</th>
+                  <th>Type</th>
+                  <th>Exposure</th>
+                  <th>Criticality</th>
+                  <th>Findings</th>
+                  <th>Controls</th>
+                </tr>
+              </thead>
+              <tbody id="assets-table"></tbody>
+            </table>
+          </div>
+          <aside class="detail-pane">
+            <h3>Asset Profile</h3>
+            <div id="asset-detail" class="stack-list empty-box">Select an asset.</div>
+            <h4>Compensating Controls</h4>
+            <div id="asset-controls" class="stack-list empty-box">No controls loaded.</div>
+          </aside>
         </div>
-        <div id="policies" class="stack"></div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Approvals</h2>
-          <span class="tag">Governance</span>
+      <section class="view" id="view-policies">
+        <div class="split-layout">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Scope</th>
+                  <th>Mode</th>
+                  <th>Enabled</th>
+                  <th>Version</th>
+                </tr>
+              </thead>
+              <tbody id="policies-table"></tbody>
+            </table>
+          </div>
+          <aside class="detail-pane">
+            <h3>Policy Detail</h3>
+            <div id="policy-detail" class="stack-list empty-box">Select a policy.</div>
+            <button id="load-policy-versions" disabled>Load Version History</button>
+            <div id="policy-versions" class="stack-list empty-box">No version history loaded.</div>
+          </aside>
         </div>
-        <div id="policy-approvals" class="stack"></div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Remediation</h2>
-          <span class="tag">Execution</span>
+      <section class="view" id="view-approvals">
+        <div class="panel-grid">
+          <section class="panel span-2">
+            <header><h2>Policy Approvals</h2></header>
+            <div id="policy-approvals-list" class="stack-list"></div>
+          </section>
+          <section class="panel">
+            <header><h2>Pending Assignment Requests</h2></header>
+            <div id="assignment-requests-list" class="stack-list"></div>
+          </section>
+          <section class="panel">
+            <header><h2>Pending Exceptions</h2></header>
+            <div id="exception-requests-list" class="stack-list"></div>
+          </section>
         </div>
-        <div id="remediations" class="stack"></div>
+      </section>
+
+      <section class="view" id="view-remediations">
+        <div class="toolbar">
+          <select id="remediation-status-filter">
+            <option value="">All statuses</option>
+            <option value="open">Open</option>
+            <option value="assigned">Assigned</option>
+            <option value="in_progress">In Progress</option>
+            <option value="blocked">Blocked</option>
+            <option value="ready_for_verify">Ready For Verify</option>
+            <option value="verified">Verified</option>
+            <option value="accepted_risk">Accepted Risk</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
+
+        <div class="split-layout">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Title</th>
+                  <th>Owner</th>
+                  <th>Due</th>
+                  <th>Finding</th>
+                </tr>
+              </thead>
+              <tbody id="remediations-table"></tbody>
+            </table>
+          </div>
+          <aside class="detail-pane">
+            <h3>Remediation Detail</h3>
+            <div id="remediation-detail" class="stack-list empty-box">Select a remediation.</div>
+            <div class="action-row">
+              <button id="transition-remediation-btn" disabled>Advance Status</button>
+              <button id="request-retest-btn" disabled>Request Retest</button>
+              <button id="add-comment-btn" disabled>Add Comment</button>
+            </div>
+            <div id="remediation-activity" class="stack-list empty-box">No activity loaded.</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-operations">
+        <div class="panel-grid">
+          <section class="panel span-2">
+            <header><h2>Notifications</h2></header>
+            <div class="toolbar compact">
+              <button id="sweep-escalations-btn">Run SLA Sweep</button>
+            </div>
+            <div id="notifications-list" class="stack-list"></div>
+          </section>
+          <section class="panel">
+            <header><h2>Create Scan Job</h2></header>
+            <form id="scanjob-form" class="form-stack">
+              <label>Target Kind <input type="text" name="target_kind" value="repo" required></label>
+              <label>Target <input type="text" name="target" placeholder="c:/repo" required></label>
+              <label>Profile <input type="text" name="profile" value="balanced" required></label>
+              <label>Tools (comma separated) <input type="text" name="tools" placeholder="semgrep,trivy,gitleaks"></label>
+              <button type="submit">Create Scan Job</button>
+            </form>
+            <div id="scanjob-result" class="empty-box">No scan job created in this session.</div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-reports">
+        <div class="panel-grid">
+          <section class="panel">
+            <header><h2>Snapshot Export</h2></header>
+            <p>Export current tenant data for offline review.</p>
+            <div class="action-row">
+              <button id="export-summary-json">Export Summary JSON</button>
+              <button id="export-findings-json">Export Findings JSON</button>
+            </div>
+          </section>
+          <section class="panel span-2">
+            <header><h2>Report Preview</h2></header>
+            <pre id="report-preview" class="code-block">No report preview yet.</pre>
+          </section>
+        </div>
       </section>
     </main>
   </div>
 
-  <template id="empty-state">
-    <article class="empty">No data yet.</article>
+  <template id="empty-state-template">
+    <article class="empty-box">No records.</article>
   </template>
 
   <script src="/app/app.js"></script>

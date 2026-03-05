@@ -23,6 +23,16 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 - Safe by design: active validation only on approved scoped targets with tool guardrails
 - Built for production deployment, not a demo or MVP
 
+## Current Delivery Status
+- Phases 1-5 are implemented in code (control plane, policy/risk/remediation workflows, and broad analyzer coverage).
+- Phase 6 has started with a route-driven enterprise console served at `/app/`, covering:
+  - risk and KPI dashboarding
+  - findings exploration
+  - asset inventory
+  - policy and approvals operations
+  - remediation workflow views
+  - notifications, scan operations, and report export
+
 ## Recommended Structure
 - `control-plane/` API gateway, auth, orchestration, policy, tenancy
 - `worker-runtime/` cross-platform scanner runners and job execution
