@@ -26,6 +26,12 @@ This starts:
 - Worker runtime (daemon mode)
 - Dedicated UI (`:5173`) if npm is installed
 
+To force Docker-based UI startup (no local npm required):
+
+```powershell
+.\ops\start-local-e2e.ps1 -UseDockerUI
+```
+
 ## Manual Start (if preferred)
 
 ```powershell
@@ -80,6 +86,23 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
   - `/v1/reports/findings/export?format=json|csv`
+
+## Dedicated UI in Docker (standalone)
+
+```powershell
+docker compose -f .\ops\docker-compose.ui.yml up -d ui-dev
+```
+
+- UI URL: `http://localhost:5173`
+- Default API proxy target inside container: `http://host.docker.internal:8080`
+
+Production-style static container:
+
+```powershell
+docker compose -f .\ops\docker-compose.ui.yml up -d ui-prod
+```
+
+- UI URL: `http://localhost:5180`
 
 ## When You Can Run End-to-End
 

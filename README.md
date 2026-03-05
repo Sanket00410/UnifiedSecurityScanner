@@ -49,4 +49,5 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 ## Local End-to-End UI Run
 - Dedicated UI E2E guide: `docs/LOCAL_UI_E2E_SCAN.md`
 - One-command local stack starter: `ops/start-local-e2e.ps1`
+- Docker-based UI startup (no local npm): `ops/start-local-e2e.ps1 -UseDockerUI`
 - To make dedicated UI primary behind control-plane, set `USS_UI_DIST_PATH=../ui/dist` before starting API.

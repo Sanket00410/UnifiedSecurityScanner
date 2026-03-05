@@ -1,0 +1,30 @@
+services:
+  ui-dev:
+    container_name: uss-ui-dev
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      VITE_CONTROL_PLANE_PROXY: ${VITE_CONTROL_PLANE_PROXY:-http://host.docker.internal:8080}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../ui:/app
+      - uss-ui-node-modules:/app/node_modules
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  ui-prod:
+    container_name: uss-ui-prod
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+      target: prod
+    ports:
+      - "5180:80"
+    restart: unless-stopped
+
+volumes:
+  uss-ui-node-modules:

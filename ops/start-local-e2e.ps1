@@ -1,5 +1,6 @@
 param(
     [switch]$SkipUI,
+    [switch]$UseDockerUI,
     [switch]$SkipScheduler,
     [string]$WorkerID = "worker-local",
     [string]$WorkerSharedSecret = ""
@@ -15,9 +16,13 @@ function Test-CommandAvailable {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $composeFile = Join-Path $repoRoot "ops\docker-compose.postgres.yml"
+$uiComposeFile = Join-Path $repoRoot "ops\docker-compose.ui.yml"
 
 if (-not (Test-Path $composeFile)) {
     throw "docker compose file not found: $composeFile"
+}
+if (-not (Test-Path $uiComposeFile)) {
+    throw "ui docker compose file not found: $uiComposeFile"
 }
 
 if (-not (Test-CommandAvailable "docker")) {
@@ -55,20 +60,25 @@ if (-not $SkipScheduler) {
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $workerCommand | Out-Null
 
 if (-not $SkipUI) {
-    if (Test-CommandAvailable "npm") {
+    if ($UseDockerUI) {
+        Write-Host "Starting dedicated UI in Docker..."
+        $env:VITE_CONTROL_PLANE_PROXY = "http://host.docker.internal:8080"
+        docker compose -f $uiComposeFile up -d ui-dev | Out-Null
+    } elseif (Test-CommandAvailable "npm") {
         $uiCommand = "Set-Location '$uiDir'; if (-not (Test-Path node_modules)) { npm install }; npm run dev"
         Start-Process powershell -ArgumentList "-NoExit", "-Command", $uiCommand | Out-Null
     } else {
-        Write-Warning "npm not found, skipping UI startup. Install Node.js 20+ to run dedicated ui/."
+        Write-Warning "npm not found, starting UI in Docker instead."
+        $env:VITE_CONTROL_PLANE_PROXY = "http://host.docker.internal:8080"
+        docker compose -f $uiComposeFile up -d ui-dev | Out-Null
     }
 }
 
 Write-Host ""
 Write-Host "Local E2E stack start requested."
 Write-Host "Control Plane API: http://localhost:8080"
-Write-Host "Dedicated UI (when npm is installed): http://localhost:5173"
+Write-Host "Dedicated UI: http://localhost:5173"
 Write-Host "Fallback embedded UI: http://localhost:8080/app/"
 Write-Host "Default bootstrap token: uss-local-admin-token"
 Write-Host ""
 Write-Host "After services are up, create a scan job from the UI Operations view."
-

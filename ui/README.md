@@ -29,6 +29,23 @@ npm run dev
 
 `VITE_CONTROL_PLANE_PROXY` defaults to `http://localhost:8080` and proxies `/v1/*` and `/auth/*` during local dev.
 
+## Docker Development
+
+From repo root:
+
+```bash
+docker compose -f ./ops/docker-compose.ui.yml up -d ui-dev
+```
+
+UI is served at `http://localhost:5173`.
+The default in-container proxy target is `http://host.docker.internal:8080`.
+
+To stop:
+
+```bash
+docker compose -f ./ops/docker-compose.ui.yml down
+```
+
 ## Build
 
 ```bash
@@ -36,3 +53,11 @@ npm run build
 ```
 
 The current embedded UI under `control-plane/internal/httpapi/static/` remains available as fallback.
+
+## Docker Production Image
+
+```bash
+docker compose -f ./ops/docker-compose.ui.yml up -d ui-prod
+```
+
+Static UI will be available at `http://localhost:5180`.
