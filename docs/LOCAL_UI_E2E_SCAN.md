@@ -103,6 +103,7 @@ docker compose -f .\ops\docker-compose.ui.yml up -d ui-prod
 ```
 
 - UI URL: `http://localhost:5180`
+- `/v1/*` and `/auth/*` requests are proxied to `http://host.docker.internal:8080`
 
 ## When You Can Run End-to-End
 

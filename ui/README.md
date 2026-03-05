@@ -61,3 +61,4 @@ docker compose -f ./ops/docker-compose.ui.yml up -d ui-prod
 ```
 
 Static UI will be available at `http://localhost:5180`.
+`ui-prod` proxies `/v1/*`, `/auth/*`, `/healthz`, and `/readyz` to `http://host.docker.internal:8080`.
