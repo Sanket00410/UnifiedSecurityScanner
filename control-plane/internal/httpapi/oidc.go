@@ -189,14 +189,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, cookie)
 
-	http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
+	http.Redirect(w, r, s.primaryUIRedirectPath(), http.StatusTemporaryRedirect)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.clearSessionCookie(w, r)
-		http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
+		http.Redirect(w, r, s.primaryUIRedirectPath(), http.StatusTemporaryRedirect)
 	case http.MethodPost:
 		s.clearSessionCookie(w, r)
 		w.WriteHeader(http.StatusNoContent)

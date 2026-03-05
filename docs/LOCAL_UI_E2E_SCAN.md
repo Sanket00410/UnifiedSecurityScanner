@@ -52,6 +52,22 @@ npm install
 npm run dev
 ```
 
+## Serve Built UI From Control Plane (Primary UI Path)
+
+If you want control-plane to serve dedicated UI as primary (`/ui/`), build UI and set `USS_UI_DIST_PATH`:
+
+```powershell
+cd .\ui
+npm install
+npm run build
+
+cd ..\control-plane
+$env:USS_UI_DIST_PATH = "..\ui\dist"
+go run .\cmd\api
+```
+
+Then opening `http://localhost:8080/` redirects to `/ui/`.
+
 ## Use the Dedicated UI
 
 - Open `http://localhost:5173`
@@ -74,4 +90,3 @@ Typical setup time on a fresh machine:
 Estimated total: **~10-15 minutes** from a fresh environment.
 
 If Node/npm is already installed: **~2-5 minutes**.
-

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -882,5 +884,56 @@ func TestOIDCCallbackCreatesSessionCookie(t *testing.T) {
 	}
 	if !foundSessionCookie {
 		t.Fatal("expected session cookie to be set")
+	}
+}
+
+func TestRootRedirectsToUIDistWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "index.html"), []byte("<html>ui</html>"), 0o600); err != nil {
+		t.Fatalf("write index html: %v", err)
+	}
+
+	cfg := config.Load()
+	cfg.UIDistPath = tempDir
+
+	server := New(cfg, &stubAPIStore{})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("expected 307, got %d", recorder.Code)
+	}
+	if recorder.Header().Get("Location") != "/ui/" {
+		t.Fatalf("expected redirect to /ui/, got %s", recorder.Header().Get("Location"))
+	}
+}
+
+func TestUIDistServesAssetsAndIndexFallback(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "index.html"), []byte("<html>ui</html>"), 0o600); err != nil {
+		t.Fatalf("write index html: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "app.js"), []byte("console.log('ui');"), 0o600); err != nil {
+		t.Fatalf("write app js: %v", err)
+	}
+
+	cfg := config.Load()
+	cfg.UIDistPath = tempDir
+
+	server := New(cfg, &stubAPIStore{})
+
+	for _, path := range []string{"/ui/", "/ui/app.js", "/ui/findings"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		server.httpServer.Handler.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d", path, recorder.Code)
+		}
 	}
 }

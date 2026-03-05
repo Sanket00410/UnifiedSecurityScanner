@@ -9,6 +9,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,9 +26,11 @@ import (
 var staticAssets embed.FS
 
 type Server struct {
-	cfg        config.Config
-	httpServer *http.Server
-	store      apiStore
+	cfg           config.Config
+	httpServer    *http.Server
+	store         apiStore
+	uiDistPath    string
+	uiDistEnabled bool
 }
 
 type apiStore interface {
@@ -87,9 +91,14 @@ type apiStore interface {
 }
 
 func New(cfg config.Config, store apiStore) *Server {
+	uiDistPath := strings.TrimSpace(cfg.UIDistPath)
+	uiDistEnabled := hasUIDist(uiDistPath)
+
 	server := &Server{
-		cfg:   cfg,
-		store: store,
+		cfg:           cfg,
+		store:         store,
+		uiDistPath:    uiDistPath,
+		uiDistEnabled: uiDistEnabled,
 	}
 
 	webFS, err := fs.Sub(staticAssets, "static")
@@ -155,6 +164,10 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/v1/remediation-escalations/sweep", server.withUserAuth(auth.PermissionRemediationsWrite, "remediation_escalations.sweep", "notification", server.handleRemediationEscalationSweep))
 	mux.HandleFunc("/v1/workers/register", server.withWorkerAuth(server.handleWorkerRegister))
 	mux.HandleFunc("/v1/workers/heartbeat", server.withWorkerAuth(server.handleWorkerHeartbeat))
+	if server.uiDistEnabled {
+		mux.HandleFunc("/ui", server.handleUIDistRoot)
+		mux.HandleFunc("/ui/", server.handleUIDist)
+	}
 	mux.HandleFunc("/app", server.handleAppRoot)
 	mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.FS(webFS))))
 	mux.HandleFunc("/", server.handleRoot)
@@ -1661,7 +1674,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
+	http.Redirect(w, r, s.primaryUIRedirectPath(), http.StatusTemporaryRedirect)
 }
 
 func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request) {
@@ -1671,6 +1684,67 @@ func (s *Server) handleAppRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/app/", http.StatusTemporaryRedirect)
+}
+
+func (s *Server) handleUIDistRoot(w http.ResponseWriter, r *http.Request) {
+	if !s.uiDistEnabled || r.URL.Path != "/ui" {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.Redirect(w, r, "/ui/", http.StatusTemporaryRedirect)
+}
+
+func (s *Server) handleUIDist(w http.ResponseWriter, r *http.Request) {
+	if !s.uiDistEnabled || !strings.HasPrefix(r.URL.Path, "/ui/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	relativePath := strings.TrimPrefix(r.URL.Path, "/ui/")
+	relativePath = strings.TrimSpace(relativePath)
+	if relativePath == "" {
+		relativePath = "index.html"
+	}
+
+	cleanPath := filepath.Clean(relativePath)
+	if cleanPath == "." {
+		cleanPath = "index.html"
+	}
+	if strings.HasPrefix(cleanPath, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	assetPath := filepath.Join(s.uiDistPath, cleanPath)
+	if stat, err := os.Stat(assetPath); err == nil && !stat.IsDir() {
+		http.ServeFile(w, r, assetPath)
+		return
+	}
+
+	http.ServeFile(w, r, filepath.Join(s.uiDistPath, "index.html"))
+}
+
+func (s *Server) primaryUIRedirectPath() string {
+	if s.uiDistEnabled {
+		return "/ui/"
+	}
+	return "/app/"
+}
+
+func hasUIDist(uiDistPath string) bool {
+	uiDistPath = strings.TrimSpace(uiDistPath)
+	if uiDistPath == "" {
+		return false
+	}
+
+	indexPath := filepath.Join(uiDistPath, "index.html")
+	stat, err := os.Stat(indexPath)
+	if err != nil {
+		return false
+	}
+
+	return !stat.IsDir()
 }
 
 func (s *Server) withUserAuth(permission auth.Permission, action string, resourceType string, next http.HandlerFunc) http.HandlerFunc {
