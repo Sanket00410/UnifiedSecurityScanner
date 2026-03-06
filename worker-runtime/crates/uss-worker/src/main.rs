@@ -33,6 +33,7 @@ struct Config {
     daemon_mode: bool,
     evidence_root: String,
     worker_shared_secret: String,
+    workload_identity_token: String,
 }
 
 fn main() {
@@ -75,6 +76,7 @@ impl Config {
             evidence_root: env::var("USS_EVIDENCE_ROOT")
                 .unwrap_or_else(|_| "./evidence".to_string()),
             worker_shared_secret: env::var("USS_WORKER_SHARED_SECRET").unwrap_or_default(),
+            workload_identity_token: env::var("USS_WORKLOAD_IDENTITY_TOKEN").unwrap_or_default(),
         }
     }
 }
@@ -104,6 +106,7 @@ async fn run_worker() -> Result<(), String> {
                 capabilities: default_capabilities(),
             },
             &cfg.worker_shared_secret,
+            &cfg.workload_identity_token,
         ))
         .await
         .map_err(|err| format!("register worker: {err}"))?
@@ -136,6 +139,7 @@ async fn run_worker() -> Result<(), String> {
                     metrics: default_metrics(),
                 },
                 &cfg.worker_shared_secret,
+                &cfg.workload_identity_token,
             ))
             .await
             .map_err(|err| format!("worker heartbeat: {err}"))?
@@ -201,6 +205,7 @@ async fn execute_assignment(
         JobState::Running,
         format!("starting {adapter_id}"),
         &cfg.worker_shared_secret,
+        &cfg.workload_identity_token,
     )
     .await?;
 
@@ -228,6 +233,7 @@ async fn execute_assignment(
                 error_message: error_message.unwrap_or_default(),
             },
             &cfg.worker_shared_secret,
+            &cfg.workload_identity_token,
         ))
         .await
         .map_err(|err| format!("publish job result: {err}"))?;
@@ -243,6 +249,7 @@ async fn publish_status(
     state: JobState,
     detail: String,
     worker_shared_secret: &str,
+    workload_identity_token: &str,
 ) -> Result<(), String> {
     client
         .publish_job_status(worker_request(
@@ -254,6 +261,7 @@ async fn publish_status(
                 timestamp_unix: current_unix_timestamp() as i64,
             }]),
             worker_shared_secret,
+            workload_identity_token,
         ))
         .await
         .map_err(|err| format!("publish job status: {err}"))?;
@@ -319,13 +327,23 @@ fn normalize_grpc_endpoint(value: &str) -> String {
     }
 }
 
-fn worker_request<T>(message: T, worker_shared_secret: &str) -> Request<T> {
+fn worker_request<T>(
+    message: T,
+    worker_shared_secret: &str,
+    workload_identity_token: &str,
+) -> Request<T> {
     let mut request = Request::new(message);
     let secret = worker_shared_secret.trim();
     if !secret.is_empty() {
         let value =
             MetadataValue::try_from(secret).expect("worker shared secret must be valid metadata");
         request.metadata_mut().insert("x-uss-worker-secret", value);
+    }
+    let token = workload_identity_token.trim();
+    if !token.is_empty() {
+        let value = MetadataValue::try_from(format!("Bearer {token}"))
+            .expect("worker identity token must be valid metadata");
+        request.metadata_mut().insert("authorization", value);
     }
     request
 }

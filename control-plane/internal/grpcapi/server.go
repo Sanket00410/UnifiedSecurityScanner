@@ -23,12 +23,13 @@ import (
 )
 
 type Server struct {
-	logger             *log.Logger
-	bind               string
-	grpcServer         *grpc.Server
-	listener           net.Listener
-	store              workerStore
-	workerSharedSecret string
+	logger                     *log.Logger
+	bind                       string
+	grpcServer                 *grpc.Server
+	listener                   net.Listener
+	store                      workerStore
+	workerSharedSecret         string
+	workloadIdentitySigningKey string
 }
 
 type workerStore interface {
@@ -39,19 +40,21 @@ type workerStore interface {
 	FinalizeTask(ctx context.Context, submission models.TaskResultSubmission) error
 }
 
-func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret string) *Server {
+func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret string, workloadIdentitySigningKey string) *Server {
 	server := &Server{
-		logger:             logger,
-		bind:               bind,
-		store:              store,
-		workerSharedSecret: strings.TrimSpace(workerSharedSecret),
+		logger:                     logger,
+		bind:                       bind,
+		store:                      store,
+		workerSharedSecret:         strings.TrimSpace(workerSharedSecret),
+		workloadIdentitySigningKey: strings.TrimSpace(workloadIdentitySigningKey),
 	}
 
 	server.grpcServer = grpc.NewServer()
 	workerv1.RegisterWorkerControlPlaneServer(server.grpcServer, &workerService{
-		store:              store,
-		logger:             logger,
-		workerSharedSecret: strings.TrimSpace(workerSharedSecret),
+		store:                      store,
+		logger:                     logger,
+		workerSharedSecret:         strings.TrimSpace(workerSharedSecret),
+		workloadIdentitySigningKey: strings.TrimSpace(workloadIdentitySigningKey),
 	})
 
 	return server
@@ -77,17 +80,18 @@ func (s *Server) Shutdown(_ context.Context) error {
 
 type workerService struct {
 	workerv1.UnimplementedWorkerControlPlaneServer
-	store              workerStore
-	logger             *log.Logger
-	workerSharedSecret string
+	store                      workerStore
+	logger                     *log.Logger
+	workerSharedSecret         string
+	workloadIdentitySigningKey string
 }
 
 func (s *workerService) RegisterWorker(ctx context.Context, req *workerv1.WorkerRegistrationRequest) (*workerv1.WorkerRegistrationResponse, error) {
-	if err := s.validateWorkerSecret(ctx); err != nil {
-		return nil, err
-	}
 	if req.GetWorkerId() == "" || req.GetWorkerVersion() == "" || req.GetOperatingSystem() == "" || req.GetHostname() == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker_id, worker_version, operating_system, and hostname are required")
+	}
+	if _, err := s.validateWorkerAuthentication(ctx, req.GetWorkerId()); err != nil {
+		return nil, err
 	}
 
 	response, err := s.store.RegisterWorker(ctx, models.WorkerRegistrationRequest{
@@ -109,11 +113,11 @@ func (s *workerService) RegisterWorker(ctx context.Context, req *workerv1.Worker
 }
 
 func (s *workerService) Heartbeat(ctx context.Context, req *workerv1.HeartbeatRequest) (*workerv1.HeartbeatResponse, error) {
-	if err := s.validateWorkerSecret(ctx); err != nil {
-		return nil, err
-	}
 	if req.GetWorkerId() == "" || req.GetLeaseId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker_id and lease_id are required")
+	}
+	if _, err := s.validateWorkerAuthentication(ctx, req.GetWorkerId()); err != nil {
+		return nil, err
 	}
 
 	response, err := s.store.RecordHeartbeat(ctx, models.HeartbeatRequest{
@@ -151,7 +155,8 @@ func (s *workerService) Heartbeat(ctx context.Context, req *workerv1.HeartbeatRe
 }
 
 func (s *workerService) PublishJobStatus(stream grpc.ClientStreamingServer[workerv1.JobStatusEvent, workerv1.Ack]) error {
-	if err := s.validateWorkerSecret(stream.Context()); err != nil {
+	claims, err := s.validateWorkerAuthentication(stream.Context(), "")
+	if err != nil {
 		return err
 	}
 	processed := 0
@@ -165,6 +170,9 @@ func (s *workerService) PublishJobStatus(stream grpc.ClientStreamingServer[worke
 		}
 		if err != nil {
 			return status.Errorf(codes.Internal, "receive status event: %v", err)
+		}
+		if claims != nil && !strings.EqualFold(strings.TrimSpace(claims.WorkerID), strings.TrimSpace(event.GetWorkerId())) {
+			return status.Error(codes.Unauthenticated, "worker identity token does not match worker_id")
 		}
 
 		taskState := toModelTaskState(event.GetState())
@@ -180,7 +188,7 @@ func (s *workerService) PublishJobStatus(stream grpc.ClientStreamingServer[worke
 }
 
 func (s *workerService) PublishJobResult(ctx context.Context, req *workerv1.JobResult) (*workerv1.Ack, error) {
-	if err := s.validateWorkerSecret(ctx); err != nil {
+	if _, err := s.validateWorkerAuthentication(ctx, req.GetWorkerId()); err != nil {
 		return nil, err
 	}
 	taskCtx, err := s.store.GetTaskContext(ctx, req.GetJobId())
@@ -228,22 +236,51 @@ func (s *workerService) PublishJobResult(ctx context.Context, req *workerv1.JobR
 	}, nil
 }
 
-func (s *workerService) validateWorkerSecret(ctx context.Context) error {
-	if s.workerSharedSecret == "" {
-		return nil
+func (s *workerService) validateWorkerAuthentication(ctx context.Context, expectedWorkerID string) (*auth.WorkerIdentityClaims, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+
+	sharedSecret := strings.TrimSpace(s.workerSharedSecret)
+	if sharedSecret != "" {
+		values := md.Get(auth.WorkerSecretMetadata)
+		if len(values) > 0 {
+			if strings.TrimSpace(values[0]) != sharedSecret {
+				return nil, status.Error(codes.Unauthenticated, "worker secret is invalid")
+			}
+			return nil, nil
+		}
 	}
 
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return status.Error(codes.Unauthenticated, "worker secret metadata is required")
+	signingKey := strings.TrimSpace(s.workloadIdentitySigningKey)
+	if signingKey != "" {
+		authzValues := md.Get("authorization")
+		if len(authzValues) == 0 {
+			if sharedSecret != "" {
+				return nil, status.Error(codes.Unauthenticated, "worker secret metadata is required")
+			}
+			return nil, status.Error(codes.Unauthenticated, "worker identity token is required")
+		}
+
+		token := auth.ParseBearerToken(authzValues[0])
+		if token == "" {
+			return nil, status.Error(codes.Unauthenticated, "worker identity token is invalid")
+		}
+
+		claims, err := auth.ValidateWorkerIdentityToken(signingKey, token, time.Now().UTC())
+		if err != nil {
+			return nil, status.Error(codes.Unauthenticated, "worker identity token is invalid")
+		}
+		if strings.TrimSpace(expectedWorkerID) != "" &&
+			!strings.EqualFold(strings.TrimSpace(claims.WorkerID), strings.TrimSpace(expectedWorkerID)) {
+			return nil, status.Error(codes.Unauthenticated, "worker identity token does not match worker_id")
+		}
+		return &claims, nil
 	}
 
-	values := md.Get(auth.WorkerSecretMetadata)
-	if len(values) == 0 || values[0] != s.workerSharedSecret {
-		return status.Error(codes.Unauthenticated, "worker secret is invalid")
+	if sharedSecret != "" {
+		return nil, status.Error(codes.Unauthenticated, "worker secret metadata is required")
 	}
 
-	return nil
+	return nil, nil
 }
 
 func mapCapabilities(items []*workerv1.WorkerCapability) []models.WorkerCapability {

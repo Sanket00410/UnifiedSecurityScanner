@@ -630,6 +630,92 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/IngestionEvent"
+  /metrics:
+    get:
+      operationId: getOperationalMetricsPrometheus
+      responses:
+        "200":
+          description: Prometheus operational metrics payload
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/events:
+    get:
+      operationId: listPlatformEvents
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: event_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          description: Platform events for tenant and global stream
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PlatformEvent"
+  /v1/tenant/operations:
+    get:
+      operationId: getTenantOperationsSnapshot
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant operations usage and limits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantOperationsSnapshot"
+    put:
+      operationId: updateTenantLimits
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantLimitsRequest"
+      responses:
+        "200":
+          description: Updated tenant operations usage and limits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantOperationsSnapshot"
+        "400":
+          description: Invalid tenant limit payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/config:
     get:
       operationId: listTenantConfig
@@ -739,6 +825,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/workload-identities/workers/issue:
+    post:
+      operationId: issueWorkerIdentityToken
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueWorkerIdentityRequest"
+      responses:
+        "201":
+          description: Worker identity token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedWorkerIdentityToken"
+        "400":
+          description: Invalid worker identity issue payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Worker identity service is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /ingest/webhooks/{sourceId}:
     post:
       operationId: ingestWebhookEvent
@@ -793,6 +910,11 @@ paths:
           required: false
           schema:
             type: string
+        - name: Authorization
+          in: header
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -811,6 +933,11 @@ paths:
       operationId: recordWorkerHeartbeat
       parameters:
         - name: X-USS-Worker-Secret
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: Authorization
           in: header
           required: false
           schema:
@@ -2803,6 +2930,161 @@ components:
           $ref: "#/components/schemas/ScanJob"
         duplicate:
           type: boolean
+    PlatformEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - event_type
+        - created_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        event_type:
+          type: string
+        source_service:
+          type: string
+        aggregate_type:
+          type: string
+        aggregate_id:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    TenantLimits:
+      type: object
+      additionalProperties: false
+      required:
+        - tenant_id
+        - max_total_scan_jobs
+        - max_active_scan_jobs
+        - max_scan_targets
+        - max_ingestion_sources
+      properties:
+        tenant_id:
+          type: string
+        max_total_scan_jobs:
+          type: integer
+          format: int64
+        max_active_scan_jobs:
+          type: integer
+          format: int64
+        max_scan_targets:
+          type: integer
+          format: int64
+        max_ingestion_sources:
+          type: integer
+          format: int64
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    UpdateTenantLimitsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        max_total_scan_jobs:
+          type: integer
+          format: int64
+        max_active_scan_jobs:
+          type: integer
+          format: int64
+        max_scan_targets:
+          type: integer
+          format: int64
+        max_ingestion_sources:
+          type: integer
+          format: int64
+    TenantUsage:
+      type: object
+      additionalProperties: false
+      required:
+        - total_scan_jobs
+        - active_scan_jobs
+        - scan_targets
+        - ingestion_sources
+      properties:
+        total_scan_jobs:
+          type: integer
+          format: int64
+        active_scan_jobs:
+          type: integer
+          format: int64
+        scan_targets:
+          type: integer
+          format: int64
+        ingestion_sources:
+          type: integer
+          format: int64
+    TenantOperationsSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - tenant_id
+        - limits
+        - usage
+      properties:
+        tenant_id:
+          type: string
+        limits:
+          $ref: "#/components/schemas/TenantLimits"
+        usage:
+          $ref: "#/components/schemas/TenantUsage"
+    OperationalMetrics:
+      type: object
+      additionalProperties: false
+      required:
+        - workers_total
+        - workers_healthy
+        - scan_jobs_total
+        - scan_jobs_queued
+        - scan_jobs_running
+        - scan_jobs_completed
+        - scan_jobs_failed
+        - scan_targets_total
+        - ingestion_sources_total
+        - ingestion_events_total
+        - platform_events_total
+      properties:
+        workers_total:
+          type: integer
+          format: int64
+        workers_healthy:
+          type: integer
+          format: int64
+        scan_jobs_total:
+          type: integer
+          format: int64
+        scan_jobs_queued:
+          type: integer
+          format: int64
+        scan_jobs_running:
+          type: integer
+          format: int64
+        scan_jobs_completed:
+          type: integer
+          format: int64
+        scan_jobs_failed:
+          type: integer
+          format: int64
+        scan_targets_total:
+          type: integer
+          format: int64
+        ingestion_sources_total:
+          type: integer
+          format: int64
+        ingestion_events_total:
+          type: integer
+          format: int64
+        platform_events_total:
+          type: integer
+          format: int64
     ServiceMetadata:
       type: object
       additionalProperties: false
@@ -4436,6 +4718,51 @@ components:
         value:
           type: object
           additionalProperties: true
+    IssueWorkerIdentityRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - worker_id
+      properties:
+        worker_id:
+          type: string
+        ttl_seconds:
+          type: integer
+          format: int64
+    IssuedWorkerIdentityToken:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+        - token_type
+        - token_id
+        - worker_id
+        - issued_at
+        - expires_at
+        - ttl_seconds
+        - audience
+      properties:
+        token:
+          type: string
+        token_type:
+          type: string
+        token_id:
+          type: string
+        worker_id:
+          type: string
+        tenant_id:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        ttl_seconds:
+          type: integer
+          format: int64
+        audience:
+          type: string
     ApiError:
       type: object
       additionalProperties: false

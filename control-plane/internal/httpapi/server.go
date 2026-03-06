@@ -196,6 +196,7 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:    auth.PermissionPoliciesWrite,
 		http.MethodDelete: auth.PermissionPoliciesWrite,
 	}, "tenant_config", "tenant_config", server.handleTenantConfigRoute))
+	mux.HandleFunc("/v1/workload-identities/workers/issue", server.withUserAuth(auth.PermissionPoliciesWrite, "workload_identity.issue", "workload_identity", server.handleIssueWorkerIdentity))
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/search/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.search", "finding", server.handleFindingSearch))
@@ -1049,6 +1050,9 @@ func (s *Server) handlePlatformEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	eventType := strings.TrimSpace(r.URL.Query().Get("type"))
+	if eventType == "" {
+		eventType = strings.TrimSpace(r.URL.Query().Get("event_type"))
+	}
 	items, err := s.store.ListPlatformEventsForTenant(r.Context(), principal.OrganizationID, eventType, limit)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, "list_platform_events_failed", "platform events could not be loaded")
@@ -1199,6 +1203,70 @@ func (s *Server) handleTenantConfigRoute(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func (s *Server) handleIssueWorkerIdentity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	if strings.TrimSpace(s.cfg.WorkloadIdentitySigningKey) == "" {
+		s.writeError(w, http.StatusServiceUnavailable, "workload_identity_disabled", "workload identity signing key is not configured")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.IssueWorkerIdentityRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	request.WorkerID = strings.TrimSpace(request.WorkerID)
+	if request.WorkerID == "" {
+		s.writeError(w, http.StatusBadRequest, "validation_error", "worker_id is required")
+		return
+	}
+
+	ttl := s.cfg.WorkloadIdentityTTL
+	if request.TTLSeconds > 0 {
+		ttl = time.Duration(request.TTLSeconds) * time.Second
+	}
+
+	now := time.Now().UTC()
+	token, claims, err := auth.IssueWorkerIdentityToken(
+		s.cfg.WorkloadIdentitySigningKey,
+		request.WorkerID,
+		principal.OrganizationID,
+		ttl,
+		now,
+	)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "issue_workload_identity_failed", err.Error())
+		return
+	}
+
+	issuedAt := time.Unix(claims.IssuedAt, 0).UTC()
+	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC()
+	s.writeJSON(w, http.StatusCreated, models.IssuedWorkerIdentityToken{
+		Token:      token,
+		TokenType:  "Bearer",
+		TokenID:    claims.TokenID,
+		WorkerID:   claims.WorkerID,
+		TenantID:   claims.TenantID,
+		IssuedAt:   issuedAt,
+		ExpiresAt:  expiresAt,
+		TTLSeconds: int64(expiresAt.Sub(issuedAt).Seconds()),
+		Audience:   claims.Audience,
+	})
+}
+
 func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.writeMethodNotAllowed(w)
@@ -1219,6 +1287,13 @@ func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(request.Hostname) == "" {
 		s.writeError(w, http.StatusBadRequest, "validation_error", "worker_id, worker_version, operating_system, and hostname are required")
 		return
+	}
+
+	if claims, ok := auth.WorkerIdentityClaimsFromContext(r.Context()); ok {
+		if !strings.EqualFold(strings.TrimSpace(claims.WorkerID), strings.TrimSpace(request.WorkerID)) {
+			s.writeError(w, http.StatusUnauthorized, "worker_identity_mismatch", "worker identity token does not match worker_id")
+			return
+		}
 	}
 
 	response, err := s.store.RegisterWorker(r.Context(), request)
@@ -1247,6 +1322,13 @@ func (s *Server) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(request.WorkerID) == "" || strings.TrimSpace(request.LeaseID) == "" {
 		s.writeError(w, http.StatusBadRequest, "validation_error", "worker_id and lease_id are required")
 		return
+	}
+
+	if claims, ok := auth.WorkerIdentityClaimsFromContext(r.Context()); ok {
+		if !strings.EqualFold(strings.TrimSpace(claims.WorkerID), strings.TrimSpace(request.WorkerID)) {
+			s.writeError(w, http.StatusUnauthorized, "worker_identity_mismatch", "worker identity token does not match worker_id")
+			return
+		}
 	}
 
 	response, err := s.store.RecordHeartbeat(r.Context(), request)
@@ -3160,8 +3242,33 @@ func (s *Server) withUserAuthForMethod(permissions map[string]auth.Permission, a
 
 func (s *Server) withWorkerAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg.WorkerSharedSecret != "" && r.Header.Get(auth.WorkerSecretHeader) != s.cfg.WorkerSharedSecret {
+		sharedSecret := strings.TrimSpace(s.cfg.WorkerSharedSecret)
+		providedSecret := strings.TrimSpace(r.Header.Get(auth.WorkerSecretHeader))
+		if sharedSecret != "" && providedSecret != "" {
+			if providedSecret != sharedSecret {
+				s.writeError(w, http.StatusUnauthorized, "invalid_worker_secret", "the worker secret is invalid")
+				return
+			}
+			next(w, r)
+			return
+		}
+
+		if token := auth.ParseBearerToken(r.Header.Get("Authorization")); token != "" {
+			claims, err := auth.ValidateWorkerIdentityToken(s.cfg.WorkloadIdentitySigningKey, token, time.Now().UTC())
+			if err != nil {
+				s.writeError(w, http.StatusUnauthorized, "invalid_worker_identity_token", "the worker identity token is invalid")
+				return
+			}
+			next(w, r.WithContext(auth.WithWorkerIdentityClaims(r.Context(), claims)))
+			return
+		}
+
+		if sharedSecret != "" {
 			s.writeError(w, http.StatusUnauthorized, "invalid_worker_secret", "the worker secret is invalid")
+			return
+		}
+		if strings.TrimSpace(s.cfg.WorkloadIdentitySigningKey) != "" {
+			s.writeError(w, http.StatusUnauthorized, "invalid_worker_identity_token", "the worker identity token is invalid")
 			return
 		}
 

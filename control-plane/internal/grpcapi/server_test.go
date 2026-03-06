@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -130,7 +131,7 @@ func TestWorkerFlowOverGRPC(t *testing.T) {
 		},
 	}
 
-	client := newTestWorkerClient(t, store, "")
+	client := newTestWorkerClient(t, store, "", "")
 	ctx := context.Background()
 
 	registration, err := client.RegisterWorker(ctx, &workerv1.WorkerRegistrationRequest{
@@ -268,7 +269,7 @@ func TestWorkerSecretValidation(t *testing.T) {
 		},
 	}
 
-	client := newTestWorkerClient(t, store, "expected-secret")
+	client := newTestWorkerClient(t, store, "expected-secret", "")
 
 	_, err := client.RegisterWorker(context.Background(), &workerv1.WorkerRegistrationRequest{
 		WorkerId:        "worker-test-2",
@@ -298,15 +299,76 @@ func TestWorkerSecretValidation(t *testing.T) {
 	}
 }
 
-func newTestWorkerClient(t *testing.T, store workerStore, workerSharedSecret string) workerv1.WorkerControlPlaneClient {
+func TestWorkerIdentityTokenValidation(t *testing.T) {
+	t.Parallel()
+
+	store := &stubWorkerStore{
+		registrationResponse: models.WorkerRegistrationResponse{
+			Accepted:                 true,
+			LeaseID:                  "lease-test-3",
+			HeartbeatIntervalSeconds: 30,
+		},
+	}
+
+	signingKey := "grpc-workload-identity-signing-key"
+	client := newTestWorkerClient(t, store, "", signingKey)
+
+	_, err := client.RegisterWorker(context.Background(), &workerv1.WorkerRegistrationRequest{
+		WorkerId:        "worker-test-3",
+		WorkerVersion:   "0.2.0",
+		OperatingSystem: "windows",
+		Hostname:        "worker-test-host",
+	})
+	if err == nil {
+		t.Fatal("expected register worker without token to fail when workload identity is enabled")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unexpected grpc status for missing token: %v", status.Code(err))
+	}
+
+	token, _, err := auth.IssueWorkerIdentityToken(signingKey, "worker-test-3", "tenant-test", time.Hour, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("issue worker identity token: %v", err)
+	}
+
+	authorizedCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	response, err := client.RegisterWorker(authorizedCtx, &workerv1.WorkerRegistrationRequest{
+		WorkerId:        "worker-test-3",
+		WorkerVersion:   "0.2.0",
+		OperatingSystem: "windows",
+		Hostname:        "worker-test-host",
+	})
+	if err != nil {
+		t.Fatalf("register worker with workload identity token: %v", err)
+	}
+	if !response.GetAccepted() {
+		t.Fatal("expected worker registration to be accepted with workload identity token")
+	}
+
+	_, err = client.RegisterWorker(authorizedCtx, &workerv1.WorkerRegistrationRequest{
+		WorkerId:        "worker-other",
+		WorkerVersion:   "0.2.0",
+		OperatingSystem: "windows",
+		Hostname:        "worker-test-host",
+	})
+	if err == nil {
+		t.Fatal("expected worker identity mismatch to be rejected")
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unexpected grpc status for identity mismatch: %v", status.Code(err))
+	}
+}
+
+func newTestWorkerClient(t *testing.T, store workerStore, workerSharedSecret string, workloadIdentitySigningKey string) workerv1.WorkerControlPlaneClient {
 	t.Helper()
 
 	listener := bufconn.Listen(testBufSize)
 	server := grpc.NewServer()
 	workerv1.RegisterWorkerControlPlaneServer(server, &workerService{
-		store:              store,
-		logger:             log.New(io.Discard, "", 0),
-		workerSharedSecret: workerSharedSecret,
+		store:                      store,
+		logger:                     log.New(io.Discard, "", 0),
+		workerSharedSecret:         workerSharedSecret,
+		workloadIdentitySigningKey: workloadIdentitySigningKey,
 	})
 
 	go func() {

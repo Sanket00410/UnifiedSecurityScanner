@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"unifiedsecurityscanner/control-plane/internal/auth"
 	"unifiedsecurityscanner/control-plane/internal/config"
 	"unifiedsecurityscanner/control-plane/internal/jobs"
 	"unifiedsecurityscanner/control-plane/internal/models"
@@ -1000,6 +1001,110 @@ func TestWorkerSecretRequiredForRestRegistration(t *testing.T) {
 	}
 	if !response.Accepted {
 		t.Fatal("expected worker registration to be accepted")
+	}
+}
+
+func TestIssueWorkerIdentityAndUseForRestRegistration(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		registerResponse: models.WorkerRegistrationResponse{
+			Accepted:                 true,
+			LeaseID:                  "lease-1",
+			HeartbeatIntervalSeconds: 30,
+		},
+	}
+
+	cfg := config.Load()
+	cfg.WorkerSharedSecret = ""
+	cfg.WorkloadIdentitySigningKey = "phase1-workload-signing-key"
+	cfg.WorkloadIdentityTTL = 2 * time.Hour
+
+	server := New(cfg, store)
+
+	issueRecorder := httptest.NewRecorder()
+	issueRequest := httptest.NewRequest(http.MethodPost, "/v1/workload-identities/workers/issue", strings.NewReader(`{
+		"worker_id":"worker-identity-1",
+		"ttl_seconds":3600
+	}`))
+	issueRequest.Header.Set("Authorization", "Bearer admin-token")
+	issueRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(issueRecorder, issueRequest)
+	if issueRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 when issuing worker identity token, got %d", issueRecorder.Code)
+	}
+
+	var issued models.IssuedWorkerIdentityToken
+	if err := json.NewDecoder(issueRecorder.Body).Decode(&issued); err != nil {
+		t.Fatalf("decode issued worker identity token: %v", err)
+	}
+	if issued.Token == "" || issued.WorkerID != "worker-identity-1" {
+		t.Fatalf("unexpected issued token payload: %+v", issued)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerRequest := httptest.NewRequest(http.MethodPost, "/v1/workers/register", strings.NewReader(`{
+		"worker_id":"worker-identity-1",
+		"worker_version":"1.0.0",
+		"operating_system":"linux",
+		"hostname":"worker-host",
+		"capabilities":[]
+	}`))
+	registerRequest.Header.Set("Authorization", "Bearer "+issued.Token)
+	registerRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(registerRecorder, registerRequest)
+	if registerRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 with worker identity token, got %d", registerRecorder.Code)
+	}
+}
+
+func TestWorkerIdentityRejectsMismatchedWorkerID(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		registerResponse: models.WorkerRegistrationResponse{
+			Accepted:                 true,
+			LeaseID:                  "lease-1",
+			HeartbeatIntervalSeconds: 30,
+		},
+	}
+
+	cfg := config.Load()
+	cfg.WorkerSharedSecret = ""
+	cfg.WorkloadIdentitySigningKey = "phase1-workload-signing-key"
+
+	token, _, err := auth.IssueWorkerIdentityToken(cfg.WorkloadIdentitySigningKey, "worker-expected", "org-1", time.Hour, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("issue worker identity token: %v", err)
+	}
+
+	server := New(cfg, store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/workers/register", strings.NewReader(`{
+		"worker_id":"worker-different",
+		"worker_version":"1.0.0",
+		"operating_system":"linux",
+		"hostname":"worker-host",
+		"capabilities":[]
+	}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for worker identity mismatch, got %d", recorder.Code)
 	}
 }
 
