@@ -32,6 +32,8 @@ type stubAPIStore struct {
 	platformEvents           []models.PlatformEvent
 	tenantOpsSnapshot        models.TenantOperationsSnapshot
 	operationalMetrics       models.OperationalMetrics
+	findingSearchResult      models.FindingSearchResult
+	findingSearchErr         error
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -431,6 +433,21 @@ func (s *stubAPIStore) RecordHeartbeat(context.Context, models.HeartbeatRequest)
 
 func (s *stubAPIStore) ListFindingsForTenant(context.Context, string, int) ([]models.CanonicalFinding, error) {
 	return s.findings, nil
+}
+
+func (s *stubAPIStore) SearchFindingsForTenant(_ context.Context, _ string, _ models.FindingSearchQuery) (models.FindingSearchResult, error) {
+	if s.findingSearchErr != nil {
+		return models.FindingSearchResult{}, s.findingSearchErr
+	}
+	if len(s.findingSearchResult.Items) == 0 {
+		return models.FindingSearchResult{
+			Items:  s.findings,
+			Total:  int64(len(s.findings)),
+			Limit:  100,
+			Offset: 0,
+		}, nil
+	}
+	return s.findingSearchResult, nil
 }
 
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
@@ -1366,6 +1383,113 @@ func TestScanJobTenantLimitExceededReturnsTooManyRequests(t *testing.T) {
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 for tenant limit exceeded, got %d", recorder.Code)
+	}
+}
+
+func TestFindingSearchEndpointReturnsItemsAndPagination(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		findingSearchResult: models.FindingSearchResult{
+			Items: []models.CanonicalFinding{
+				{
+					SchemaVersion: "1.0.0",
+					FindingID:     "finding-search-1",
+					TenantID:      "org-1",
+					Category:      "sast_rule_match",
+					Title:         "SQL injection pattern",
+					Severity:      "high",
+					Confidence:    "high",
+					Status:        "open",
+					FirstSeenAt:   now,
+					LastSeenAt:    now,
+					Source: models.CanonicalSourceInfo{
+						Layer: "code",
+						Tool:  "semgrep",
+					},
+					Asset: models.CanonicalAssetInfo{
+						AssetID:     "repo://core",
+						AssetType:   "repo",
+						AssetName:   "core",
+						Environment: "production",
+						Exposure:    "internal",
+					},
+					Risk: models.CanonicalRisk{
+						Priority:     "p1",
+						OverallScore: 89.2,
+						SLAClass:     "72h",
+					},
+				},
+			},
+			Total:  1,
+			Limit:  50,
+			Offset: 5,
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/search/findings?q=sql&severity=high&limit=50&offset=5", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for finding search, got %d", recorder.Code)
+	}
+
+	var payload models.FindingSearchResult
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode finding search response: %v", err)
+	}
+	if payload.Total != 1 || payload.Limit != 50 || payload.Offset != 5 {
+		t.Fatalf("unexpected search metadata: %+v", payload)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].FindingID != "finding-search-1" {
+		t.Fatalf("unexpected search items: %+v", payload.Items)
+	}
+}
+
+func TestFindingSearchEndpointValidatesOverdueParameter(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/search/findings?overdue=maybe", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid overdue filter, got %d", recorder.Code)
 	}
 }
 

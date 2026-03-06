@@ -57,6 +57,7 @@ type apiStore interface {
 	UpdateScanTargetForTenant(ctx context.Context, tenantID string, targetID string, request models.UpdateScanTargetRequest) (models.ScanTarget, bool, error)
 	DeleteScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (bool, error)
 	RunScanTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error)
+	SearchFindingsForTenant(ctx context.Context, tenantID string, query models.FindingSearchQuery) (models.FindingSearchResult, error)
 	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
 	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
 	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
@@ -179,6 +180,7 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "tenant_operations", "tenant", server.handleTenantOperations))
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
+	mux.HandleFunc("/v1/search/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.search", "finding", server.handleFindingSearch))
 	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
@@ -1153,6 +1155,66 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items": findings,
 	})
+}
+
+func (s *Server) handleFindingSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "offset must be zero or a positive integer")
+			return
+		}
+		offset = parsed
+	}
+
+	var overdue *bool
+	if raw := strings.TrimSpace(r.URL.Query().Get("overdue")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "overdue must be true or false")
+			return
+		}
+		overdue = &parsed
+	}
+
+	result, err := s.store.SearchFindingsForTenant(r.Context(), principal.OrganizationID, models.FindingSearchQuery{
+		Query:    strings.TrimSpace(r.URL.Query().Get("q")),
+		Severity: strings.TrimSpace(r.URL.Query().Get("severity")),
+		Priority: strings.TrimSpace(r.URL.Query().Get("priority")),
+		Layer:    strings.TrimSpace(r.URL.Query().Get("layer")),
+		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
+		Overdue:  overdue,
+		Limit:    limit,
+		Offset:   offset,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "search_findings_failed", "finding search could not be executed")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleFindingRoute(w http.ResponseWriter, r *http.Request) {

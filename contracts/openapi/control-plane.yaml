@@ -745,6 +745,71 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CanonicalFinding"
+  /v1/search/findings:
+    get:
+      operationId: searchFindings
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: priority
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: layer
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: overdue
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Filtered and ranked finding search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindingSearchResult"
+        "400":
+          description: Invalid search query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/findings/{findingId}/waivers:
     get:
       operationId: listFindingWaivers
@@ -3736,6 +3801,26 @@ components:
         occurrence_count:
           type: integer
         reopened_count:
+          type: integer
+    FindingSearchResult:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CanonicalFinding"
+        total:
+          type: integer
+          format: int64
+        limit:
+          type: integer
+        offset:
           type: integer
     ApiError:
       type: object
