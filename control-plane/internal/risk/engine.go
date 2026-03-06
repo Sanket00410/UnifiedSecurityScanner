@@ -237,7 +237,7 @@ func normalizeLayer(current string, adapterID string) string {
 		return "secrets"
 	case "trivy-config", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
 		return "iac"
-	case "zap", "zap-api":
+	case "zap", "zap-api", "browser-probe":
 		return "dast"
 	case "nmap", "metasploit", "nuclei":
 		return "pentest"

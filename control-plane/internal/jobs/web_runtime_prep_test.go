@@ -30,3 +30,9 @@ func TestValidateWebRuntimeToolsAPISchemaDisallowsNetworkTools(t *testing.T) {
 		t.Fatalf("expected ErrWebRuntimeToolNotAllowed, got %v", err)
 	}
 }
+
+func TestValidateWebRuntimeToolsSafeModeAllowsBrowserProbe(t *testing.T) {
+	if err := validateWebRuntimeTools("url", true, []string{"zap", "browser-probe"}); err != nil {
+		t.Fatalf("expected safe mode to allow browser-probe, got %v", err)
+	}
+}

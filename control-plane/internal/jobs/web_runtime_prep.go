@@ -835,7 +835,7 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 		if targetKind == "api_schema" {
 			tools = []string{"zap-api", "nuclei"}
 		} else {
-			tools = []string{"zap", "nuclei"}
+			tools = []string{"zap", "nuclei", "browser-probe"}
 		}
 	}
 	if err := validateWebRuntimeTools(targetKind, policy.SafeMode, tools); err != nil {
@@ -1009,9 +1009,10 @@ func validateWebRuntimeTools(targetKind string, safeMode bool, tools []string) e
 	}
 
 	baseAllowList := map[string]struct{}{
-		"zap":     {},
-		"zap-api": {},
-		"nuclei":  {},
+		"zap":           {},
+		"zap-api":       {},
+		"nuclei":        {},
+		"browser-probe": {},
 	}
 	extendedAllowList := map[string]struct{}{
 		"nmap":       {},

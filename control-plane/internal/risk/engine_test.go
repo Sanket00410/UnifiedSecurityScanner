@@ -128,6 +128,9 @@ func TestLayerForAdapterNormalizesCodeAndRuntimeTools(t *testing.T) {
 	if got := LayerForAdapter("zap"); got != "dast" {
 		t.Fatalf("expected zap layer dast, got %s", got)
 	}
+	if got := LayerForAdapter("browser-probe"); got != "dast" {
+		t.Fatalf("expected browser-probe layer dast, got %s", got)
+	}
 }
 
 func TestEnrichWithInputsAppliesAssetOverridesAndControls(t *testing.T) {

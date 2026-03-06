@@ -1871,7 +1871,7 @@ export function App() {
               <form className="form" onSubmit={handleRunWebTarget} key={`run-web-target-${selectedWebTarget?.id || "none"}`}>
                 <h3>Run Selected Target</h3>
                 <input name="profile" defaultValue="runtime" placeholder="runtime profile" required />
-                <input name="tools" defaultValue="zap,nuclei" placeholder="zap,nuclei" />
+                <input name="tools" defaultValue="zap,nuclei,browser-probe" placeholder="zap,nuclei,browser-probe" />
                 <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Start Runtime Scan</button>
               </form>
 

@@ -1,0 +1,34 @@
+{
+  "findings": [
+    {
+      "id": "dom-xss-001",
+      "rule_id": "dom-xss-reflected",
+      "title": "Reflected DOM XSS sink reachable from query parameter",
+      "category": "dom_xss",
+      "severity": "high",
+      "confidence": "high",
+      "url": "https://app.example.com/search?q=test",
+      "path": "/search",
+      "line_number": 118,
+      "description": "User-controlled query input reaches an unsafe DOM sink without encoding.",
+      "remediation": "Encode untrusted input before writing to the DOM and enforce a strict CSP.",
+      "cwe": "CWE-79",
+      "owasp": "A03:2021"
+    },
+    {
+      "id": "session-flag-001",
+      "rule_id": "cookie-missing-secure",
+      "title": "Session cookie missing Secure attribute",
+      "category": "session_management",
+      "severity": "medium",
+      "confidence": "medium",
+      "url": "https://app.example.com/account",
+      "path": "/account",
+      "line_number": 0,
+      "description": "Observed authenticated session cookie was set without the Secure flag.",
+      "remediation": "Set the Secure and HttpOnly flags for all session cookies.",
+      "cwe": "CWE-614",
+      "owasp": "A07:2021"
+    }
+  ]
+}

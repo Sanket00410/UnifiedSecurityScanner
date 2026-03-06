@@ -1355,7 +1355,7 @@ func defaultToolsForTargetKind(targetKind string) []string {
 	case "host", "ip":
 		return []string{"nmap", "nuclei"}
 	case "api", "url":
-		return []string{"zap", "nuclei"}
+		return []string{"zap", "nuclei", "browser-probe"}
 	case "repo", "repository", "codebase", "filesystem":
 		return []string{"semgrep", "bandit", "trivy", "osv-scanner", "syft", "grype", "trivy-config", "trivy-secrets", "gitleaks", "detect-secrets", "checkov"}
 	case "image", "container_image":
@@ -1368,7 +1368,7 @@ func defaultToolsForTargetKind(targetKind string) []string {
 func approvalModeForTools(tools []string) string {
 	for _, tool := range tools {
 		switch tool {
-		case "metasploit", "sqlmap", "nmap", "nuclei", "zap":
+		case "metasploit", "sqlmap", "nmap", "nuclei", "zap", "browser-probe":
 			return "policy-gated"
 		}
 	}
@@ -1406,7 +1406,7 @@ func executionModeForTool(tool string) models.ExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "semgrep", "gosec", "spotbugs", "pmd", "bundler-audit", "brakeman", "devskim", "bandit", "eslint", "phpstan", "shellcheck", "mobsfscan", "detect-secrets", "dotnet-audit", "npm-audit", "composer-audit", "osv-scanner", "syft", "trivy", "trivy-image", "trivy-config", "trivy-secrets", "grype", "gitleaks", "checkov", "cfn-lint", "hadolint", "kics", "prowler", "kubesec", "kube-score", "tfsec":
 		return models.ExecutionModePassive
-	case "zap-api", "nuclei":
+	case "zap-api", "nuclei", "browser-probe":
 		return models.ExecutionModeActiveValidation
 	case "metasploit":
 		return models.ExecutionModeRestrictedExploit
@@ -1501,6 +1501,8 @@ func maxRuntimeForTool(tool string) int64 {
 	case "zap-api":
 		return 600
 	case "zap":
+		return 600
+	case "browser-probe":
 		return 600
 	case "metasploit":
 		return 300

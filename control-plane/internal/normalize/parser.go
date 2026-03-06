@@ -38,6 +38,8 @@ func Parse(adapterID string, ctx Context, evidencePaths []string) ([]models.Cano
 		return parseNmap(ctx, evidencePaths)
 	case "nuclei":
 		return parseNuclei(ctx, evidencePaths)
+	case "browser-probe":
+		return parseBrowserProbe(ctx, evidencePaths)
 	case "metasploit":
 		return parseMetasploit(ctx, evidencePaths)
 	case "semgrep":
@@ -281,6 +283,115 @@ func parseNuclei(ctx Context, evidencePaths []string) ([]models.CanonicalFinding
 			return nil, fmt.Errorf("scan nuclei evidence %s: %w", path, err)
 		}
 		_ = file.Close()
+	}
+
+	return findings, nil
+}
+
+func parseBrowserProbe(ctx Context, evidencePaths []string) ([]models.CanonicalFinding, error) {
+	type browserProbeFinding struct {
+		ID          string `json:"id"`
+		RuleID      string `json:"rule_id"`
+		Name        string `json:"name"`
+		Title       string `json:"title"`
+		Category    string `json:"category"`
+		Severity    string `json:"severity"`
+		Confidence  string `json:"confidence"`
+		URL         string `json:"url"`
+		Endpoint    string `json:"endpoint"`
+		Path        string `json:"path"`
+		Route       string `json:"route"`
+		Line        int    `json:"line"`
+		LineNumber  int    `json:"line_number"`
+		Description string `json:"description"`
+		Remediation string `json:"remediation"`
+		CWE         string `json:"cwe"`
+		OWASP       string `json:"owasp"`
+	}
+	type browserProbeEnvelope struct {
+		Findings []browserProbeFinding `json:"findings"`
+	}
+
+	findings := make([]models.CanonicalFinding, 0)
+	now := time.Now().UTC()
+
+	for _, path := range evidencePaths {
+		payloadBytes, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("read browser-probe evidence %s: %w", path, err)
+		}
+
+		records := make([]browserProbeFinding, 0)
+		var envelope browserProbeEnvelope
+		if err := json.Unmarshal(payloadBytes, &envelope); err == nil && len(envelope.Findings) > 0 {
+			records = append(records, envelope.Findings...)
+		}
+		if len(records) == 0 {
+			var arrayPayload []browserProbeFinding
+			if err := json.Unmarshal(payloadBytes, &arrayPayload); err == nil && len(arrayPayload) > 0 {
+				records = append(records, arrayPayload...)
+			}
+		}
+		if len(records) == 0 {
+			scanner := bufio.NewScanner(strings.NewReader(string(payloadBytes)))
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" {
+					continue
+				}
+				var item browserProbeFinding
+				if err := json.Unmarshal([]byte(line), &item); err != nil {
+					continue
+				}
+				records = append(records, item)
+			}
+			if err := scanner.Err(); err != nil {
+				return nil, fmt.Errorf("scan browser-probe evidence %s: %w", path, err)
+			}
+		}
+
+		for _, item := range records {
+			title := firstNonEmptyString(item.Title, item.Name, item.RuleID, item.ID, "Browser runtime finding")
+			category := firstNonEmptyString(strings.TrimSpace(item.Category), "dom_security_issue")
+			endpoint := firstNonEmptyString(item.URL, item.Endpoint, ctx.Target)
+			locationLine := firstPositiveInt(item.Line, item.LineNumber)
+			finding := baseFinding(ctx, now, category, title, normalizeSeverity(item.Severity, "medium"), normalizeConfidence(item.Confidence), models.CanonicalLocation{
+				Kind:     "endpoint",
+				Path:     firstNonEmptyString(item.Path, item.Route, filepath.Base(path)),
+				Line:     locationLine,
+				Endpoint: endpoint,
+			}, models.CanonicalEvidence{
+				Kind:    "json",
+				Ref:     path,
+				Summary: "browser instrumentation finding",
+			})
+
+			description := strings.TrimSpace(item.Description)
+			if description != "" {
+				finding.Description = description
+			}
+			remediation := strings.TrimSpace(item.Remediation)
+			if remediation != "" {
+				finding.Remediation = &models.CanonicalRemediation{
+					Summary:      remediation,
+					FixAvailable: true,
+				}
+			}
+			if value := strings.TrimSpace(item.RuleID); value != "" {
+				finding.Tags = append(finding.Tags, "rule:"+value)
+			}
+			if value := strings.TrimSpace(item.CWE); value != "" {
+				finding.Tags = append(finding.Tags, "cwe:"+value)
+			}
+			if value := strings.TrimSpace(item.OWASP); value != "" {
+				finding.Tags = append(finding.Tags, "owasp:"+value)
+			}
+
+			findings = append(findings, finding)
+		}
 	}
 
 	return findings, nil

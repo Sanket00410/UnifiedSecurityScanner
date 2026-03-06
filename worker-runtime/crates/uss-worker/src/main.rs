@@ -474,6 +474,20 @@ fn default_capabilities() -> Vec<WorkerCapability> {
             linux_preferred: false,
         },
         WorkerCapability {
+            adapter_id: "browser-probe".to_string(),
+            supported_target_kinds: vec![
+                "url".to_string(),
+                "api".to_string(),
+                "api_schema".to_string(),
+            ],
+            supported_modes: vec![
+                ProtoExecutionMode::Passive as i32,
+                ProtoExecutionMode::ActiveValidation as i32,
+            ],
+            labels: vec!["web".to_string(), "browser".to_string()],
+            linux_preferred: false,
+        },
+        WorkerCapability {
             adapter_id: "metasploit".to_string(),
             supported_target_kinds: vec![
                 "domain".to_string(),

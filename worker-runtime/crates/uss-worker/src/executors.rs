@@ -12,6 +12,7 @@ pub fn execute(request: &AdapterRequest) -> Result<AdapterResult, String> {
         "zap-api" => ZapAPIAdapter.execute(request),
         "nmap" => NmapAdapter.execute(request),
         "nuclei" => NucleiAdapter.execute(request),
+        "browser-probe" => BrowserProbeAdapter.execute(request),
         "metasploit" => MetasploitAdapter.execute(request),
         "semgrep" => SemgrepAdapter.execute(request),
         "mobsfscan" => MobSFScanAdapter.execute(request),
@@ -53,6 +54,7 @@ struct ZapAdapter;
 struct ZapAPIAdapter;
 struct NmapAdapter;
 struct NucleiAdapter;
+struct BrowserProbeAdapter;
 struct MetasploitAdapter;
 struct SemgrepAdapter;
 struct MobSFScanAdapter;
@@ -265,6 +267,68 @@ impl ScannerAdapter for NucleiAdapter {
             report_path.to_string_lossy().to_string(),
         ];
         append_nuclei_policy_args(request, &mut args);
+
+        let mut evidence_paths = vec![report_path.clone()];
+        if let Some(snapshot_path) = policy_snapshot {
+            evidence_paths.push(snapshot_path);
+        }
+
+        run_process(
+            self.id(),
+            &binary,
+            &args,
+            &log_path,
+            request.max_runtime_seconds,
+            evidence_paths,
+            None,
+        )
+    }
+}
+
+impl ScannerAdapter for BrowserProbeAdapter {
+    fn id(&self) -> &'static str {
+        "browser-probe"
+    }
+
+    fn supports(&self, mode: &ExecutionMode) -> bool {
+        matches!(
+            mode,
+            ExecutionMode::Passive | ExecutionMode::ActiveValidation
+        )
+    }
+
+    fn validate(&self, request: &AdapterRequest) -> Result<(), String> {
+        validate_common(self, request)
+    }
+
+    fn execute(&self, request: &AdapterRequest) -> Result<AdapterResult, String> {
+        self.validate(request)?;
+
+        let report_path =
+            ensure_evidence_path(&request.evidence_dir, "browser-probe-results.json")?;
+        let log_path = ensure_evidence_path(&request.evidence_dir, "browser-probe-exec.log")?;
+        let policy_snapshot = write_web_runtime_policy_snapshot(request)?;
+        let binary =
+            env::var("USS_BROWSER_PROBE_CMD").unwrap_or_else(|_| "browser-probe".to_string());
+
+        let mut args = vec![
+            "--target".to_string(),
+            request.target.clone(),
+            "--output".to_string(),
+            report_path.to_string_lossy().to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ];
+        append_browser_probe_policy_args(request, &mut args);
+
+        if let Ok(extra) = env::var("USS_BROWSER_PROBE_EXTRA_ARGS") {
+            for value in extra.split_whitespace() {
+                let normalized = value.trim();
+                if !normalized.is_empty() {
+                    args.push(normalized.to_string());
+                }
+            }
+        }
 
         let mut evidence_paths = vec![report_path.clone()];
         if let Some(snapshot_path) = policy_snapshot {
@@ -1926,12 +1990,51 @@ fn append_nuclei_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
     }
 }
 
+fn append_browser_probe_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
+    if let Some(max_depth) = request_label_u64(request, "web_max_depth") {
+        args.push("--max-depth".to_string());
+        args.push(max_depth.to_string());
+    }
+    if let Some(max_requests) = request_label_u64(request, "web_max_requests") {
+        args.push("--max-requests".to_string());
+        args.push(max_requests.to_string());
+    }
+    if let Some(rate_limit) = request_label_u64(request, "web_request_budget_per_minute") {
+        args.push("--rate-limit".to_string());
+        args.push(rate_limit.to_string());
+    }
+
+    if let Some(login_url) = request.labels.get("web_auth_login_url") {
+        let normalized = login_url.trim();
+        if !normalized.is_empty() {
+            args.push("--login-url".to_string());
+            args.push(normalized.to_string());
+        }
+    }
+    if let Some(auth_type) = request.labels.get("web_auth_type") {
+        let normalized = auth_type.trim();
+        if !normalized.is_empty() {
+            args.push("--auth-type".to_string());
+            args.push(normalized.to_string());
+        }
+    }
+}
+
 fn write_web_runtime_policy_snapshot(request: &AdapterRequest) -> Result<Option<PathBuf>, String> {
-    const POLICY_KEYS: [&str; 13] = [
+    const POLICY_KEYS: [&str; 22] = [
         "web_target_id",
         "web_target_type",
         "web_safe_mode",
         "web_auth_profile_id",
+        "web_auth_type",
+        "web_auth_login_url",
+        "web_auth_csrf_mode",
+        "web_auth_token_refresh_strategy",
+        "web_auth_username_secret_ref",
+        "web_auth_password_secret_ref",
+        "web_auth_bearer_token_secret_ref",
+        "web_auth_session_bootstrap_json",
+        "web_auth_test_personas_json",
         "web_max_depth",
         "web_max_requests",
         "web_request_budget_per_minute",
@@ -2036,6 +2139,38 @@ mod tests {
 
         let joined = args.join(" ");
         assert!(joined.contains("-rate-limit 180"));
+    }
+
+    #[test]
+    fn append_browser_probe_policy_args_uses_auth_and_limits() {
+        let mut request = base_request();
+        request
+            .labels
+            .insert("web_max_depth".to_string(), "5".to_string());
+        request
+            .labels
+            .insert("web_max_requests".to_string(), "1400".to_string());
+        request.labels.insert(
+            "web_request_budget_per_minute".to_string(),
+            "220".to_string(),
+        );
+        request.labels.insert(
+            "web_auth_login_url".to_string(),
+            "https://app.example.com/login".to_string(),
+        );
+        request
+            .labels
+            .insert("web_auth_type".to_string(), "form".to_string());
+
+        let mut args = vec!["--target".to_string(), request.target.clone()];
+        append_browser_probe_policy_args(&request, &mut args);
+
+        let joined = args.join(" ");
+        assert!(joined.contains("--max-depth 5"));
+        assert!(joined.contains("--max-requests 1400"));
+        assert!(joined.contains("--rate-limit 220"));
+        assert!(joined.contains("--login-url https://app.example.com/login"));
+        assert!(joined.contains("--auth-type form"));
     }
 
     #[test]

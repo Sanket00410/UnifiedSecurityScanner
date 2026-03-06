@@ -100,7 +100,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
     - restricted tools (`metasploit`, `sqlmap`, `nmap`) require disabling safe mode and policy approval
   - configure **Coverage Baseline** (expected routes/API/auth states + minimum percentages)
   - run **Scope Check** on any URL against target rules
-  - start runtime scans with **Run Selected Target** (profile + tools such as `zap,nuclei`)
+  - start runtime scans with **Run Selected Target** (profile + tools such as `zap,nuclei,browser-probe`)
     - if auth profile is attached, it must be enabled or run creation is rejected
   - post run results into **Coverage Runs** and track **Coverage Status**
 - Go to **Reports** to load server summary and export findings via:

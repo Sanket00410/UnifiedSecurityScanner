@@ -38,7 +38,7 @@ func (s *Store) ListScanPresetsForTenant(_ context.Context, _ string) ([]models.
 			Description: "Authenticated runtime checks for web/API targets.",
 			TargetKind:  "url",
 			Profile:     "runtime",
-			Tools:       []string{"zap", "nuclei"},
+			Tools:       []string{"zap", "nuclei", "browser-probe"},
 		},
 		{
 			ID:          "infrastructure-terraform",

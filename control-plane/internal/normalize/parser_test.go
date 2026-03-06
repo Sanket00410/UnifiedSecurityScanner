@@ -1288,3 +1288,35 @@ func TestParseSyftLicenseFixture(t *testing.T) {
 		t.Fatalf("unexpected syft v2 severity: %s", finding.Severity)
 	}
 }
+
+func TestParseBrowserProbeFixture(t *testing.T) {
+	t.Parallel()
+
+	findings, err := Parse("browser-probe", Context{
+		TenantID:   "tenant-test",
+		ScanJobID:  "scan-test",
+		TaskID:     "task-browser-probe",
+		AdapterID:  "browser-probe",
+		TargetKind: "url",
+		Target:     "https://app.example.com",
+	}, []string{filepath.Join("testdata", "browser-probe-results.json")})
+	if err != nil {
+		t.Fatalf("parse browser-probe fixture: %v", err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(findings))
+	}
+
+	if findings[0].Source.Layer != "dast" {
+		t.Fatalf("expected dast source layer, got %s", findings[0].Source.Layer)
+	}
+	if findings[0].Severity != "high" {
+		t.Fatalf("expected first finding severity high, got %s", findings[0].Severity)
+	}
+	if findings[0].Locations[0].Endpoint != "https://app.example.com/search?q=test" {
+		t.Fatalf("unexpected first finding endpoint: %s", findings[0].Locations[0].Endpoint)
+	}
+	if findings[1].Category != "session_management" {
+		t.Fatalf("unexpected second finding category: %s", findings[1].Category)
+	}
+}

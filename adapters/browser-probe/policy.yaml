@@ -1,0 +1,17 @@
+adapter_id: browser-probe
+display_name: Browser Runtime Probe Adapter
+execution_modes:
+  - passive
+  - active_validation
+requires_human_approval: false
+supports_authenticated_sessions: true
+requires_session_profile: false
+supports_target_kinds:
+  - url
+  - api
+  - api_schema
+default_timeout_seconds: 600
+evidence_requirements:
+  - browser_probe_report
+  - runtime_policy_snapshot
+  - execution_log
