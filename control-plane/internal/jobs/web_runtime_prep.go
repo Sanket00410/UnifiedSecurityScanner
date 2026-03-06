@@ -635,6 +635,152 @@ func (s *Store) UpsertWebCoverageBaselineForTenant(ctx context.Context, tenantID
 	return updated, nil
 }
 
+func (s *Store) ListWebRuntimeCoverageRunsForTenant(ctx context.Context, tenantID string, targetID string, limit int) ([]models.WebRuntimeCoverageRun, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	targetID = strings.TrimSpace(targetID)
+	if tenantID == "" || targetID == "" {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, web_target_id, scan_job_id, route_coverage, api_coverage, auth_coverage,
+		       discovered_route_count, discovered_api_operation_count, discovered_auth_state_count,
+		       evidence_ref, created_by, created_at
+		FROM web_runtime_coverage_runs
+		WHERE tenant_id = $1 AND web_target_id = $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, tenantID, targetID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list web runtime coverage runs: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.WebRuntimeCoverageRun, 0, limit)
+	for rows.Next() {
+		item, err := scanWebRuntimeCoverageRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan web runtime coverage run row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate web runtime coverage runs: %w", err)
+	}
+
+	return items, nil
+}
+
+func (s *Store) CreateWebRuntimeCoverageRunForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.CreateWebRuntimeCoverageRunRequest) (models.WebRuntimeCoverageRun, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	targetID = strings.TrimSpace(targetID)
+	actor = strings.TrimSpace(actor)
+
+	_, targetFound, err := s.GetWebTargetForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebRuntimeCoverageRun{}, err
+	}
+	if !targetFound {
+		return models.WebRuntimeCoverageRun{}, ErrWebTargetNotFound
+	}
+
+	now := time.Now().UTC()
+	item := models.WebRuntimeCoverageRun{
+		ID:                          nextWebRuntimeCoverageRunID(),
+		TenantID:                    tenantID,
+		WebTargetID:                 targetID,
+		ScanJobID:                   strings.TrimSpace(request.ScanJobID),
+		RouteCoverage:               clampCoverage(request.RouteCoverage),
+		APICoverage:                 clampCoverage(request.APICoverage),
+		AuthCoverage:                clampCoverage(request.AuthCoverage),
+		DiscoveredRouteCount:        request.DiscoveredRouteCount,
+		DiscoveredAPIOperationCount: request.DiscoveredAPIOperationCount,
+		DiscoveredAuthStateCount:    request.DiscoveredAuthStateCount,
+		EvidenceRef:                 strings.TrimSpace(request.EvidenceRef),
+		CreatedBy:                   actor,
+		CreatedAt:                   now,
+	}
+	if item.CreatedBy == "" {
+		item.CreatedBy = "system"
+	}
+	if item.DiscoveredRouteCount < 0 || item.DiscoveredAPIOperationCount < 0 || item.DiscoveredAuthStateCount < 0 {
+		return models.WebRuntimeCoverageRun{}, fmt.Errorf("coverage discovered counts must be greater than or equal to zero")
+	}
+
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO web_runtime_coverage_runs (
+			id, tenant_id, web_target_id, scan_job_id, route_coverage, api_coverage, auth_coverage,
+			discovered_route_count, discovered_api_operation_count, discovered_auth_state_count,
+			evidence_ref, created_by, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10,
+			$11, $12, $13
+		)
+		RETURNING id, tenant_id, web_target_id, scan_job_id, route_coverage, api_coverage, auth_coverage,
+		          discovered_route_count, discovered_api_operation_count, discovered_auth_state_count,
+		          evidence_ref, created_by, created_at
+	`, item.ID, item.TenantID, item.WebTargetID, item.ScanJobID, item.RouteCoverage, item.APICoverage, item.AuthCoverage,
+		item.DiscoveredRouteCount, item.DiscoveredAPIOperationCount, item.DiscoveredAuthStateCount,
+		item.EvidenceRef, item.CreatedBy, item.CreatedAt)
+
+	created, err := scanWebRuntimeCoverageRun(row)
+	if err != nil {
+		return models.WebRuntimeCoverageRun{}, fmt.Errorf("create web runtime coverage run: %w", err)
+	}
+
+	return created, nil
+}
+
+func (s *Store) GetWebCoverageStatusForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageStatus, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	targetID = strings.TrimSpace(targetID)
+	status := models.WebCoverageStatus{
+		WebTargetID:        targetID,
+		RouteCoverageMeets: false,
+		APICoverageMeets:   false,
+		AuthCoverageMeets:  false,
+		OverallMeets:       false,
+	}
+
+	_, targetFound, err := s.GetWebTargetForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebCoverageStatus{}, err
+	}
+	if !targetFound {
+		return models.WebCoverageStatus{}, ErrWebTargetNotFound
+	}
+
+	baseline, baselineFound, err := s.GetWebCoverageBaselineForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebCoverageStatus{}, err
+	}
+	if baselineFound {
+		status.Baseline = &baseline
+	}
+
+	runs, err := s.ListWebRuntimeCoverageRunsForTenant(ctx, tenantID, targetID, 1)
+	if err != nil {
+		return models.WebCoverageStatus{}, err
+	}
+	if len(runs) > 0 {
+		status.LatestRun = &runs[0]
+	}
+
+	if status.Baseline == nil || status.LatestRun == nil {
+		return status, nil
+	}
+
+	status.RouteCoverageMeets = status.LatestRun.RouteCoverage >= status.Baseline.MinimumRouteCoverage
+	status.APICoverageMeets = status.LatestRun.APICoverage >= status.Baseline.MinimumAPICoverage
+	status.AuthCoverageMeets = status.LatestRun.AuthCoverage >= status.Baseline.MinimumAuthCoverage
+	status.OverallMeets = status.RouteCoverageMeets && status.APICoverageMeets && status.AuthCoverageMeets
+	return status, nil
+}
+
 func (s *Store) EvaluateWebTargetScopeForTenant(ctx context.Context, tenantID string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error) {
 	target, found, err := s.GetWebTargetForTenant(ctx, tenantID, targetID)
 	if err != nil {
@@ -1045,6 +1191,44 @@ func scanWebCoverageBaseline(row interface{ Scan(dest ...any) error }) (models.W
 	return item, nil
 }
 
+func scanWebRuntimeCoverageRun(row interface{ Scan(dest ...any) error }) (models.WebRuntimeCoverageRun, error) {
+	var item models.WebRuntimeCoverageRun
+	err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.WebTargetID,
+		&item.ScanJobID,
+		&item.RouteCoverage,
+		&item.APICoverage,
+		&item.AuthCoverage,
+		&item.DiscoveredRouteCount,
+		&item.DiscoveredAPIOperationCount,
+		&item.DiscoveredAuthStateCount,
+		&item.EvidenceRef,
+		&item.CreatedBy,
+		&item.CreatedAt,
+	)
+	if err != nil {
+		return models.WebRuntimeCoverageRun{}, err
+	}
+	item.RouteCoverage = clampCoverage(item.RouteCoverage)
+	item.APICoverage = clampCoverage(item.APICoverage)
+	item.AuthCoverage = clampCoverage(item.AuthCoverage)
+	if item.DiscoveredRouteCount < 0 {
+		item.DiscoveredRouteCount = 0
+	}
+	if item.DiscoveredAPIOperationCount < 0 {
+		item.DiscoveredAPIOperationCount = 0
+	}
+	if item.DiscoveredAuthStateCount < 0 {
+		item.DiscoveredAuthStateCount = 0
+	}
+	item.ScanJobID = strings.TrimSpace(item.ScanJobID)
+	item.EvidenceRef = strings.TrimSpace(item.EvidenceRef)
+	item.CreatedBy = strings.TrimSpace(item.CreatedBy)
+	return item, nil
+}
+
 func normalizeCreateWebTargetRequest(tenantID string, actor string, request models.CreateWebTargetRequest, now time.Time) models.WebTarget {
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
@@ -1334,4 +1518,9 @@ func nextWebCrawlPolicyID() string {
 func nextWebCoverageBaselineID() string {
 	sequence := atomic.AddUint64(&webCoverageBaselineSequence, 1)
 	return fmt.Sprintf("web-coverage-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func nextWebRuntimeCoverageRunID() string {
+	sequence := atomic.AddUint64(&webRuntimeCoverageRunSequence, 1)
+	return fmt.Sprintf("web-coverage-run-%d-%06d", time.Now().UTC().Unix(), sequence)
 }

@@ -39,6 +39,7 @@ type stubAPIStore struct {
 	webAuthProfiles          []models.WebAuthProfile
 	webCrawlPolicies         map[string]models.WebCrawlPolicy
 	webCoverageBaselines     map[string]models.WebCoverageBaseline
+	webRuntimeCoverageRuns   map[string][]models.WebRuntimeCoverageRun
 	scanTargets              []models.ScanTarget
 	kmsKeys                  []models.KMSKey
 	ingestionSources         []models.IngestionSource
@@ -450,6 +451,69 @@ func (s *stubAPIStore) UpsertWebCoverageBaselineForTenant(_ context.Context, ten
 	item.UpdatedAt = now
 	s.webCoverageBaselines[key] = item
 	return item, nil
+}
+
+func (s *stubAPIStore) ListWebRuntimeCoverageRunsForTenant(_ context.Context, _ string, targetID string, _ int) ([]models.WebRuntimeCoverageRun, error) {
+	if s.webRuntimeCoverageRuns == nil {
+		return []models.WebRuntimeCoverageRun{}, nil
+	}
+	items := s.webRuntimeCoverageRuns[strings.TrimSpace(targetID)]
+	out := make([]models.WebRuntimeCoverageRun, len(items))
+	copy(out, items)
+	return out, nil
+}
+
+func (s *stubAPIStore) CreateWebRuntimeCoverageRunForTenant(_ context.Context, tenantID string, targetID string, actor string, request models.CreateWebRuntimeCoverageRunRequest) (models.WebRuntimeCoverageRun, error) {
+	if s.webRuntimeCoverageRuns == nil {
+		s.webRuntimeCoverageRuns = map[string][]models.WebRuntimeCoverageRun{}
+	}
+	key := strings.TrimSpace(targetID)
+	item := models.WebRuntimeCoverageRun{
+		ID:                          fmt.Sprintf("web-coverage-run-%d", len(s.webRuntimeCoverageRuns[key])+1),
+		TenantID:                    strings.TrimSpace(tenantID),
+		WebTargetID:                 key,
+		ScanJobID:                   strings.TrimSpace(request.ScanJobID),
+		RouteCoverage:               request.RouteCoverage,
+		APICoverage:                 request.APICoverage,
+		AuthCoverage:                request.AuthCoverage,
+		DiscoveredRouteCount:        request.DiscoveredRouteCount,
+		DiscoveredAPIOperationCount: request.DiscoveredAPIOperationCount,
+		DiscoveredAuthStateCount:    request.DiscoveredAuthStateCount,
+		EvidenceRef:                 strings.TrimSpace(request.EvidenceRef),
+		CreatedBy:                   strings.TrimSpace(actor),
+		CreatedAt:                   time.Now().UTC(),
+	}
+	s.webRuntimeCoverageRuns[key] = append([]models.WebRuntimeCoverageRun{item}, s.webRuntimeCoverageRuns[key]...)
+	return item, nil
+}
+
+func (s *stubAPIStore) GetWebCoverageStatusForTenant(_ context.Context, _ string, targetID string) (models.WebCoverageStatus, error) {
+	key := strings.TrimSpace(targetID)
+	status := models.WebCoverageStatus{
+		WebTargetID:        key,
+		RouteCoverageMeets: false,
+		APICoverageMeets:   false,
+		AuthCoverageMeets:  false,
+		OverallMeets:       false,
+	}
+	if s.webCoverageBaselines != nil {
+		if baseline, ok := s.webCoverageBaselines[key]; ok {
+			status.Baseline = &baseline
+		}
+	}
+	if s.webRuntimeCoverageRuns != nil {
+		if runs := s.webRuntimeCoverageRuns[key]; len(runs) > 0 {
+			latest := runs[0]
+			status.LatestRun = &latest
+		}
+	}
+	if status.Baseline != nil && status.LatestRun != nil {
+		status.RouteCoverageMeets = status.LatestRun.RouteCoverage >= status.Baseline.MinimumRouteCoverage
+		status.APICoverageMeets = status.LatestRun.APICoverage >= status.Baseline.MinimumAPICoverage
+		status.AuthCoverageMeets = status.LatestRun.AuthCoverage >= status.Baseline.MinimumAuthCoverage
+		status.OverallMeets = status.RouteCoverageMeets && status.APICoverageMeets && status.AuthCoverageMeets
+	}
+	return status, nil
 }
 
 func (s *stubAPIStore) EvaluateWebTargetScopeForTenant(_ context.Context, _ string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error) {

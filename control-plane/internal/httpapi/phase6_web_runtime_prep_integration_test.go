@@ -215,6 +215,56 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 		t.Fatalf("expected run job target https://app.example.com, got %s", runPayload.Job.Target)
 	}
 
+	createCoverageRunResponse, createCoverageRunBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-runs",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"scan_job_id":                    runPayload.Job.ID,
+			"route_coverage":                 90.0,
+			"api_coverage":                   81.0,
+			"auth_coverage":                  86.0,
+			"discovered_route_count":         92,
+			"discovered_api_operation_count": 37,
+			"discovered_auth_state_count":    6,
+			"evidence_ref":                   "evidence://coverage/phase6-run",
+		},
+		http.StatusCreated,
+	)
+	defer createCoverageRunResponse.Body.Close()
+
+	var createdCoverageRun models.WebRuntimeCoverageRun
+	decodeJSONResponse(t, createCoverageRunBody, &createdCoverageRun)
+	if strings.TrimSpace(createdCoverageRun.ID) == "" {
+		t.Fatal("expected created coverage run id")
+	}
+
+	coverageStatusResponse, coverageStatusBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-status",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer coverageStatusResponse.Body.Close()
+
+	var coverageStatus models.WebCoverageStatus
+	decodeJSONResponse(t, coverageStatusBody, &coverageStatus)
+	if !coverageStatus.OverallMeets {
+		t.Fatalf("expected coverage status to meet baseline, got %#v", coverageStatus)
+	}
+	if coverageStatus.LatestRun == nil || coverageStatus.LatestRun.ID != createdCoverageRun.ID {
+		t.Fatalf("expected latest run %s, got %#v", createdCoverageRun.ID, coverageStatus.LatestRun)
+	}
+
 	listTargetsResponse, listTargetsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/web-targets", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
 	defer listTargetsResponse.Body.Close()
 
@@ -246,5 +296,26 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 	decodeJSONResponse(t, listJobsBody, &listedJobs)
 	if len(listedJobs.Items) != 1 {
 		t.Fatalf("expected 1 scan job from web target run, got %d", len(listedJobs.Items))
+	}
+
+	listCoverageRunsResponse, listCoverageRunsBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-runs",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer listCoverageRunsResponse.Body.Close()
+
+	var listedCoverageRuns struct {
+		Items []models.WebRuntimeCoverageRun `json:"items"`
+	}
+	decodeJSONResponse(t, listCoverageRunsBody, &listedCoverageRuns)
+	if len(listedCoverageRuns.Items) != 1 {
+		t.Fatalf("expected 1 coverage run, got %d", len(listedCoverageRuns.Items))
 	}
 }

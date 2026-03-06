@@ -155,3 +155,40 @@ type RunWebTargetRequest struct {
 	Profile string   `json:"profile"`
 	Tools   []string `json:"tools"`
 }
+
+type WebRuntimeCoverageRun struct {
+	ID                          string    `json:"id"`
+	TenantID                    string    `json:"tenant_id"`
+	WebTargetID                 string    `json:"web_target_id"`
+	ScanJobID                   string    `json:"scan_job_id,omitempty"`
+	RouteCoverage               float64   `json:"route_coverage"`
+	APICoverage                 float64   `json:"api_coverage"`
+	AuthCoverage                float64   `json:"auth_coverage"`
+	DiscoveredRouteCount        int64     `json:"discovered_route_count"`
+	DiscoveredAPIOperationCount int64     `json:"discovered_api_operation_count"`
+	DiscoveredAuthStateCount    int64     `json:"discovered_auth_state_count"`
+	EvidenceRef                 string    `json:"evidence_ref,omitempty"`
+	CreatedBy                   string    `json:"created_by"`
+	CreatedAt                   time.Time `json:"created_at"`
+}
+
+type CreateWebRuntimeCoverageRunRequest struct {
+	ScanJobID                   string  `json:"scan_job_id"`
+	RouteCoverage               float64 `json:"route_coverage"`
+	APICoverage                 float64 `json:"api_coverage"`
+	AuthCoverage                float64 `json:"auth_coverage"`
+	DiscoveredRouteCount        int64   `json:"discovered_route_count"`
+	DiscoveredAPIOperationCount int64   `json:"discovered_api_operation_count"`
+	DiscoveredAuthStateCount    int64   `json:"discovered_auth_state_count"`
+	EvidenceRef                 string  `json:"evidence_ref"`
+}
+
+type WebCoverageStatus struct {
+	WebTargetID        string                 `json:"web_target_id"`
+	Baseline           *WebCoverageBaseline   `json:"baseline,omitempty"`
+	LatestRun          *WebRuntimeCoverageRun `json:"latest_run,omitempty"`
+	RouteCoverageMeets bool                   `json:"route_coverage_meets"`
+	APICoverageMeets   bool                   `json:"api_coverage_meets"`
+	AuthCoverageMeets  bool                   `json:"auth_coverage_meets"`
+	OverallMeets       bool                   `json:"overall_meets"`
+}

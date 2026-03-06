@@ -62,6 +62,9 @@ type apiStore interface {
 	UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCrawlPolicyRequest) (models.WebCrawlPolicy, error)
 	GetWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageBaseline, bool, error)
 	UpsertWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCoverageBaselineRequest) (models.WebCoverageBaseline, error)
+	ListWebRuntimeCoverageRunsForTenant(ctx context.Context, tenantID string, targetID string, limit int) ([]models.WebRuntimeCoverageRun, error)
+	CreateWebRuntimeCoverageRunForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.CreateWebRuntimeCoverageRunRequest) (models.WebRuntimeCoverageRun, error)
+	GetWebCoverageStatusForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageStatus, error)
 	EvaluateWebTargetScopeForTenant(ctx context.Context, tenantID string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error)
 	RunWebTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunWebTargetRequest) (models.WebTarget, models.ScanJob, bool, error)
 	ListWebAuthProfilesForTenant(ctx context.Context, tenantID string, limit int) ([]models.WebAuthProfile, error)
@@ -1027,6 +1030,75 @@ func (s *Server) handleWebTargetRoute(w http.ResponseWriter, r *http.Request) {
 			"target": target,
 			"job":    job,
 		})
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "coverage-runs" {
+		switch r.Method {
+		case http.MethodGet:
+			limit := 200
+			if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+				parsed, err := strconv.Atoi(raw)
+				if err != nil || parsed <= 0 {
+					s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+					return
+				}
+				limit = parsed
+			}
+			items, err := s.store.ListWebRuntimeCoverageRunsForTenant(r.Context(), principal.OrganizationID, targetID, limit)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "list_web_runtime_coverage_runs_failed", "web runtime coverage runs could not be loaded")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, map[string]any{
+				"items": items,
+			})
+		case http.MethodPost:
+			defer r.Body.Close()
+
+			var request models.CreateWebRuntimeCoverageRunRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, err := s.store.CreateWebRuntimeCoverageRunForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+			if err != nil {
+				switch {
+				case errors.Is(err, jobs.ErrWebTargetNotFound):
+					s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+					return
+				case strings.Contains(strings.ToLower(err.Error()), "must be greater than or equal to zero"):
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				default:
+					s.writeError(w, http.StatusInternalServerError, "create_web_runtime_coverage_run_failed", "web runtime coverage run could not be created")
+					return
+				}
+			}
+			s.writeJSON(w, http.StatusCreated, item)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "coverage-status" {
+		if r.Method != http.MethodGet {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		item, err := s.store.GetWebCoverageStatusForTenant(r.Context(), principal.OrganizationID, targetID)
+		if err != nil {
+			if errors.Is(err, jobs.ErrWebTargetNotFound) {
+				s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "get_web_coverage_status_failed", "web coverage status could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
 		return
 	}
 

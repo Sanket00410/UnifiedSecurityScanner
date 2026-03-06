@@ -41,6 +41,7 @@ var (
 	webAuthProfileSequence          uint64
 	webCrawlPolicySequence          uint64
 	webCoverageBaselineSequence     uint64
+	webRuntimeCoverageRunSequence   uint64
 	apiAssetSequence                uint64
 	apiEndpointSequence             uint64
 	externalAssetSequence           uint64
