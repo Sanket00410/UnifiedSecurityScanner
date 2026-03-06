@@ -18,6 +18,7 @@ import {
   RiskSummary,
   RouteKey,
   ScanJob,
+  ScanEngineControl,
   ScanPreset,
   ScanTarget,
   Session
@@ -147,6 +148,7 @@ export function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [scanJobs, setScanJobs] = useState<ScanJob[]>([]);
   const [scanPresets, setScanPresets] = useState<ScanPreset[]>([]);
+  const [scanEngineControls, setScanEngineControls] = useState<ScanEngineControl[]>([]);
   const [scanTargets, setScanTargets] = useState<ScanTarget[]>([]);
   const [ingestionSources, setIngestionSources] = useState<IngestionSource[]>([]);
   const [ingestionEvents, setIngestionEvents] = useState<IngestionEvent[]>([]);
@@ -166,6 +168,7 @@ export function App() {
   const [findingLayer, setFindingLayer] = useState("");
   const [findingOverdueOnly, setFindingOverdueOnly] = useState(false);
   const [remediationStatusFilter, setRemediationStatusFilter] = useState("");
+  const [scanEngineTargetKindFilter, setScanEngineTargetKindFilter] = useState("");
 
   const [assetProfile, setAssetProfile] = useState<any>(null);
   const [assetControls, setAssetControls] = useState<any[]>([]);
@@ -196,6 +199,7 @@ export function App() {
   const visibleRouteKeys = visibleRoutes.map((item) => item.key);
 
   const canReadFindings = sessionHasScope(session, "findings:read");
+  const canReadScanJobs = sessionHasScope(session, "scan_jobs:read");
 
   const canWriteAssets = sessionHasScope(session, "assets:write");
   const canWritePolicies = sessionHasScope(session, "policies:write");
@@ -235,13 +239,14 @@ export function App() {
       sessionCanReadAudit ? getJSON<ListResponse<AuditEvent>>("/v1/audit-events") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanJob>>("/v1/scan-jobs") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanPreset>>("/v1/scan-presets") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<ScanEngineControl>>("/v1/scan-engine-controls?limit=500") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanTarget>>("/v1/scan-targets") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<IngestionSource>>("/v1/ingestion/sources") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<IngestionEvent>>("/v1/ingestion/events?limit=100") : Promise.resolve({ items: [] }),
       sessionCanReadFindings ? getJSON<RiskSummary>("/v1/risk/summary") : Promise.resolve(null)
     ]);
 
-    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, presetsRes, targetsRes, sourcesRes, eventsRes, riskRes] = tasks;
+    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, presetsRes, controlsRes, targetsRes, sourcesRes, eventsRes, riskRes] = tasks;
 
     const nextFindings = findingsRes.status === "fulfilled" ? toItems(findingsRes.value) : [];
     const nextAssets = assetsRes.status === "fulfilled" ? toItems(assetsRes.value) : [];
@@ -252,6 +257,7 @@ export function App() {
     const nextAudit = auditRes.status === "fulfilled" ? toItems(auditRes.value) : [];
     const nextJobs = jobsRes.status === "fulfilled" ? toItems(jobsRes.value) : [];
     const nextPresets = presetsRes.status === "fulfilled" ? toItems(presetsRes.value) : [];
+    const nextScanEngineControls = controlsRes.status === "fulfilled" ? toItems(controlsRes.value) : [];
     const nextTargets = targetsRes.status === "fulfilled" ? toItems(targetsRes.value) : [];
     const nextIngestionSources = sourcesRes.status === "fulfilled" ? toItems(sourcesRes.value) : [];
     const nextIngestionEvents = eventsRes.status === "fulfilled" ? toItems(eventsRes.value) : [];
@@ -266,6 +272,7 @@ export function App() {
     setAuditEvents(nextAudit);
     setScanJobs(nextJobs);
     setScanPresets(nextPresets);
+    setScanEngineControls(nextScanEngineControls);
     setScanTargets(nextTargets);
     setIngestionSources(nextIngestionSources);
     setIngestionEvents(nextIngestionEvents);
@@ -302,6 +309,7 @@ export function App() {
         policies: nextPolicies.length,
         remediations: nextRemediations.length,
         notifications: nextNotifications.length,
+        scan_engine_controls: nextScanEngineControls.length,
         scan_targets: nextTargets.length,
         ingestion_sources: nextIngestionSources.length
       },
@@ -421,6 +429,12 @@ export function App() {
   const filteredIngestionEvents = ingestionEvents.filter((item) => {
     if (!selectedIngestionSourceID) return true;
     return String(item.source_id || "") === selectedIngestionSourceID;
+  });
+
+  const filteredScanEngineControls = scanEngineControls.filter((item) => {
+    const filterValue = scanEngineTargetKindFilter.trim().toLowerCase();
+    if (!filterValue) return true;
+    return String(item.target_kind || "").toLowerCase() === filterValue;
   });
 
   async function withRefresh(action: () => Promise<void>, successMessage: string) {
@@ -845,6 +859,39 @@ export function App() {
     );
   }
 
+  function handleUpsertScanEngineControl(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    const formData = new FormData(event.currentTarget);
+    const adapterID = String(formData.get("adapter_id") || "").trim().toLowerCase();
+    if (!adapterID) {
+      setStatus({ message: "adapter_id is required.", error: true });
+      return;
+    }
+
+    const request: Record<string, any> = {
+      target_kind: String(formData.get("target_kind") || "").trim().toLowerCase(),
+      enabled: String(formData.get("enabled") || "true").trim().toLowerCase() === "true",
+      rulepack_version: String(formData.get("rulepack_version") || "").trim()
+    };
+    const maxRuntimeRaw = String(formData.get("max_runtime_seconds") || "").trim();
+    if (maxRuntimeRaw) {
+      const parsed = Number(maxRuntimeRaw);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setStatus({ message: "max_runtime_seconds must be a positive number or zero.", error: true });
+        return;
+      }
+      request.max_runtime_seconds = Math.floor(parsed);
+    }
+
+    withRefresh(
+      async () => {
+        await putJSON<ScanEngineControl>(`/v1/scan-engine-controls/${encodeURIComponent(adapterID)}`, request);
+      },
+      "Scan engine control saved."
+    );
+  }
+
   function buildReportQuery() {
     const query = new URLSearchParams();
     if (findingSeverity) query.set("severity", findingSeverity);
@@ -1246,6 +1293,43 @@ export function App() {
                 <button className="ghost" disabled={!selectedScanTargetID || !canWriteScanJobs} onClick={handleDeleteScanTarget}>Delete Target</button>
               </div>
               <div className="meta">{scanJobResult || "No scan jobs created in this session."}</div>
+              <h3>Scan Engine Controls</h3>
+              {!canReadScanJobs && <div className="meta">scan_jobs:read scope is required to view scan engine controls.</div>}
+              <form className="form" onSubmit={handleUpsertScanEngineControl}>
+                <h3>Upsert Engine Control</h3>
+                <input name="adapter_id" placeholder="adapter_id (example: semgrep)" required />
+                <input name="target_kind" placeholder="target kind (blank = all kinds)" />
+                <select name="enabled" defaultValue="true">
+                  <option value="true">enabled</option>
+                  <option value="false">disabled</option>
+                </select>
+                <input name="rulepack_version" placeholder="rulepack version (optional)" />
+                <input name="max_runtime_seconds" type="number" min={0} step={1} placeholder="max runtime seconds (optional)" />
+                <button type="submit" disabled={!canWriteScanJobs}>Save Engine Control</button>
+              </form>
+              <div className="toolbar">
+                <input
+                  placeholder="Filter target kind (repo/webapp/api)"
+                  value={scanEngineTargetKindFilter}
+                  onChange={(event) => setScanEngineTargetKindFilter(event.target.value)}
+                />
+              </div>
+              <div className="meta">Engine controls: {filteredScanEngineControls.length}</div>
+              <table>
+                <thead><tr><th>Adapter</th><th>Target Kind</th><th>Enabled</th><th>Rulepack</th><th>Max Runtime</th><th>Updated</th></tr></thead>
+                <tbody>
+                  {filteredScanEngineControls.slice(0, 100).map((item) => (
+                    <tr key={`${item.adapter_id}:${item.target_kind || "*"}`}>
+                      <td>{item.adapter_id}</td>
+                      <td>{item.target_kind || "*"}</td>
+                      <td>{item.enabled ? "yes" : "no"}</td>
+                      <td>{item.rulepack_version || "default"}</td>
+                      <td>{Number(item.max_runtime_seconds || 0) > 0 ? `${item.max_runtime_seconds}s` : "default"}</td>
+                      <td>{fmtDateTime(item.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
               <form className="form" onSubmit={handleCreateIngestionSource}>
                 <h3>Automation Ingestion Source</h3>

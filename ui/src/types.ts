@@ -134,6 +134,17 @@ export type ScanPreset = {
   tools: string[];
 };
 
+export type ScanEngineControl = {
+  tenant_id: string;
+  adapter_id: string;
+  target_kind?: string;
+  enabled: boolean;
+  rulepack_version?: string;
+  max_runtime_seconds?: number;
+  updated_by?: string;
+  updated_at?: string;
+};
+
 export type ScanTarget = {
   id: string;
   tenant_id?: string;
