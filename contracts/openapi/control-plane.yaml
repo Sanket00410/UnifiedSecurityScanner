@@ -1995,6 +1995,69 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AssetSummary"
+  /v1/assets/context-events:
+    get:
+      operationId: listAssetContextEvents
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: asset_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: event_kind
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          description: Asset context events
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AssetContextEvent"
+    post:
+      operationId: createAssetContextEvent
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssetContextEventRequest"
+      responses:
+        "201":
+          description: Asset context event created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetContextEvent"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/assets/apis:
     get:
       operationId: listApiAssets
@@ -2082,6 +2145,31 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/APIEndpoint"
+  /v1/assets/graphql:
+    post:
+      operationId: importGraphqlApiAsset
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportGraphQLSchemaRequest"
+      responses:
+        "201":
+          description: GraphQL schema imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportedAPIAsset"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/assets/external:
     get:
       operationId: listExternalAssets
@@ -4045,6 +4133,55 @@ components:
           type: integer
         finding_count:
           type: integer
+    AssetContextEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - asset_id
+        - asset_type
+        - event_kind
+        - source
+        - created_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        event_kind:
+          type: string
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    CreateAssetContextEventRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_id
+        - asset_type
+        - event_kind
+      properties:
+        asset_id:
+          type: string
+        asset_type:
+          type: string
+        event_kind:
+          type: string
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
     APIAsset:
       type: object
       additionalProperties: false
@@ -4130,6 +4267,25 @@ components:
         spec:
           type: object
           additionalProperties: true
+    ImportGraphQLSchemaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - schema
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        source:
+          type: string
+        endpoint_path:
+          type: string
+        schema:
+          type: string
+        auth_required:
+          type: boolean
     ImportedAPIAsset:
       type: object
       additionalProperties: false

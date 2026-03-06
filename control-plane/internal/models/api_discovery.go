@@ -38,6 +38,15 @@ type ImportOpenAPIRequest struct {
 	Spec    json.RawMessage `json:"spec"`
 }
 
+type ImportGraphQLSchemaRequest struct {
+	Name         string `json:"name"`
+	BaseURL      string `json:"base_url"`
+	Source       string `json:"source"`
+	EndpointPath string `json:"endpoint_path"`
+	Schema       string `json:"schema"`
+	AuthRequired *bool  `json:"auth_required"`
+}
+
 type ImportedAPIAsset struct {
 	Asset         APIAsset `json:"asset"`
 	EndpointCount int64    `json:"endpoint_count"`

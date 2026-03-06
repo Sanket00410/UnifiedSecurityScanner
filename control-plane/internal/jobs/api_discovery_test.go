@@ -3,6 +3,8 @@ package jobs
 import (
 	"encoding/json"
 	"testing"
+
+	"unifiedsecurityscanner/control-plane/internal/models"
 )
 
 func TestParseOpenAPIEndpointsHandlesSecurityOverrides(t *testing.T) {
@@ -73,5 +75,66 @@ func TestParseOpenAPIEndpointsRejectsInvalidJSON(t *testing.T) {
 	_, _, err := parseOpenAPIEndpoints(json.RawMessage(`{invalid`))
 	if err == nil {
 		t.Fatal("expected invalid json parse error")
+	}
+}
+
+func TestParseGraphQLSchemaEndpointsBuildsOperationInventory(t *testing.T) {
+	t.Parallel()
+
+	request := models.ImportGraphQLSchemaRequest{
+		Name:         "Graph API",
+		EndpointPath: "/graphql",
+		Schema: `
+			type Query {
+				health: String!
+				payment(id: ID!): String
+			}
+			type Mutation {
+				createPayment(amount: Int!): String
+			}
+		`,
+	}
+
+	version, endpoints, rawSchema, err := parseGraphQLSchemaEndpoints(request)
+	if err != nil {
+		t.Fatalf("parse graphql schema endpoints: %v", err)
+	}
+	if version != "graphql-sdl" {
+		t.Fatalf("expected graphql-sdl version, got %s", version)
+	}
+	if rawSchema == "" {
+		t.Fatal("expected raw schema in parser response")
+	}
+	if len(endpoints) != 3 {
+		t.Fatalf("expected 3 graphql operations, got %d", len(endpoints))
+	}
+
+	hasQueryHealth := false
+	hasMutationCreatePayment := false
+	for _, endpoint := range endpoints {
+		if endpoint.Path != "/graphql" || endpoint.Method != "POST" {
+			t.Fatalf("expected POST /graphql endpoint, got %s %s", endpoint.Method, endpoint.Path)
+		}
+		if endpoint.OperationID == "query.health" {
+			hasQueryHealth = true
+		}
+		if endpoint.OperationID == "mutation.createPayment" {
+			hasMutationCreatePayment = true
+		}
+	}
+	if !hasQueryHealth || !hasMutationCreatePayment {
+		t.Fatalf("missing graphql operations health=%v createPayment=%v", hasQueryHealth, hasMutationCreatePayment)
+	}
+}
+
+func TestParseGraphQLSchemaEndpointsRejectsMissingSchema(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := parseGraphQLSchemaEndpoints(models.ImportGraphQLSchemaRequest{
+		Name:   "Graph API",
+		Schema: " ",
+	})
+	if err == nil {
+		t.Fatal("expected missing schema error")
 	}
 }

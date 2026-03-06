@@ -78,11 +78,13 @@ type stubAPIStore struct {
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
+	assetContextEvents       []models.AssetContextEvent
 	assetProfile             models.AssetProfile
 	assetSummaries           []models.AssetSummary
 	apiAssets                []models.APIAsset
 	apiEndpointsByAsset      map[string][]models.APIEndpoint
 	importOpenAPIErr         error
+	importGraphQLErr         error
 	externalAssets           []models.ExternalAsset
 	externalAssetErr         error
 	assetControls            []models.CompensatingControl
@@ -1039,6 +1041,44 @@ func (s *stubAPIStore) ListAssetsForTenant(context.Context, string, int) ([]mode
 	return s.assetSummaries, nil
 }
 
+func (s *stubAPIStore) ListAssetContextEventsForTenant(_ context.Context, _ string, assetID string, eventKind string, _ int) ([]models.AssetContextEvent, error) {
+	filtered := make([]models.AssetContextEvent, 0, len(s.assetContextEvents))
+	for _, item := range s.assetContextEvents {
+		if strings.TrimSpace(assetID) != "" && item.AssetID != strings.TrimSpace(assetID) {
+			continue
+		}
+		if strings.TrimSpace(eventKind) != "" && strings.ToLower(strings.TrimSpace(item.EventKind)) != strings.ToLower(strings.TrimSpace(eventKind)) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) CreateAssetContextEventForTenant(_ context.Context, tenantID string, actor string, request models.CreateAssetContextEventRequest) (models.AssetContextEvent, error) {
+	item := models.AssetContextEvent{
+		ID:        fmt.Sprintf("asset-context-%d", len(s.assetContextEvents)+1),
+		TenantID:  strings.TrimSpace(tenantID),
+		AssetID:   strings.TrimSpace(request.AssetID),
+		AssetType: strings.ToLower(strings.TrimSpace(request.AssetType)),
+		EventKind: strings.ToLower(strings.TrimSpace(request.EventKind)),
+		Source:    strings.TrimSpace(request.Source),
+		Metadata:  request.Metadata,
+		CreatedAt: time.Now().UTC(),
+	}
+	if item.Source == "" {
+		item.Source = strings.TrimSpace(actor)
+	}
+	if item.Source == "" {
+		item.Source = "manual"
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	s.assetContextEvents = append(s.assetContextEvents, item)
+	return item, nil
+}
+
 func (s *stubAPIStore) ListAPIAssetsForTenant(context.Context, string, int) ([]models.APIAsset, error) {
 	return s.apiAssets, nil
 }
@@ -1080,6 +1120,67 @@ func (s *stubAPIStore) ImportOpenAPIForTenant(_ context.Context, tenantID string
 	return models.ImportedAPIAsset{
 		Asset:         asset,
 		EndpointCount: 0,
+	}, nil
+}
+
+func (s *stubAPIStore) ImportGraphQLSchemaForTenant(_ context.Context, tenantID string, actor string, request models.ImportGraphQLSchemaRequest) (models.ImportedAPIAsset, error) {
+	if s.importGraphQLErr != nil {
+		return models.ImportedAPIAsset{}, s.importGraphQLErr
+	}
+
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		name = "Imported GraphQL API"
+	}
+	source := strings.TrimSpace(request.Source)
+	if source == "" {
+		source = "manual"
+	}
+	baseURL := strings.TrimSpace(request.BaseURL)
+	if baseURL == "" {
+		baseURL = "https://example.com/graphql"
+	}
+	endpointPath := strings.TrimSpace(request.EndpointPath)
+	if endpointPath == "" {
+		endpointPath = "/graphql"
+	}
+	if !strings.HasPrefix(endpointPath, "/") {
+		endpointPath = "/" + endpointPath
+	}
+
+	asset := models.APIAsset{
+		ID:          fmt.Sprintf("graphql-asset-%d", len(s.apiAssets)+1),
+		TenantID:    strings.TrimSpace(tenantID),
+		Name:        name,
+		BaseURL:     baseURL,
+		Source:      source,
+		SpecVersion: "graphql-sdl",
+		CreatedBy:   strings.TrimSpace(actor),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	s.apiAssets = append(s.apiAssets, asset)
+	if s.apiEndpointsByAsset == nil {
+		s.apiEndpointsByAsset = map[string][]models.APIEndpoint{}
+	}
+	s.apiEndpointsByAsset[asset.ID] = []models.APIEndpoint{
+		{
+			ID:           fmt.Sprintf("graphql-endpoint-%d", len(s.apiEndpointsByAsset)+1),
+			APIAssetID:   asset.ID,
+			TenantID:     asset.TenantID,
+			Path:         endpointPath,
+			Method:       "POST",
+			OperationID:  "query.health",
+			Tags:         []string{"graphql", "query"},
+			AuthRequired: true,
+			CreatedAt:    time.Now().UTC(),
+		},
+	}
+
+	return models.ImportedAPIAsset{
+		Asset:         asset,
+		EndpointCount: int64(len(s.apiEndpointsByAsset[asset.ID])),
 	}, nil
 }
 
@@ -3338,6 +3439,21 @@ func TestAPIAssetDiscoveryEndpoints(t *testing.T) {
 		t.Fatalf("expected 201 for openapi import, got %d", importRecorder.Code)
 	}
 
+	graphqlImportRecorder := httptest.NewRecorder()
+	graphqlImportRequest := httptest.NewRequest(http.MethodPost, "/v1/assets/graphql", strings.NewReader(`{
+		"name": "Graph API",
+		"base_url": "https://graph.example.com",
+		"source": "repo-webhook",
+		"endpoint_path": "/graphql",
+		"schema": "type Query { health: String! }"
+	}`))
+	graphqlImportRequest.Header.Set("Authorization", "Bearer appsec-token")
+	graphqlImportRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(graphqlImportRecorder, graphqlImportRequest)
+	if graphqlImportRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for graphql import, got %d", graphqlImportRecorder.Code)
+	}
+
 	endpointsRecorder := httptest.NewRecorder()
 	endpointsRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/apis/api-asset-1/endpoints?limit=100", nil)
 	endpointsRequest.Header.Set("Authorization", "Bearer appsec-token")
@@ -3417,6 +3533,69 @@ func TestExternalAssetDiscoveryEndpoints(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(syncRecorder, syncRequest)
 	if syncRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for external asset sync, got %d", syncRecorder.Code)
+	}
+}
+
+func TestAssetContextEventEndpoints(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		assetContextEvents: []models.AssetContextEvent{
+			{
+				ID:        "asset-context-1",
+				TenantID:  "org-1",
+				AssetID:   "api.internal.service",
+				AssetType: "api",
+				EventKind: "deploy",
+				Source:    "ci",
+				Metadata: map[string]any{
+					"build_id": "build-1001",
+					"commit":   "abc123",
+				},
+				CreatedAt: now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/context-events?asset_id=api.internal.service&event_kind=deploy", nil)
+	listRequest.Header.Set("Authorization", "Bearer appsec-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for asset context event list, got %d", listRecorder.Code)
+	}
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/assets/context-events", strings.NewReader(`{
+		"asset_id": "api.internal.service",
+		"asset_type": "api",
+		"event_kind": "build",
+		"source": "github-actions",
+		"metadata": {
+			"build_id": "build-1002",
+			"branch": "main"
+		}
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer appsec-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for asset context event create, got %d", createRecorder.Code)
 	}
 }
 

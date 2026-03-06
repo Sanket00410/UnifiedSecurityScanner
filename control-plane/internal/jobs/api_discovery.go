@@ -290,6 +290,159 @@ func (s *Store) ImportOpenAPIForTenant(ctx context.Context, tenantID string, act
 	}, nil
 }
 
+func (s *Store) ImportGraphQLSchemaForTenant(ctx context.Context, tenantID string, actor string, request models.ImportGraphQLSchemaRequest) (models.ImportedAPIAsset, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		return models.ImportedAPIAsset{}, fmt.Errorf("name is required")
+	}
+
+	specVersion, endpoints, schemaRaw, err := parseGraphQLSchemaEndpoints(request)
+	if err != nil {
+		return models.ImportedAPIAsset{}, err
+	}
+
+	now := time.Now().UTC()
+	baseURL := strings.TrimSpace(request.BaseURL)
+	source := strings.TrimSpace(request.Source)
+	if source == "" {
+		source = "manual"
+	}
+
+	sum := sha256.Sum256([]byte(schemaRaw))
+	specHash := hex.EncodeToString(sum[:])
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.ImportedAPIAsset{}, fmt.Errorf("begin graphql import tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var asset models.APIAsset
+	err = tx.QueryRow(ctx, `
+		SELECT id, tenant_id, name, base_url, source, spec_version, spec_hash, created_by, created_at, updated_at
+		FROM api_assets
+		WHERE tenant_id = $1 AND name = $2
+		FOR UPDATE
+	`, tenantID, name).Scan(
+		&asset.ID,
+		&asset.TenantID,
+		&asset.Name,
+		&asset.BaseURL,
+		&asset.Source,
+		&asset.SpecVersion,
+		&asset.SpecHash,
+		&asset.CreatedBy,
+		&asset.CreatedAt,
+		&asset.UpdatedAt,
+	)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return models.ImportedAPIAsset{}, fmt.Errorf("load api asset for graphql import: %w", err)
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		asset = models.APIAsset{
+			ID:          nextAPIAssetID(),
+			TenantID:    tenantID,
+			Name:        name,
+			BaseURL:     baseURL,
+			Source:      source,
+			SpecVersion: specVersion,
+			SpecHash:    specHash,
+			CreatedBy:   actor,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO api_assets (
+				id, tenant_id, name, base_url, source, spec_version, spec_hash, created_by, created_at, updated_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9, $9
+			)
+		`, asset.ID, asset.TenantID, asset.Name, asset.BaseURL, asset.Source, asset.SpecVersion, asset.SpecHash, asset.CreatedBy, now)
+		if err != nil {
+			return models.ImportedAPIAsset{}, fmt.Errorf("insert graphql api asset: %w", err)
+		}
+	} else {
+		asset.BaseURL = baseURL
+		asset.Source = source
+		asset.SpecVersion = specVersion
+		asset.SpecHash = specHash
+		asset.UpdatedAt = now
+		if asset.CreatedBy == "" {
+			asset.CreatedBy = actor
+		}
+		_, err = tx.Exec(ctx, `
+			UPDATE api_assets
+			SET base_url = $3,
+			    source = $4,
+			    spec_version = $5,
+			    spec_hash = $6,
+			    updated_at = $7
+			WHERE tenant_id = $1
+			  AND id = $2
+		`, asset.TenantID, asset.ID, asset.BaseURL, asset.Source, asset.SpecVersion, asset.SpecHash, asset.UpdatedAt)
+		if err != nil {
+			return models.ImportedAPIAsset{}, fmt.Errorf("update graphql api asset: %w", err)
+		}
+
+		_, err = tx.Exec(ctx, `
+			DELETE FROM api_endpoints
+			WHERE tenant_id = $1
+			  AND api_asset_id = $2
+		`, tenantID, asset.ID)
+		if err != nil {
+			return models.ImportedAPIAsset{}, fmt.Errorf("clear existing graphql api endpoints: %w", err)
+		}
+	}
+
+	for _, endpoint := range endpoints {
+		tagsJSON, err := json.Marshal(endpoint.Tags)
+		if err != nil {
+			return models.ImportedAPIAsset{}, fmt.Errorf("marshal graphql api endpoint tags: %w", err)
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO api_endpoints (
+				id, api_asset_id, tenant_id, path, method, operation_id, tags_json, auth_required, created_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9
+			)
+		`, nextAPIEndpointID(), asset.ID, tenantID, endpoint.Path, endpoint.Method, endpoint.OperationID, tagsJSON, endpoint.AuthRequired, now)
+		if err != nil {
+			return models.ImportedAPIAsset{}, fmt.Errorf("insert graphql api endpoint: %w", err)
+		}
+	}
+
+	if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+		TenantID:      tenantID,
+		EventType:     "api_asset.graphql_imported",
+		SourceService: "control-plane",
+		AggregateType: "api_asset",
+		AggregateID:   asset.ID,
+		Payload: map[string]any{
+			"name":           asset.Name,
+			"source":         asset.Source,
+			"spec_version":   asset.SpecVersion,
+			"endpoint_count": len(endpoints),
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return models.ImportedAPIAsset{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.ImportedAPIAsset{}, fmt.Errorf("commit graphql import tx: %w", err)
+	}
+
+	asset.EndpointCount = int64(len(endpoints))
+	return models.ImportedAPIAsset{
+		Asset:         asset,
+		EndpointCount: int64(len(endpoints)),
+	}, nil
+}
+
 type discoveredOpenAPIEndpoint struct {
 	Path         string
 	Method       string
@@ -380,6 +533,161 @@ func parseOpenAPIEndpoints(raw json.RawMessage) (string, []discoveredOpenAPIEndp
 	})
 
 	return specVersion, out, nil
+}
+
+func parseGraphQLSchemaEndpoints(request models.ImportGraphQLSchemaRequest) (string, []discoveredOpenAPIEndpoint, string, error) {
+	schema := strings.TrimSpace(request.Schema)
+	if schema == "" {
+		return "", nil, "", fmt.Errorf("schema is required")
+	}
+
+	endpointPath := sanitizeGraphQLEndpointPath(request.EndpointPath)
+	authRequired := true
+	if request.AuthRequired != nil {
+		authRequired = *request.AuthRequired
+	}
+
+	endpoints := make([]discoveredOpenAPIEndpoint, 0)
+	operations := []struct {
+		rootType string
+		prefix   string
+	}{
+		{rootType: "Query", prefix: "query"},
+		{rootType: "Mutation", prefix: "mutation"},
+		{rootType: "Subscription", prefix: "subscription"},
+	}
+
+	dedup := make(map[string]struct{})
+	for _, operation := range operations {
+		fields := extractGraphQLTypeFields(schema, operation.rootType)
+		for _, field := range fields {
+			operationID := operation.prefix + "." + field
+			if _, exists := dedup[operationID]; exists {
+				continue
+			}
+			dedup[operationID] = struct{}{}
+			endpoints = append(endpoints, discoveredOpenAPIEndpoint{
+				Path:         endpointPath,
+				Method:       "POST",
+				OperationID:  operationID,
+				Tags:         []string{"graphql", operation.prefix},
+				AuthRequired: authRequired,
+			})
+		}
+	}
+
+	if len(endpoints) == 0 && containsGraphQLRootMarker(schema) {
+		endpoints = append(endpoints, discoveredOpenAPIEndpoint{
+			Path:         endpointPath,
+			Method:       "POST",
+			OperationID:  "graphql.operation",
+			Tags:         []string{"graphql"},
+			AuthRequired: authRequired,
+		})
+	}
+
+	slices.SortFunc(endpoints, func(a, b discoveredOpenAPIEndpoint) int {
+		left := a.OperationID + ":" + a.Path
+		right := b.OperationID + ":" + b.Path
+		return strings.Compare(left, right)
+	})
+
+	return "graphql-sdl", endpoints, schema, nil
+}
+
+func extractGraphQLTypeFields(schema string, rootType string) []string {
+	marker := "type " + rootType
+	remaining := schema
+	fields := make([]string, 0)
+	dedup := make(map[string]struct{})
+
+	for {
+		index := strings.Index(remaining, marker)
+		if index < 0 {
+			break
+		}
+		remaining = remaining[index+len(marker):]
+
+		openBrace := strings.Index(remaining, "{")
+		if openBrace < 0 {
+			break
+		}
+		body := remaining[openBrace+1:]
+		closeBrace := strings.Index(body, "}")
+		if closeBrace < 0 {
+			break
+		}
+		block := body[:closeBrace]
+		remaining = body[closeBrace+1:]
+
+		for _, line := range strings.Split(block, "\n") {
+			text := strings.TrimSpace(line)
+			if text == "" || strings.HasPrefix(text, "#") || strings.HasPrefix(text, "\"") {
+				continue
+			}
+			if commentIndex := strings.Index(text, "#"); commentIndex >= 0 {
+				text = strings.TrimSpace(text[:commentIndex])
+			}
+			if text == "" {
+				continue
+			}
+			cutoff := len(text)
+			for _, delimiter := range []string{"(", ":", "@", " "} {
+				if idx := strings.Index(text, delimiter); idx >= 0 && idx < cutoff {
+					cutoff = idx
+				}
+			}
+			if cutoff <= 0 {
+				continue
+			}
+			name := strings.TrimSpace(text[:cutoff])
+			if !isGraphQLFieldName(name) {
+				continue
+			}
+			if _, exists := dedup[name]; exists {
+				continue
+			}
+			dedup[name] = struct{}{}
+			fields = append(fields, name)
+		}
+	}
+
+	return fields
+}
+
+func sanitizeGraphQLEndpointPath(value string) string {
+	path := strings.TrimSpace(value)
+	if path == "" {
+		return "/graphql"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path
+}
+
+func containsGraphQLRootMarker(schema string) bool {
+	lower := strings.ToLower(schema)
+	return strings.Contains(lower, "type query") || strings.Contains(lower, "type mutation") || strings.Contains(lower, "type subscription")
+}
+
+func isGraphQLFieldName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for idx, r := range value {
+		if idx == 0 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' {
+				continue
+			}
+			return false
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func toString(value any) string {
