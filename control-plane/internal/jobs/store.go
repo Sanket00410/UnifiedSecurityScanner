@@ -53,6 +53,8 @@ var (
 	ErrProtectedToken               = errors.New("protected token")
 	ErrWebTargetNotFound            = errors.New("web target not found")
 	ErrWebAuthProfileNotFound       = errors.New("web auth profile not found")
+	ErrWebAuthProfileDisabled       = errors.New("web auth profile disabled")
+	ErrWebRuntimeToolNotAllowed     = errors.New("web runtime tool not allowed")
 	ErrIngestionSourceNotFound      = errors.New("ingestion source not found")
 	ErrInvalidIngestionToken        = errors.New("invalid ingestion token")
 	ErrInvalidIngestionSignature    = errors.New("invalid ingestion signature")

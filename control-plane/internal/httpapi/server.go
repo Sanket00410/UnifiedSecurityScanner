@@ -976,6 +976,17 @@ func (s *Server) handleWebTargetRoute(w http.ResponseWriter, r *http.Request) {
 
 		target, job, found, err := s.store.RunWebTargetForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
 		if err != nil {
+			switch {
+			case errors.Is(err, jobs.ErrWebAuthProfileNotFound):
+				s.writeError(w, http.StatusBadRequest, "web_auth_profile_not_found", "configured web auth profile was not found")
+				return
+			case errors.Is(err, jobs.ErrWebAuthProfileDisabled):
+				s.writeError(w, http.StatusConflict, "web_auth_profile_disabled", "configured web auth profile is disabled")
+				return
+			case errors.Is(err, jobs.ErrWebRuntimeToolNotAllowed):
+				s.writeError(w, http.StatusBadRequest, "web_runtime_tool_not_allowed", err.Error())
+				return
+			}
 			var denied *jobs.PolicyDeniedError
 			if errors.As(err, &denied) {
 				s.writeJSON(w, http.StatusForbidden, map[string]any{

@@ -838,6 +838,9 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 			tools = []string{"zap", "nuclei"}
 		}
 	}
+	if err := validateWebRuntimeTools(targetKind, policy.SafeMode, tools); err != nil {
+		return models.WebTarget{}, models.ScanJob{}, true, err
+	}
 
 	taskLabels := map[string]string{
 		"web_target_id":   strings.TrimSpace(target.ID),
@@ -846,6 +849,41 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 	}
 	if strings.TrimSpace(policy.AuthProfileID) != "" {
 		taskLabels["web_auth_profile_id"] = strings.TrimSpace(policy.AuthProfileID)
+		authProfile, authProfileFound, err := s.GetWebAuthProfileForTenant(ctx, tenantID, policy.AuthProfileID)
+		if err != nil {
+			return models.WebTarget{}, models.ScanJob{}, true, err
+		}
+		if !authProfileFound {
+			return models.WebTarget{}, models.ScanJob{}, true, ErrWebAuthProfileNotFound
+		}
+		if !authProfile.Enabled {
+			return models.WebTarget{}, models.ScanJob{}, true, ErrWebAuthProfileDisabled
+		}
+		taskLabels["web_auth_type"] = strings.TrimSpace(authProfile.AuthType)
+		if value := strings.TrimSpace(authProfile.LoginURL); value != "" {
+			taskLabels["web_auth_login_url"] = value
+		}
+		if value := strings.TrimSpace(authProfile.CSRFMode); value != "" {
+			taskLabels["web_auth_csrf_mode"] = value
+		}
+		if value := strings.TrimSpace(authProfile.TokenRefreshStrategy); value != "" {
+			taskLabels["web_auth_token_refresh_strategy"] = value
+		}
+		if value := strings.TrimSpace(authProfile.UsernameSecretRef); value != "" {
+			taskLabels["web_auth_username_secret_ref"] = value
+		}
+		if value := strings.TrimSpace(authProfile.PasswordSecretRef); value != "" {
+			taskLabels["web_auth_password_secret_ref"] = value
+		}
+		if value := strings.TrimSpace(authProfile.BearerTokenSecretRef); value != "" {
+			taskLabels["web_auth_bearer_token_secret_ref"] = value
+		}
+		if payload, ok := toCompactJSONLabel(authProfile.SessionBootstrap); ok {
+			taskLabels["web_auth_session_bootstrap_json"] = payload
+		}
+		if payload, ok := toCompactJSONLabel(authProfile.TestPersonas); ok {
+			taskLabels["web_auth_test_personas_json"] = payload
+		}
 	}
 	if policy.MaxDepth > 0 {
 		taskLabels["web_max_depth"] = fmt.Sprintf("%d", policy.MaxDepth)
@@ -962,6 +1000,60 @@ func parseScopedURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("url host is required")
 	}
 	return parsed, nil
+}
+
+func validateWebRuntimeTools(targetKind string, safeMode bool, tools []string) error {
+	kind := strings.ToLower(strings.TrimSpace(targetKind))
+	if kind == "" {
+		kind = "url"
+	}
+
+	baseAllowList := map[string]struct{}{
+		"zap":     {},
+		"zap-api": {},
+		"nuclei":  {},
+	}
+	extendedAllowList := map[string]struct{}{
+		"nmap":       {},
+		"sqlmap":     {},
+		"metasploit": {},
+	}
+	if kind == "api_schema" {
+		delete(extendedAllowList, "nmap")
+		delete(extendedAllowList, "metasploit")
+	}
+
+	for _, tool := range tools {
+		normalizedTool := strings.ToLower(strings.TrimSpace(tool))
+		if normalizedTool == "" {
+			continue
+		}
+		if _, ok := baseAllowList[normalizedTool]; ok {
+			continue
+		}
+		if !safeMode {
+			if _, ok := extendedAllowList[normalizedTool]; ok {
+				continue
+			}
+		}
+		return fmt.Errorf("%w: %s for target_kind=%s safe_mode=%t", ErrWebRuntimeToolNotAllowed, normalizedTool, kind, safeMode)
+	}
+	return nil
+}
+
+func toCompactJSONLabel(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(string(payload))
+	if text == "" || text == "null" || text == "{}" || text == "[]" {
+		return "", false
+	}
+	return text, true
 }
 
 func matchScopePattern(pattern string, full string, hostPath string, pathValue string) bool {

@@ -96,9 +96,12 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
   - create or update a **Web Target** (`base_url`, scope patterns, optional API schema)
   - create or update **Web Auth Profiles** (form/bearer/basic with secret refs)
   - configure **Crawl Policy** per target (safe mode, limits, auth profile, allow/deny paths)
+    - safe mode enforces web-safe tools only (`zap`, `zap-api`, `nuclei`)
+    - restricted tools (`metasploit`, `sqlmap`, `nmap`) require disabling safe mode and policy approval
   - configure **Coverage Baseline** (expected routes/API/auth states + minimum percentages)
   - run **Scope Check** on any URL against target rules
   - start runtime scans with **Run Selected Target** (profile + tools such as `zap,nuclei`)
+    - if auth profile is attached, it must be enabled or run creation is rejected
   - post run results into **Coverage Runs** and track **Coverage Status**
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
