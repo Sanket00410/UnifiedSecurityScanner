@@ -657,6 +657,8 @@ func normalizeUpdateIngestionSourceRequest(existing models.IngestionSource, acto
 }
 
 func normalizeIngestionWebhookRequest(source models.IngestionSource, request models.IngestionWebhookRequest) models.IngestionWebhookRequest {
+	request = normalizeProviderWebhookRequest(source, request)
+
 	eventType := strings.TrimSpace(request.EventType)
 	if eventType == "" {
 		eventType = source.Provider + ".event"
@@ -704,12 +706,26 @@ func normalizeIngestionWebhookRequest(source models.IngestionSource, request mod
 		labels[key] = value
 	}
 	for key, value := range request.Labels {
-		labels[strings.TrimSpace(key)] = value
+		normalized := strings.TrimSpace(key)
+		if normalized == "" {
+			continue
+		}
+		labels[normalized] = value
 	}
 
 	metadata := map[string]any{}
 	for key, value := range request.Metadata {
-		metadata[strings.TrimSpace(key)] = value
+		normalized := strings.TrimSpace(key)
+		if normalized == "" {
+			continue
+		}
+		metadata[normalized] = value
+	}
+	if len(request.Headers) > 0 {
+		metadata["webhook_headers"] = request.Headers
+	}
+	if len(request.Payload) > 0 {
+		metadata["provider_payload"] = request.Payload
 	}
 
 	return models.IngestionWebhookRequest{
@@ -720,9 +736,311 @@ func normalizeIngestionWebhookRequest(source models.IngestionSource, request mod
 		Profile:     profile,
 		Tools:       tools,
 		RequestedBy: requestedBy,
+		Headers:     request.Headers,
+		Payload:     request.Payload,
 		Labels:      labels,
 		Metadata:    metadata,
 	}
+}
+
+func normalizeProviderWebhookRequest(source models.IngestionSource, request models.IngestionWebhookRequest) models.IngestionWebhookRequest {
+	switch normalizeIngestionProvider(source.Provider) {
+	case "github":
+		return normalizeGitHubWebhookRequest(source, request)
+	case "gitlab":
+		return normalizeGitLabWebhookRequest(source, request)
+	case "jenkins":
+		return normalizeJenkinsWebhookRequest(source, request)
+	default:
+		return request
+	}
+}
+
+func normalizeGitHubWebhookRequest(source models.IngestionSource, request models.IngestionWebhookRequest) models.IngestionWebhookRequest {
+	headers := normalizeHeaderMap(request.Headers)
+	eventName := strings.TrimSpace(firstNonEmptyIngestionString(
+		request.EventType,
+		headers["x-github-event"],
+		headers["x-event-key"],
+	))
+	if eventName != "" && !strings.Contains(eventName, ".") {
+		eventName = "github." + strings.ToLower(eventName)
+	}
+	if strings.TrimSpace(request.EventType) == "" && eventName != "" {
+		request.EventType = eventName
+	}
+
+	if strings.TrimSpace(request.ExternalID) == "" {
+		request.ExternalID = firstNonEmptyIngestionString(
+			headers["x-github-delivery"],
+			lookupMapString(request.Payload, "delivery"),
+			lookupNestedString(request.Payload, "check_run", "id"),
+			lookupNestedString(request.Payload, "workflow_run", "id"),
+		)
+	}
+
+	repoFullName := firstNonEmptyIngestionString(
+		lookupNestedString(request.Payload, "repository", "full_name"),
+		lookupNestedString(request.Payload, "repository", "name"),
+	)
+	repoTarget := firstNonEmptyIngestionString(
+		lookupNestedString(request.Payload, "repository", "clone_url"),
+		lookupNestedString(request.Payload, "repository", "html_url"),
+	)
+	branch := normalizeBranchName(firstNonEmptyIngestionString(
+		lookupMapString(request.Payload, "ref"),
+		lookupNestedString(request.Payload, "pull_request", "head", "ref"),
+	))
+	commit := firstNonEmptyIngestionString(
+		lookupMapString(request.Payload, "after"),
+		lookupNestedString(request.Payload, "head_commit", "id"),
+		lookupNestedString(request.Payload, "pull_request", "head", "sha"),
+	)
+
+	if strings.TrimSpace(request.TargetKind) == "" && strings.TrimSpace(source.TargetKind) == "" && repoTarget != "" {
+		request.TargetKind = "repo"
+	}
+	if strings.TrimSpace(request.Target) == "" && strings.TrimSpace(source.Target) == "" && repoTarget != "" {
+		request.Target = repoTarget
+	}
+	if request.Labels == nil {
+		request.Labels = map[string]any{}
+	}
+	if request.Metadata == nil {
+		request.Metadata = map[string]any{}
+	}
+	if repoFullName != "" {
+		request.Labels["repo"] = repoFullName
+	}
+	if branch != "" {
+		request.Labels["branch"] = branch
+	}
+	if commit != "" {
+		request.Labels["commit"] = commit
+	}
+	if action := strings.TrimSpace(lookupMapString(request.Payload, "action")); action != "" {
+		request.Labels["action"] = action
+	}
+	if prNumber := firstNonEmptyIngestionString(
+		lookupNestedString(request.Payload, "pull_request", "number"),
+		lookupNestedString(request.Payload, "issue", "number"),
+	); prNumber != "" {
+		request.Labels["pr_number"] = prNumber
+	}
+	request.Metadata["provider"] = "github"
+	if sourceRef := strings.TrimSpace(lookupNestedString(request.Payload, "sender", "login")); sourceRef != "" {
+		request.Metadata["sender"] = sourceRef
+	}
+	return request
+}
+
+func normalizeGitLabWebhookRequest(source models.IngestionSource, request models.IngestionWebhookRequest) models.IngestionWebhookRequest {
+	headers := normalizeHeaderMap(request.Headers)
+
+	eventName := strings.TrimSpace(firstNonEmptyIngestionString(
+		request.EventType,
+		headers["x-gitlab-event"],
+		lookupMapString(request.Payload, "object_kind"),
+	))
+	if eventName != "" && !strings.Contains(eventName, ".") {
+		eventName = "gitlab." + strings.ToLower(strings.ReplaceAll(eventName, " ", "_"))
+	}
+	if strings.TrimSpace(request.EventType) == "" && eventName != "" {
+		request.EventType = eventName
+	}
+
+	if strings.TrimSpace(request.ExternalID) == "" {
+		request.ExternalID = firstNonEmptyIngestionString(
+			headers["x-gitlab-event-uuid"],
+			headers["x-gitlab-delivery"],
+			lookupNestedString(request.Payload, "object_attributes", "id"),
+			lookupNestedString(request.Payload, "commit", "id"),
+		)
+	}
+
+	repoFullName := firstNonEmptyIngestionString(
+		lookupNestedString(request.Payload, "project", "path_with_namespace"),
+		lookupNestedString(request.Payload, "project", "name"),
+	)
+	repoTarget := firstNonEmptyIngestionString(
+		lookupNestedString(request.Payload, "project", "http_url"),
+		lookupNestedString(request.Payload, "project", "http_url_to_repo"),
+		lookupNestedString(request.Payload, "project", "web_url"),
+	)
+	branch := normalizeBranchName(firstNonEmptyIngestionString(
+		lookupMapString(request.Payload, "ref"),
+		lookupNestedString(request.Payload, "object_attributes", "source_branch"),
+	))
+	commit := firstNonEmptyIngestionString(
+		lookupMapString(request.Payload, "checkout_sha"),
+		lookupNestedString(request.Payload, "object_attributes", "last_commit", "id"),
+	)
+
+	if strings.TrimSpace(request.TargetKind) == "" && strings.TrimSpace(source.TargetKind) == "" && repoTarget != "" {
+		request.TargetKind = "repo"
+	}
+	if strings.TrimSpace(request.Target) == "" && strings.TrimSpace(source.Target) == "" && repoTarget != "" {
+		request.Target = repoTarget
+	}
+	if request.Labels == nil {
+		request.Labels = map[string]any{}
+	}
+	if request.Metadata == nil {
+		request.Metadata = map[string]any{}
+	}
+	if repoFullName != "" {
+		request.Labels["repo"] = repoFullName
+	}
+	if branch != "" {
+		request.Labels["branch"] = branch
+	}
+	if commit != "" {
+		request.Labels["commit"] = commit
+	}
+	if action := strings.TrimSpace(lookupNestedString(request.Payload, "object_attributes", "action")); action != "" {
+		request.Labels["action"] = action
+	}
+	request.Metadata["provider"] = "gitlab"
+	if user := strings.TrimSpace(lookupMapString(request.Payload, "user_username")); user != "" {
+		request.Metadata["sender"] = user
+	}
+	return request
+}
+
+func normalizeJenkinsWebhookRequest(source models.IngestionSource, request models.IngestionWebhookRequest) models.IngestionWebhookRequest {
+	headers := normalizeHeaderMap(request.Headers)
+	if strings.TrimSpace(request.EventType) == "" {
+		request.EventType = firstNonEmptyIngestionString(
+			headers["x-jenkins-event"],
+			"jenkins.build",
+		)
+		if !strings.Contains(request.EventType, ".") {
+			request.EventType = "jenkins." + strings.ToLower(strings.TrimSpace(request.EventType))
+		}
+	}
+	if strings.TrimSpace(request.ExternalID) == "" {
+		request.ExternalID = firstNonEmptyIngestionString(
+			lookupMapString(request.Payload, "build_id"),
+			lookupMapString(request.Payload, "build_number"),
+			headers["x-jenkins-build-number"],
+		)
+	}
+
+	repoTarget := firstNonEmptyIngestionString(
+		lookupMapString(request.Payload, "scm_url"),
+		lookupNestedString(request.Payload, "scm", "url"),
+	)
+	if strings.TrimSpace(request.TargetKind) == "" && strings.TrimSpace(source.TargetKind) == "" && repoTarget != "" {
+		request.TargetKind = "repo"
+	}
+	if strings.TrimSpace(request.Target) == "" && strings.TrimSpace(source.Target) == "" && repoTarget != "" {
+		request.Target = repoTarget
+	}
+
+	if request.Labels == nil {
+		request.Labels = map[string]any{}
+	}
+	if request.Metadata == nil {
+		request.Metadata = map[string]any{}
+	}
+	if jobName := firstNonEmptyIngestionString(lookupMapString(request.Payload, "job_name"), headers["x-jenkins-job"]); jobName != "" {
+		request.Labels["job"] = jobName
+	}
+	if branch := normalizeBranchName(lookupMapString(request.Payload, "branch")); branch != "" {
+		request.Labels["branch"] = branch
+	}
+	if buildURL := lookupMapString(request.Payload, "build_url"); strings.TrimSpace(buildURL) != "" {
+		request.Metadata["build_url"] = strings.TrimSpace(buildURL)
+	}
+	request.Metadata["provider"] = "jenkins"
+	return request
+}
+
+func normalizeHeaderMap(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		normalizedValue := strings.TrimSpace(value)
+		if normalizedKey == "" || normalizedValue == "" {
+			continue
+		}
+		out[normalizedKey] = normalizedValue
+	}
+	return out
+}
+
+func lookupMapString(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return anyToString(values[key])
+}
+
+func lookupNestedString(values map[string]any, path ...string) string {
+	if len(values) == 0 || len(path) == 0 {
+		return ""
+	}
+	var current any = values
+	for _, part := range path {
+		node, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = node[part]
+		if !ok {
+			return ""
+		}
+	}
+	return anyToString(current)
+}
+
+func anyToString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case float64:
+		if typed == float64(int64(typed)) {
+			return fmt.Sprintf("%d", int64(typed))
+		}
+		return strings.TrimSpace(fmt.Sprintf("%f", typed))
+	case int:
+		return fmt.Sprintf("%d", typed)
+	case int64:
+		return fmt.Sprintf("%d", typed)
+	case int32:
+		return fmt.Sprintf("%d", typed)
+	case uint64:
+		return fmt.Sprintf("%d", typed)
+	case json.Number:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", typed))
+	}
+}
+
+func firstNonEmptyIngestionString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func normalizeBranchName(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	for _, prefix := range []string{"refs/heads/", "refs/tags/"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimPrefix(trimmed, prefix)
+		}
+	}
+	return trimmed
 }
 
 func normalizeIngestionProvider(provider string) string {

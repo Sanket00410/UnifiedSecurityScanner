@@ -1071,6 +1071,12 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
 		return
 	}
+	if request.Headers == nil {
+		request.Headers = map[string]string{}
+	}
+	for key, value := range collectIngestionHeaders(r.Header) {
+		request.Headers[key] = value
+	}
 
 	response, err := s.store.HandleIngestionWebhook(r.Context(), sourceID, token, request)
 	if err != nil {
@@ -1103,6 +1109,28 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 		status = http.StatusOK
 	}
 	s.writeJSON(w, status, response)
+}
+
+func collectIngestionHeaders(headers http.Header) map[string]string {
+	out := map[string]string{}
+	for _, key := range []string{
+		"X-GitHub-Event",
+		"X-GitHub-Delivery",
+		"X-GitLab-Event",
+		"X-GitLab-Event-UUID",
+		"X-GitLab-Delivery",
+		"X-Event-Key",
+		"X-Jenkins-Event",
+		"X-Jenkins-Build-Number",
+		"X-Jenkins-Job",
+	} {
+		value := strings.TrimSpace(headers.Get(key))
+		if value == "" {
+			continue
+		}
+		out[strings.ToLower(strings.TrimSpace(key))] = value
+	}
+	return out
 }
 
 func (s *Server) handlePlatformEvents(w http.ResponseWriter, r *http.Request) {

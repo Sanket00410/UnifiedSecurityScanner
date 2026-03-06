@@ -3682,6 +3682,13 @@ components:
             type: string
         requested_by:
           type: string
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        payload:
+          type: object
+          additionalProperties: true
         labels:
           type: object
           additionalProperties: true

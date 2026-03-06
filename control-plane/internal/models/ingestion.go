@@ -69,15 +69,17 @@ type IngestionEvent struct {
 }
 
 type IngestionWebhookRequest struct {
-	EventType   string         `json:"event_type"`
-	ExternalID  string         `json:"external_id"`
-	TargetKind  string         `json:"target_kind"`
-	Target      string         `json:"target"`
-	Profile     string         `json:"profile"`
-	Tools       []string       `json:"tools"`
-	RequestedBy string         `json:"requested_by"`
-	Labels      map[string]any `json:"labels,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	EventType   string            `json:"event_type"`
+	ExternalID  string            `json:"external_id"`
+	TargetKind  string            `json:"target_kind"`
+	Target      string            `json:"target"`
+	Profile     string            `json:"profile"`
+	Tools       []string          `json:"tools"`
+	RequestedBy string            `json:"requested_by"`
+	Headers     map[string]string `json:"headers,omitempty"`
+	Payload     map[string]any    `json:"payload,omitempty"`
+	Labels      map[string]any    `json:"labels,omitempty"`
+	Metadata    map[string]any    `json:"metadata,omitempty"`
 }
 
 type IngestionWebhookResponse struct {

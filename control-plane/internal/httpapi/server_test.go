@@ -40,6 +40,9 @@ type stubAPIStore struct {
 	ingestionEvents          []models.IngestionEvent
 	ingestionWebhookResponse models.IngestionWebhookResponse
 	ingestionWebhookErr      error
+	lastIngestionWebhookReq  models.IngestionWebhookRequest
+	lastIngestionSourceID    string
+	lastIngestionToken       string
 	platformEvents           []models.PlatformEvent
 	tenantOpsSnapshot        models.TenantOperationsSnapshot
 	tenantExecutionControls  models.TenantExecutionControls
@@ -407,7 +410,11 @@ func (s *stubAPIStore) ListIngestionEventsForTenant(context.Context, string, str
 	return s.ingestionEvents, nil
 }
 
-func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, _ string, _ string, _ models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error) {
+func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, sourceID string, token string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error) {
+	s.lastIngestionWebhookReq = request
+	s.lastIngestionSourceID = sourceID
+	s.lastIngestionToken = token
+
 	if s.ingestionWebhookErr != nil {
 		return models.IngestionWebhookResponse{}, s.ingestionWebhookErr
 	}
@@ -2285,6 +2292,45 @@ func TestIngestionWebhookEndpointHandlesAcceptedAndDuplicate(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(duplicateRecorder, duplicateRequest)
 	if duplicateRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for duplicate webhook, got %d", duplicateRecorder.Code)
+	}
+}
+
+func TestIngestionWebhookEndpointCollectsProviderHeaders(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{}
+	server := New(config.Load(), store)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/ingestion-source-1", strings.NewReader(`{
+		"payload":{
+			"repository":{"full_name":"acme/core"}
+		}
+	}`))
+	request.Header.Set(ingestionTokenHeader, "stub-token")
+	request.Header.Set("X-GitHub-Event", "push")
+	request.Header.Set("X-GitHub-Delivery", "evt-gh-headers")
+	request.Header.Set("X-Ignore-Header", "ignored")
+	request.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for webhook accepted, got %d", recorder.Code)
+	}
+
+	if store.lastIngestionSourceID != "ingestion-source-1" {
+		t.Fatalf("expected source id to be passed to store, got %s", store.lastIngestionSourceID)
+	}
+	if store.lastIngestionToken != "stub-token" {
+		t.Fatalf("expected token to be passed to store, got %s", store.lastIngestionToken)
+	}
+	if store.lastIngestionWebhookReq.Headers["x-github-event"] != "push" {
+		t.Fatalf("expected x-github-event to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-github-event"])
+	}
+	if store.lastIngestionWebhookReq.Headers["x-github-delivery"] != "evt-gh-headers" {
+		t.Fatalf("expected x-github-delivery to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-github-delivery"])
+	}
+	if _, exists := store.lastIngestionWebhookReq.Headers["x-ignore-header"]; exists {
+		t.Fatalf("expected unsupported headers to be ignored, got %#v", store.lastIngestionWebhookReq.Headers["x-ignore-header"])
 	}
 }
 
