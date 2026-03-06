@@ -91,6 +91,7 @@ type apiStore interface {
 	UpdateIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string, actor string, request models.UpdateIngestionSourceRequest) (models.IngestionSource, bool, error)
 	DeleteIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (bool, error)
 	RotateIngestionSourceTokenForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceTokenResponse, bool, error)
+	RotateIngestionSourceWebhookSecretForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceWebhookSecretResponse, bool, error)
 	ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error)
 	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest, rawBody []byte) (models.IngestionWebhookResponse, error)
 	ListPlatformEventsForTenant(ctx context.Context, tenantID string, eventType string, limit int) ([]models.PlatformEvent, error)
@@ -1011,6 +1012,25 @@ func (s *Server) handleIngestionSourceRoute(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if len(parts) == 2 && parts[1] == "rotate-webhook-secret" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		rotated, found, err := s.store.RotateIngestionSourceWebhookSecretForTenant(r.Context(), principal.OrganizationID, sourceID, principal.Email)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "rotate_ingestion_source_webhook_secret_failed", "ingestion source webhook secret could not be rotated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, rotated)
+		return
+	}
+
 	s.writeError(w, http.StatusNotFound, "ingestion_source_route_not_found", "the requested ingestion source route was not found")
 }
 
@@ -1145,6 +1165,7 @@ func collectIngestionHeaders(headers http.Header) map[string]string {
 		"X-Jenkins-Build-Number",
 		"X-Jenkins-Job",
 		"X-Jenkins-Token",
+		"X-Jenkins-Signature",
 		"X-USS-Webhook-Signature",
 	} {
 		value := strings.TrimSpace(headers.Get(key))

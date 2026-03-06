@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -280,6 +282,57 @@ func (s *Store) RotateIngestionSourceTokenForTenant(ctx context.Context, tenantI
 	}, true, nil
 }
 
+func (s *Store) RotateIngestionSourceWebhookSecretForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceWebhookSecretResponse, bool, error) {
+	existing, found, err := s.GetIngestionSourceForTenant(ctx, tenantID, sourceID)
+	if err != nil {
+		return models.RotateIngestionSourceWebhookSecretResponse{}, false, err
+	}
+	if !found {
+		return models.RotateIngestionSourceWebhookSecretResponse{}, false, nil
+	}
+
+	secret, err := nextIngestionWebhookSecret()
+	if err != nil {
+		return models.RotateIngestionSourceWebhookSecretResponse{}, true, fmt.Errorf("create ingestion webhook secret: %w", err)
+	}
+	secretEncrypted, err := s.encryptIngestionWebhookSecret(existing.TenantID, existing.ID, existing.Provider, secret)
+	if err != nil {
+		return models.RotateIngestionSourceWebhookSecretResponse{}, true, fmt.Errorf("encrypt ingestion webhook secret: %w", err)
+	}
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = existing.UpdatedBy
+	}
+	if actor == "" {
+		actor = existing.CreatedBy
+	}
+	now := time.Now().UTC()
+
+	row := s.pool.QueryRow(ctx, `
+		UPDATE ingestion_sources
+		SET webhook_secret_encrypted = $3,
+		    signature_required = TRUE,
+		    updated_by = $4,
+		    updated_at = $5
+		WHERE tenant_id = $1 AND id = $2
+		RETURNING id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
+		          labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(sourceID), secretEncrypted, actor, now)
+
+	record, err := scanIngestionSourceRecord(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.RotateIngestionSourceWebhookSecretResponse{}, false, nil
+		}
+		return models.RotateIngestionSourceWebhookSecretResponse{}, true, fmt.Errorf("rotate ingestion source webhook secret: %w", err)
+	}
+
+	return models.RotateIngestionSourceWebhookSecretResponse{
+		Source:        record.Source,
+		WebhookSecret: secret,
+	}, true, nil
+}
+
 func (s *Store) ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	sourceID = strings.TrimSpace(sourceID)
@@ -416,12 +469,15 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 		event.ErrorMessage = "scan job creation failed"
 	} else {
 		if rejection := policyengine.EvaluateIngestionSubmission(applicablePolicies, policyengine.IngestionRequest{
-			Provider:   record.Source.Provider,
-			EventType:  normalized.EventType,
-			TargetKind: normalized.TargetKind,
-			Target:     normalized.Target,
-			Profile:    normalized.Profile,
-			Tools:      normalized.Tools,
+			Provider:    record.Source.Provider,
+			EventType:   normalized.EventType,
+			Repo:        anyToString(normalized.Labels["repo"]),
+			Branch:      anyToString(normalized.Labels["branch"]),
+			RequestedBy: normalized.RequestedBy,
+			TargetKind:  normalized.TargetKind,
+			Target:      normalized.Target,
+			Profile:     normalized.Profile,
+			Tools:       normalized.Tools,
 		}); rejection != nil {
 			event.Status = "policy_denied"
 			event.ErrorMessage = rejection.Reason
@@ -614,12 +670,20 @@ func (s *Store) verifyIngestionWebhookSignature(record ingestionSourceRecord, he
 	provider := normalizeIngestionProvider(record.Source.Provider)
 	switch provider {
 	case "github":
-		signature := strings.TrimSpace(normalizedHeaders["x-hub-signature-256"])
-		if signature == "" {
+		signatureV2 := strings.TrimSpace(normalizedHeaders["x-hub-signature-256"])
+		signatureV1 := strings.TrimSpace(normalizedHeaders["x-hub-signature"])
+		if signatureV2 == "" && signatureV1 == "" {
 			return ErrInvalidIngestionSignature
 		}
-		expected := computeIngestionWebhookHMAC(secret, rawBody)
-		if !matchesIngestionHMACSignature(signature, expected) {
+		if signatureV2 != "" {
+			expectedSHA256 := computeIngestionWebhookHMAC(secret, rawBody, sha256.New)
+			if !matchesIngestionHMACSignature(signatureV2, expectedSHA256, "sha256") {
+				return ErrInvalidIngestionSignature
+			}
+			return nil
+		}
+		expectedSHA1 := computeIngestionWebhookHMAC(secret, rawBody, sha1.New)
+		if !matchesIngestionHMACSignature(signatureV1, expectedSHA1, "sha1") {
 			return ErrInvalidIngestionSignature
 		}
 	case "gitlab":
@@ -628,6 +692,14 @@ func (s *Store) verifyIngestionWebhookSignature(record ingestionSourceRecord, he
 			return ErrInvalidIngestionSignature
 		}
 	case "jenkins":
+		signature := strings.TrimSpace(normalizedHeaders["x-jenkins-signature"])
+		if signature != "" {
+			expected := computeIngestionWebhookHMAC(secret, rawBody, sha256.New)
+			if !matchesIngestionHMACSignature(signature, expected, "sha256") {
+				return ErrInvalidIngestionSignature
+			}
+			return nil
+		}
 		token := strings.TrimSpace(normalizedHeaders["x-jenkins-token"])
 		if !constantTimeEqualStrings(token, secret) {
 			return ErrInvalidIngestionSignature
@@ -637,8 +709,8 @@ func (s *Store) verifyIngestionWebhookSignature(record ingestionSourceRecord, he
 		if signature == "" {
 			return ErrInvalidIngestionSignature
 		}
-		expected := computeIngestionWebhookHMAC(secret, rawBody)
-		if !matchesIngestionHMACSignature(signature, expected) {
+		expected := computeIngestionWebhookHMAC(secret, rawBody, sha256.New)
+		if !matchesIngestionHMACSignature(signature, expected, "sha256") {
 			return ErrInvalidIngestionSignature
 		}
 	}
@@ -646,16 +718,17 @@ func (s *Store) verifyIngestionWebhookSignature(record ingestionSourceRecord, he
 	return nil
 }
 
-func computeIngestionWebhookHMAC(secret string, payload []byte) string {
-	mac := hmac.New(sha256.New, []byte(strings.TrimSpace(secret)))
+func computeIngestionWebhookHMAC(secret string, payload []byte, hashFactory func() hash.Hash) string {
+	mac := hmac.New(hashFactory, []byte(strings.TrimSpace(secret)))
 	_, _ = mac.Write(payload)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func matchesIngestionHMACSignature(provided string, expectedHex string) bool {
+func matchesIngestionHMACSignature(provided string, expectedHex string, algorithm string) bool {
 	provided = strings.ToLower(strings.TrimSpace(provided))
-	if strings.HasPrefix(provided, "sha256=") {
-		provided = strings.TrimPrefix(provided, "sha256=")
+	prefix := strings.ToLower(strings.TrimSpace(algorithm))
+	if prefix != "" && strings.HasPrefix(provided, prefix+"=") {
+		provided = strings.TrimPrefix(provided, prefix+"=")
 	}
 	expectedHex = strings.ToLower(strings.TrimSpace(expectedHex))
 	return constantTimeEqualStrings(provided, expectedHex)
@@ -1389,4 +1462,12 @@ func nextIngestionToken() (string, error) {
 	}
 
 	return "uss_ingest_" + hex.EncodeToString(buffer), nil
+}
+
+func nextIngestionWebhookSecret() (string, error) {
+	buffer := make([]byte, 24)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return "uss_webhook_" + hex.EncodeToString(buffer), nil
 }

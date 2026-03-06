@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"crypto/sha1"
+	"crypto/sha256"
 	"testing"
 	"time"
 
@@ -190,7 +192,7 @@ func TestVerifyIngestionWebhookSignatureGitHub(t *testing.T) {
 	}
 
 	validHeaders := map[string]string{
-		"x-hub-signature-256": "sha256=" + computeIngestionWebhookHMAC("shared-secret", payload),
+		"x-hub-signature-256": "sha256=" + computeIngestionWebhookHMAC("shared-secret", payload, sha256.New),
 	}
 	if err := store.verifyIngestionWebhookSignature(record, validHeaders, payload); err != nil {
 		t.Fatalf("expected valid signature to pass, got %v", err)
@@ -201,6 +203,66 @@ func TestVerifyIngestionWebhookSignatureGitHub(t *testing.T) {
 	}
 	if err := store.verifyIngestionWebhookSignature(record, invalidHeaders, payload); err == nil {
 		t.Fatal("expected invalid signature to fail")
+	}
+}
+
+func TestVerifyIngestionWebhookSignatureGitHubSHA1Fallback(t *testing.T) {
+	t.Parallel()
+
+	store := &Store{kmsMasterKey: "test-master-key"}
+	tenantID := "tenant-1"
+	sourceID := "source-1"
+	payload := []byte(`{"hello":"world"}`)
+
+	encrypted, err := store.encryptIngestionWebhookSecret(tenantID, sourceID, "github", "shared-secret")
+	if err != nil {
+		t.Fatalf("encrypt webhook secret: %v", err)
+	}
+	record := ingestionSourceRecord{
+		Source: models.IngestionSource{
+			ID:                sourceID,
+			TenantID:          tenantID,
+			Provider:          "github",
+			SignatureRequired: true,
+		},
+		WebhookSecretEncrypted: encrypted,
+	}
+
+	validHeaders := map[string]string{
+		"x-hub-signature": "sha1=" + computeIngestionWebhookHMAC("shared-secret", payload, sha1.New),
+	}
+	if err := store.verifyIngestionWebhookSignature(record, validHeaders, payload); err != nil {
+		t.Fatalf("expected valid sha1 signature to pass, got %v", err)
+	}
+}
+
+func TestVerifyIngestionWebhookSignatureJenkinsSignatureHeader(t *testing.T) {
+	t.Parallel()
+
+	store := &Store{kmsMasterKey: "test-master-key"}
+	tenantID := "tenant-1"
+	sourceID := "source-1"
+	payload := []byte(`{"job_name":"nightly","build_id":"42"}`)
+
+	encrypted, err := store.encryptIngestionWebhookSecret(tenantID, sourceID, "jenkins", "shared-secret")
+	if err != nil {
+		t.Fatalf("encrypt webhook secret: %v", err)
+	}
+	record := ingestionSourceRecord{
+		Source: models.IngestionSource{
+			ID:                sourceID,
+			TenantID:          tenantID,
+			Provider:          "jenkins",
+			SignatureRequired: true,
+		},
+		WebhookSecretEncrypted: encrypted,
+	}
+
+	validHeaders := map[string]string{
+		"x-jenkins-signature": "sha256=" + computeIngestionWebhookHMAC("shared-secret", payload, sha256.New),
+	}
+	if err := store.verifyIngestionWebhookSignature(record, validHeaders, payload); err != nil {
+		t.Fatalf("expected valid jenkins signature to pass, got %v", err)
 	}
 }
 

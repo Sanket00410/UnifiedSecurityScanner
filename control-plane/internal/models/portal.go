@@ -307,6 +307,12 @@ func normalizeRuleField(value string) string {
 		return "provider"
 	case "event_type", "event":
 		return "event_type"
+	case "repo", "repository", "repo_name":
+		return "repo"
+	case "branch", "git_branch":
+		return "branch"
+	case "requested_by", "requester", "actor":
+		return "requested_by"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}

@@ -270,3 +270,40 @@ func TestEvaluateIngestionSubmissionRejectsBlockedProvider(t *testing.T) {
 		t.Fatalf("unexpected rejection reason: %s", rejection.Reason)
 	}
 }
+
+func TestEvaluateIngestionSubmissionRejectsBlockedBranch(t *testing.T) {
+	t.Parallel()
+
+	rejection := EvaluateIngestionSubmission([]models.Policy{
+		{
+			ID:      "policy-ingestion-branch",
+			Enabled: true,
+			Scope:   "repository",
+			Mode:    "enforce",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "block",
+					Field:  "branch",
+					Match:  "prefix",
+					Values: []string{"release/"},
+				},
+			},
+		},
+	}, IngestionRequest{
+		Provider:    "github",
+		EventType:   "github.push",
+		Repo:        "acme/core",
+		Branch:      "release/1.0",
+		RequestedBy: "ingestion:github",
+		TargetKind:  "repo",
+		Target:      "https://github.com/acme/core",
+		Profile:     "balanced",
+		Tools:       []string{"semgrep"},
+	})
+	if rejection == nil {
+		t.Fatal("expected blocked ingestion branch to be rejected")
+	}
+	if rejection.Reason != "ingestion branch is blocked by enforced policy" {
+		t.Fatalf("unexpected rejection reason: %s", rejection.Reason)
+	}
+}

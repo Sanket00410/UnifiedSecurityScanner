@@ -34,12 +34,15 @@ type Rejection struct {
 }
 
 type IngestionRequest struct {
-	Provider   string
-	EventType  string
-	TargetKind string
-	Target     string
-	Profile    string
-	Tools      []string
+	Provider    string
+	EventType   string
+	Repo        string
+	Branch      string
+	RequestedBy string
+	TargetKind  string
+	Target      string
+	Profile     string
+	Tools       []string
 }
 
 type boundRule struct {
@@ -137,14 +140,17 @@ func EvaluateIngestionSubmission(policies []models.Policy, request IngestionRequ
 	}
 
 	context := map[string]string{
-		"provider":    strings.ToLower(strings.TrimSpace(request.Provider)),
-		"event_type":  strings.ToLower(strings.TrimSpace(request.EventType)),
-		"target_kind": strings.ToLower(strings.TrimSpace(request.TargetKind)),
-		"profile":     strings.ToLower(strings.TrimSpace(request.Profile)),
-		"target":      strings.ToLower(strings.TrimSpace(request.Target)),
+		"provider":     strings.ToLower(strings.TrimSpace(request.Provider)),
+		"event_type":   strings.ToLower(strings.TrimSpace(request.EventType)),
+		"repo":         strings.ToLower(strings.TrimSpace(request.Repo)),
+		"branch":       strings.ToLower(strings.TrimSpace(request.Branch)),
+		"requested_by": strings.ToLower(strings.TrimSpace(request.RequestedBy)),
+		"target_kind":  strings.ToLower(strings.TrimSpace(request.TargetKind)),
+		"profile":      strings.ToLower(strings.TrimSpace(request.Profile)),
+		"target":       strings.ToLower(strings.TrimSpace(request.Target)),
 	}
 
-	for _, field := range []string{"provider", "event_type", "target_kind", "profile", "target"} {
+	for _, field := range []string{"provider", "event_type", "repo", "branch", "requested_by", "target_kind", "profile", "target"} {
 		if rejection := evaluateFieldRules(enforced, field, context); rejection != nil {
 			return rejection
 		}
@@ -332,6 +338,12 @@ func normalizeField(value string) string {
 		return "provider"
 	case "event_type":
 		return "event_type"
+	case "repo":
+		return "repo"
+	case "branch":
+		return "branch"
+	case "requested_by":
+		return "requested_by"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -369,6 +381,21 @@ func rejectionReason(field string, effect string) string {
 			return "ingestion event type is not allow-listed by enforced policy"
 		}
 		return "ingestion event type is blocked by enforced policy"
+	case "repo":
+		if effect == "allow" {
+			return "ingestion repository is not allow-listed by enforced policy"
+		}
+		return "ingestion repository is blocked by enforced policy"
+	case "branch":
+		if effect == "allow" {
+			return "ingestion branch is not allow-listed by enforced policy"
+		}
+		return "ingestion branch is blocked by enforced policy"
+	case "requested_by":
+		if effect == "allow" {
+			return "ingestion requester is not allow-listed by enforced policy"
+		}
+		return "ingestion requester is blocked by enforced policy"
 	default:
 		if effect == "allow" {
 			return "requested operation is not allow-listed by enforced policy"

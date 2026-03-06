@@ -599,6 +599,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/ingestion/sources/{sourceId}/rotate-webhook-secret:
+    post:
+      operationId: rotateIngestionSourceWebhookSecret
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ingestion source webhook secret rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateIngestionSourceWebhookSecretResponse"
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/ingestion/events:
     get:
       operationId: listIngestionEvents
@@ -3629,6 +3654,17 @@ components:
         source:
           $ref: "#/components/schemas/IngestionSource"
         ingest_token:
+          type: string
+    RotateIngestionSourceWebhookSecretResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - source
+        - webhook_secret
+      properties:
+        source:
+          $ref: "#/components/schemas/IngestionSource"
+        webhook_secret:
           type: string
     IngestionEvent:
       type: object

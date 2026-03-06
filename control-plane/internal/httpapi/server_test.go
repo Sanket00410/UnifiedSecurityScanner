@@ -411,6 +411,20 @@ func (s *stubAPIStore) RotateIngestionSourceTokenForTenant(_ context.Context, _ 
 	return models.RotateIngestionSourceTokenResponse{}, false, nil
 }
 
+func (s *stubAPIStore) RotateIngestionSourceWebhookSecretForTenant(_ context.Context, _ string, sourceID string, _ string) (models.RotateIngestionSourceWebhookSecretResponse, bool, error) {
+	for idx := range s.ingestionSources {
+		if s.ingestionSources[idx].ID != sourceID {
+			continue
+		}
+		s.ingestionSources[idx].SignatureRequired = true
+		return models.RotateIngestionSourceWebhookSecretResponse{
+			Source:        s.ingestionSources[idx],
+			WebhookSecret: "rotated-stub-webhook-secret",
+		}, true, nil
+	}
+	return models.RotateIngestionSourceWebhookSecretResponse{}, false, nil
+}
+
 func (s *stubAPIStore) ListIngestionEventsForTenant(context.Context, string, string, int) ([]models.IngestionEvent, error) {
 	return s.ingestionEvents, nil
 }
@@ -2239,6 +2253,14 @@ func TestIngestionSourceRoutesSupportCrudRotateAndListEvents(t *testing.T) {
 		t.Fatalf("expected 200 for ingestion source token rotation, got %d", rotateRecorder.Code)
 	}
 
+	rotateWebhookSecretRecorder := httptest.NewRecorder()
+	rotateWebhookSecretRequest := httptest.NewRequest(http.MethodPost, "/v1/ingestion/sources/"+created.Source.ID+"/rotate-webhook-secret", nil)
+	rotateWebhookSecretRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(rotateWebhookSecretRecorder, rotateWebhookSecretRequest)
+	if rotateWebhookSecretRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ingestion source webhook secret rotation, got %d", rotateWebhookSecretRecorder.Code)
+	}
+
 	eventsRecorder := httptest.NewRecorder()
 	eventsRequest := httptest.NewRequest(http.MethodGet, "/v1/ingestion/events", nil)
 	eventsRequest.Header.Set("Authorization", "Bearer operator-token")
@@ -2316,6 +2338,8 @@ func TestIngestionWebhookEndpointCollectsProviderHeaders(t *testing.T) {
 	request.Header.Set(ingestionTokenHeader, "stub-token")
 	request.Header.Set("X-GitHub-Event", "push")
 	request.Header.Set("X-GitHub-Delivery", "evt-gh-headers")
+	request.Header.Set("X-Hub-Signature-256", "sha256=abc123")
+	request.Header.Set("X-Jenkins-Signature", "sha256=jenkinssig")
 	request.Header.Set("X-Ignore-Header", "ignored")
 	request.Header.Set("Content-Type", "application/json")
 	server.httpServer.Handler.ServeHTTP(recorder, request)
@@ -2337,6 +2361,12 @@ func TestIngestionWebhookEndpointCollectsProviderHeaders(t *testing.T) {
 	}
 	if store.lastIngestionWebhookReq.Headers["x-github-delivery"] != "evt-gh-headers" {
 		t.Fatalf("expected x-github-delivery to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-github-delivery"])
+	}
+	if store.lastIngestionWebhookReq.Headers["x-hub-signature-256"] != "sha256=abc123" {
+		t.Fatalf("expected x-hub-signature-256 to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-hub-signature-256"])
+	}
+	if store.lastIngestionWebhookReq.Headers["x-jenkins-signature"] != "sha256=jenkinssig" {
+		t.Fatalf("expected x-jenkins-signature to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-jenkins-signature"])
 	}
 	if _, exists := store.lastIngestionWebhookReq.Headers["x-ignore-header"]; exists {
 		t.Fatalf("expected unsupported headers to be ignored, got %#v", store.lastIngestionWebhookReq.Headers["x-ignore-header"])

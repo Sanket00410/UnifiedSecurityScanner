@@ -57,6 +57,11 @@ type RotateIngestionSourceTokenResponse struct {
 	IngestToken string          `json:"ingest_token"`
 }
 
+type RotateIngestionSourceWebhookSecretResponse struct {
+	Source        IngestionSource `json:"source"`
+	WebhookSecret string          `json:"webhook_secret"`
+}
+
 type IngestionEvent struct {
 	ID               string         `json:"id"`
 	TenantID         string         `json:"tenant_id"`

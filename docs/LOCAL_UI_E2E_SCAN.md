@@ -90,6 +90,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
     - copy the generated ingest token (shown once in UI)
     - use displayed webhook path `/ingest/webhooks/{sourceId}` in your CI/repo webhook
     - rotate token anytime with **Rotate Ingestion Token**
+    - rotate signing secret anytime with **Rotate Webhook Secret**
     - monitor automation in **Ingestion Events**
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
@@ -103,6 +104,7 @@ Backend API endpoints used by the guided UI:
 - `GET/POST /v1/ingestion/sources`
 - `GET/PUT/DELETE /v1/ingestion/sources/{id}`
 - `POST /v1/ingestion/sources/{id}/rotate-token`
+- `POST /v1/ingestion/sources/{id}/rotate-webhook-secret`
 - `GET /v1/ingestion/events`
 - `POST /ingest/webhooks/{sourceId}` with `X-USS-Ingest-Token`
 

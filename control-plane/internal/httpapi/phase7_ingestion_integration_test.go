@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -237,6 +238,35 @@ func TestPhase7IngestionWebhookSignatureVerification(t *testing.T) {
 		t.Fatalf("expected accepted response for valid signature, got %d body=%s", validResponse.StatusCode, string(validBody))
 	}
 
+	sha1Payload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-signature-sha1",
+		"requested_by": "github-webhook",
+	})
+	if err != nil {
+		t.Fatalf("marshal sha1 payload: %v", err)
+	}
+	validSHA1Request, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(sha1Payload))
+	if err != nil {
+		t.Fatalf("create sha1 webhook request: %v", err)
+	}
+	validSHA1Request.Header.Set("Content-Type", "application/json")
+	validSHA1Request.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	validSHA1Request.Header.Set("X-GitHub-Event", "push")
+	validSHA1Request.Header.Set("X-Hub-Signature", githubWebhookSignatureSHA1("phase7-signing-secret", sha1Payload))
+
+	validSHA1Response, err := client.Do(validSHA1Request)
+	if err != nil {
+		t.Fatalf("execute sha1 webhook request: %v", err)
+	}
+	validSHA1Body, err := readAllAndClose(validSHA1Response)
+	if err != nil {
+		t.Fatalf("read sha1 webhook response: %v", err)
+	}
+	if validSHA1Response.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted response for valid sha1 signature, got %d body=%s", validSHA1Response.StatusCode, string(validSHA1Body))
+	}
+
 	invalidPayload, err := json.Marshal(map[string]any{
 		"event_type":   "github.push",
 		"external_id":  "evt-signature-invalid",
@@ -373,6 +403,168 @@ func githubWebhookSignature(secret string, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func githubWebhookSignatureSHA1(secret string, body []byte) string {
+	mac := hmac.New(sha1.New, []byte(secret))
+	_, _ = mac.Write(body)
+	return "sha1=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func TestPhase7IngestionWebhookSecretRotationInvalidatesOldSecret(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase7_ingestion_rotate_secret_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase7-ingestion-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+	createSourceResponse, createSourceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/ingestion/sources", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":               "Rotating GitHub Ingestion Secret",
+		"provider":           "github",
+		"signature_required": true,
+		"webhook_secret":     "phase7-original-signing-secret",
+		"target_kind":        "repo",
+		"target":             "https://github.com/acme/rotate-secret",
+		"profile":            "balanced",
+		"tools":              []string{"semgrep"},
+	}, http.StatusCreated)
+	defer createSourceResponse.Body.Close()
+
+	var createdSource models.CreatedIngestionSource
+	decodeJSONResponse(t, createSourceBody, &createdSource)
+
+	originalPayload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-rotate-before",
+		"requested_by": "github-webhook",
+	})
+	if err != nil {
+		t.Fatalf("marshal original payload: %v", err)
+	}
+
+	originalRequest, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(originalPayload))
+	if err != nil {
+		t.Fatalf("create original webhook request: %v", err)
+	}
+	originalRequest.Header.Set("Content-Type", "application/json")
+	originalRequest.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	originalRequest.Header.Set("X-GitHub-Event", "push")
+	originalRequest.Header.Set("X-Hub-Signature-256", githubWebhookSignature("phase7-original-signing-secret", originalPayload))
+
+	originalResponse, err := client.Do(originalRequest)
+	if err != nil {
+		t.Fatalf("execute original signed webhook request: %v", err)
+	}
+	originalBody, err := readAllAndClose(originalResponse)
+	if err != nil {
+		t.Fatalf("read original signed webhook response: %v", err)
+	}
+	if originalResponse.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted response for original signature, got %d body=%s", originalResponse.StatusCode, string(originalBody))
+	}
+
+	rotateResponse, rotateBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/ingestion/sources/"+createdSource.Source.ID+"/rotate-webhook-secret", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer rotateResponse.Body.Close()
+
+	var rotated models.RotateIngestionSourceWebhookSecretResponse
+	decodeJSONResponse(t, rotateBody, &rotated)
+	if strings.TrimSpace(rotated.WebhookSecret) == "" {
+		t.Fatal("expected non-empty rotated webhook secret")
+	}
+	if rotated.WebhookSecret == "phase7-original-signing-secret" {
+		t.Fatal("expected rotated webhook secret to differ from original")
+	}
+	if !rotated.Source.SignatureRequired {
+		t.Fatal("expected rotated source to remain signature_required=true")
+	}
+
+	stalePayload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-rotate-stale",
+		"requested_by": "github-webhook",
+	})
+	if err != nil {
+		t.Fatalf("marshal stale payload: %v", err)
+	}
+
+	staleRequest, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(stalePayload))
+	if err != nil {
+		t.Fatalf("create stale webhook request: %v", err)
+	}
+	staleRequest.Header.Set("Content-Type", "application/json")
+	staleRequest.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	staleRequest.Header.Set("X-GitHub-Event", "push")
+	staleRequest.Header.Set("X-Hub-Signature-256", githubWebhookSignature("phase7-original-signing-secret", stalePayload))
+
+	staleResponse, err := client.Do(staleRequest)
+	if err != nil {
+		t.Fatalf("execute stale signature webhook request: %v", err)
+	}
+	staleBody, err := readAllAndClose(staleResponse)
+	if err != nil {
+		t.Fatalf("read stale signature webhook response: %v", err)
+	}
+	if staleResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized response for stale signature, got %d body=%s", staleResponse.StatusCode, string(staleBody))
+	}
+
+	rotatedPayload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-rotate-after",
+		"requested_by": "github-webhook",
+	})
+	if err != nil {
+		t.Fatalf("marshal rotated payload: %v", err)
+	}
+
+	rotatedRequest, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(rotatedPayload))
+	if err != nil {
+		t.Fatalf("create rotated webhook request: %v", err)
+	}
+	rotatedRequest.Header.Set("Content-Type", "application/json")
+	rotatedRequest.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	rotatedRequest.Header.Set("X-GitHub-Event", "push")
+	rotatedRequest.Header.Set("X-Hub-Signature-256", githubWebhookSignature(rotated.WebhookSecret, rotatedPayload))
+
+	rotatedResponse, err := client.Do(rotatedRequest)
+	if err != nil {
+		t.Fatalf("execute rotated signature webhook request: %v", err)
+	}
+	rotatedBody, err := readAllAndClose(rotatedResponse)
+	if err != nil {
+		t.Fatalf("read rotated signature webhook response: %v", err)
+	}
+	if rotatedResponse.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted response for rotated signature, got %d body=%s", rotatedResponse.StatusCode, string(rotatedBody))
+	}
 }
 
 func TestPhase7IngestionWebhookNormalizesProviderHeadersAndPayload(t *testing.T) {
