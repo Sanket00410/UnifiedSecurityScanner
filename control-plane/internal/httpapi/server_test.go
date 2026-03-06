@@ -44,6 +44,8 @@ type stubAPIStore struct {
 	backupSnapshots          []models.BackupSnapshot
 	recoveryDrills           []models.RecoveryDrill
 	backupDRErr              error
+	tenantConfigEntries      []models.TenantConfigEntry
+	tenantConfigErr          error
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -431,6 +433,78 @@ func (s *stubAPIStore) UpdateTenantLimitsForTenant(_ context.Context, tenantID s
 
 func (s *stubAPIStore) GetOperationalMetrics(context.Context) (models.OperationalMetrics, error) {
 	return s.operationalMetrics, nil
+}
+
+func (s *stubAPIStore) ListTenantConfigForTenant(_ context.Context, _ string, prefix string, _ int) ([]models.TenantConfigEntry, error) {
+	if s.tenantConfigErr != nil {
+		return nil, s.tenantConfigErr
+	}
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	if prefix == "" {
+		return s.tenantConfigEntries, nil
+	}
+	out := make([]models.TenantConfigEntry, 0, len(s.tenantConfigEntries))
+	for _, entry := range s.tenantConfigEntries {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry.Key)), prefix) {
+			out = append(out, entry)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubAPIStore) GetTenantConfigEntryForTenant(_ context.Context, _ string, key string) (models.TenantConfigEntry, bool, error) {
+	if s.tenantConfigErr != nil {
+		return models.TenantConfigEntry{}, false, s.tenantConfigErr
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, entry := range s.tenantConfigEntries {
+		if strings.ToLower(strings.TrimSpace(entry.Key)) == key {
+			return entry, true, nil
+		}
+	}
+	return models.TenantConfigEntry{}, false, nil
+}
+
+func (s *stubAPIStore) UpsertTenantConfigEntryForTenant(_ context.Context, tenantID string, key string, actor string, request models.UpsertTenantConfigRequest) (models.TenantConfigEntry, error) {
+	if s.tenantConfigErr != nil {
+		return models.TenantConfigEntry{}, s.tenantConfigErr
+	}
+	item := models.TenantConfigEntry{
+		TenantID:  strings.TrimSpace(tenantID),
+		Key:       strings.ToLower(strings.TrimSpace(key)),
+		Value:     request.Value,
+		UpdatedBy: strings.TrimSpace(actor),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if item.Value == nil {
+		item.Value = map[string]any{}
+	}
+	for idx := range s.tenantConfigEntries {
+		if strings.EqualFold(s.tenantConfigEntries[idx].Key, item.Key) {
+			s.tenantConfigEntries[idx] = item
+			return item, nil
+		}
+	}
+	s.tenantConfigEntries = append(s.tenantConfigEntries, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) DeleteTenantConfigEntryForTenant(_ context.Context, _ string, key string, _ string) (bool, error) {
+	if s.tenantConfigErr != nil {
+		return false, s.tenantConfigErr
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	filtered := make([]models.TenantConfigEntry, 0, len(s.tenantConfigEntries))
+	deleted := false
+	for _, entry := range s.tenantConfigEntries {
+		if strings.EqualFold(strings.TrimSpace(entry.Key), key) {
+			deleted = true
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	s.tenantConfigEntries = filtered
+	return deleted, nil
 }
 
 func (s *stubAPIStore) RegisterWorker(context.Context, models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error) {
@@ -1804,6 +1878,72 @@ func TestBackupAndRecoveryDrillEndpoints(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(createDrillRecorder, createDrillRequest)
 	if createDrillRecorder.Code != http.StatusCreated {
 		t.Fatalf("expected 201 for recovery drill create, got %d", createDrillRecorder.Code)
+	}
+}
+
+func TestTenantConfigEndpointsCRUDFlow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		tenantConfigEntries: []models.TenantConfigEntry{
+			{
+				TenantID:  "org-1",
+				Key:       "retention.evidence",
+				Value:     map[string]any{"days": float64(90)},
+				UpdatedBy: "admin@example.com",
+				UpdatedAt: now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/config?prefix=retention", nil)
+	listRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for config list, got %d", listRecorder.Code)
+	}
+
+	getRecorder := httptest.NewRecorder()
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/config/retention.evidence", nil)
+	getRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for config get, got %d", getRecorder.Code)
+	}
+
+	upsertRecorder := httptest.NewRecorder()
+	upsertRequest := httptest.NewRequest(http.MethodPut, "/v1/config/retention.evidence", strings.NewReader(`{
+		"value":{"days":120}
+	}`))
+	upsertRequest.Header.Set("Authorization", "Bearer admin-token")
+	upsertRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(upsertRecorder, upsertRequest)
+	if upsertRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for config upsert, got %d", upsertRecorder.Code)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/config/retention.evidence", nil)
+	deleteRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for config delete, got %d", deleteRecorder.Code)
 	}
 }
 

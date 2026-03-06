@@ -78,6 +78,10 @@ type apiStore interface {
 	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
 	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
 	GetOperationalMetrics(ctx context.Context) (models.OperationalMetrics, error)
+	ListTenantConfigForTenant(ctx context.Context, tenantID string, prefix string, limit int) ([]models.TenantConfigEntry, error)
+	GetTenantConfigEntryForTenant(ctx context.Context, tenantID string, key string) (models.TenantConfigEntry, bool, error)
+	UpsertTenantConfigEntryForTenant(ctx context.Context, tenantID string, key string, actor string, request models.UpsertTenantConfigRequest) (models.TenantConfigEntry, error)
+	DeleteTenantConfigEntryForTenant(ctx context.Context, tenantID string, key string, actor string) (bool, error)
 	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
 	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
@@ -186,6 +190,12 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet: auth.PermissionScanJobsRead,
 		http.MethodPut: auth.PermissionPoliciesWrite,
 	}, "tenant_operations", "tenant", server.handleTenantOperations))
+	mux.HandleFunc("/v1/config", server.withUserAuth(auth.PermissionPoliciesRead, "tenant_config.list", "tenant_config", server.handleTenantConfig))
+	mux.HandleFunc("/v1/config/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionPoliciesRead,
+		http.MethodPut:    auth.PermissionPoliciesWrite,
+		http.MethodDelete: auth.PermissionPoliciesWrite,
+	}, "tenant_config", "tenant_config", server.handleTenantConfigRoute))
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/search/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.search", "finding", server.handleFindingSearch))
@@ -1085,6 +1095,105 @@ func (s *Server) handleTenantOperations(w http.ResponseWriter, r *http.Request) 
 		}
 
 		s.writeJSON(w, http.StatusOK, snapshot)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleTenantConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	items, err := s.store.ListTenantConfigForTenant(r.Context(), principal.OrganizationID, r.URL.Query().Get("prefix"), limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_tenant_config_failed", "tenant configuration entries could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleTenantConfigRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	configKey := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/config/"))
+	if configKey == "" || strings.Contains(configKey, "/") {
+		s.writeError(w, http.StatusNotFound, "not_found", "requested tenant configuration entry was not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		item, found, err := s.store.GetTenantConfigEntryForTenant(r.Context(), principal.OrganizationID, configKey)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_tenant_config_failed", "tenant configuration entry could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested tenant configuration entry was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		var request models.UpsertTenantConfigRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+
+		item, err := s.store.UpsertTenantConfigEntryForTenant(r.Context(), principal.OrganizationID, configKey, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "upsert_tenant_config_failed", err.Error())
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+
+		deleted, err := s.store.DeleteTenantConfigEntryForTenant(r.Context(), principal.OrganizationID, configKey, actor)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "delete_tenant_config_failed", "tenant configuration entry could not be deleted")
+			return
+		}
+		if !deleted {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested tenant configuration entry was not found")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		s.writeMethodNotAllowed(w)
 	}

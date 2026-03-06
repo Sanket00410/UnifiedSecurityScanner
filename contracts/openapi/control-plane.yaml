@@ -630,6 +630,115 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/IngestionEvent"
+  /v1/config:
+    get:
+      operationId: listTenantConfig
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: prefix
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Tenant configuration entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TenantConfigEntry"
+  /v1/config/{key}:
+    get:
+      operationId: getTenantConfigEntry
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tenant configuration entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantConfigEntry"
+        "404":
+          description: Tenant configuration entry not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: upsertTenantConfigEntry
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertTenantConfigRequest"
+      responses:
+        "200":
+          description: Tenant configuration entry upserted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantConfigEntry"
+        "400":
+          description: Invalid tenant configuration payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteTenantConfigEntry
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Tenant configuration entry deleted
+        "404":
+          description: Tenant configuration entry not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /ingest/webhooks/{sourceId}:
     post:
       operationId: ingestWebhookEvent
@@ -4298,6 +4407,35 @@ components:
           type: string
           format: date-time
           nullable: true
+    TenantConfigEntry:
+      type: object
+      additionalProperties: false
+      required:
+        - key
+        - value
+        - updated_at
+      properties:
+        tenant_id:
+          type: string
+        key:
+          type: string
+        value:
+          type: object
+          additionalProperties: true
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    UpsertTenantConfigRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - value
+      properties:
+        value:
+          type: object
+          additionalProperties: true
     ApiError:
       type: object
       additionalProperties: false
