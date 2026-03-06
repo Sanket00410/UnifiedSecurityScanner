@@ -65,6 +65,10 @@ type apiStore interface {
 	RotateIngestionSourceTokenForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceTokenResponse, bool, error)
 	ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error)
 	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error)
+	ListPlatformEventsForTenant(ctx context.Context, tenantID string, eventType string, limit int) ([]models.PlatformEvent, error)
+	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
+	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
+	GetOperationalMetrics(ctx context.Context) (models.OperationalMetrics, error)
 	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
 	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
@@ -129,6 +133,7 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/readyz", server.handleReady)
+	mux.HandleFunc("/metrics", server.handleMetrics)
 	mux.HandleFunc("/auth/oidc/start", server.handleOIDCStart)
 	mux.HandleFunc("/auth/oidc/callback", server.handleOIDCCallback)
 	mux.HandleFunc("/auth/logout", server.handleLogout)
@@ -167,6 +172,11 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost:   auth.PermissionScanJobsWrite,
 	}, "ingestion_source", "ingestion_source", server.handleIngestionSourceRoute))
 	mux.HandleFunc("/v1/ingestion/events", server.withUserAuth(auth.PermissionScanJobsRead, "ingestion_events.list", "ingestion_event", server.handleIngestionEvents))
+	mux.HandleFunc("/v1/events", server.withUserAuth(auth.PermissionScanJobsRead, "events.list", "platform_event", server.handlePlatformEvents))
+	mux.HandleFunc("/v1/tenant/operations", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionScanJobsRead,
+		http.MethodPut: auth.PermissionPoliciesWrite,
+	}, "tenant_operations", "tenant", server.handleTenantOperations))
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
@@ -261,6 +271,67 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		"status":  "ready",
 		"service": "control-plane-api",
 	})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	metrics, err := s.store.GetOperationalMetrics(r.Context())
+	if err != nil {
+		http.Error(w, "metrics_unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	_, _ = fmt.Fprintf(w,
+		"# HELP uss_workers_total total registered workers\n"+
+			"# TYPE uss_workers_total gauge\n"+
+			"uss_workers_total %d\n"+
+			"# HELP uss_workers_healthy workers with a valid heartbeat\n"+
+			"# TYPE uss_workers_healthy gauge\n"+
+			"uss_workers_healthy %d\n"+
+			"# HELP uss_scan_jobs_total total scan jobs\n"+
+			"# TYPE uss_scan_jobs_total gauge\n"+
+			"uss_scan_jobs_total %d\n"+
+			"# HELP uss_scan_jobs_queued queued scan jobs\n"+
+			"# TYPE uss_scan_jobs_queued gauge\n"+
+			"uss_scan_jobs_queued %d\n"+
+			"# HELP uss_scan_jobs_running running scan jobs\n"+
+			"# TYPE uss_scan_jobs_running gauge\n"+
+			"uss_scan_jobs_running %d\n"+
+			"# HELP uss_scan_jobs_completed completed scan jobs\n"+
+			"# TYPE uss_scan_jobs_completed gauge\n"+
+			"uss_scan_jobs_completed %d\n"+
+			"# HELP uss_scan_jobs_failed failed scan jobs\n"+
+			"# TYPE uss_scan_jobs_failed gauge\n"+
+			"uss_scan_jobs_failed %d\n"+
+			"# HELP uss_scan_targets_total total saved scan targets\n"+
+			"# TYPE uss_scan_targets_total gauge\n"+
+			"uss_scan_targets_total %d\n"+
+			"# HELP uss_ingestion_sources_total total ingestion sources\n"+
+			"# TYPE uss_ingestion_sources_total gauge\n"+
+			"uss_ingestion_sources_total %d\n"+
+			"# HELP uss_ingestion_events_total total ingestion events\n"+
+			"# TYPE uss_ingestion_events_total gauge\n"+
+			"uss_ingestion_events_total %d\n"+
+			"# HELP uss_platform_events_total total platform events\n"+
+			"# TYPE uss_platform_events_total gauge\n"+
+			"uss_platform_events_total %d\n",
+		metrics.WorkersTotal,
+		metrics.WorkersHealthy,
+		metrics.ScanJobsTotal,
+		metrics.ScanJobsQueued,
+		metrics.ScanJobsRunning,
+		metrics.ScanJobsCompleted,
+		metrics.ScanJobsFailed,
+		metrics.ScanTargetsTotal,
+		metrics.IngestionSources,
+		metrics.IngestionEvents,
+		metrics.PlatformEventsTotal,
+	)
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +604,17 @@ func (s *Server) handleScanTargets(w http.ResponseWriter, r *http.Request) {
 
 		item, err := s.store.CreateScanTargetForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
 		if err != nil {
+			var limitExceeded *jobs.TenantLimitExceededError
+			if errors.As(err, &limitExceeded) {
+				s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"code":    "tenant_limit_exceeded",
+					"message": limitExceeded.Error(),
+					"metric":  limitExceeded.Metric,
+					"limit":   limitExceeded.Limit,
+					"current": limitExceeded.Current,
+				})
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, "create_scan_target_failed", "scan target could not be created")
 			return
 		}
@@ -635,6 +717,17 @@ func (s *Server) handleScanTargetRoute(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			var limitExceeded *jobs.TenantLimitExceededError
+			if errors.As(err, &limitExceeded) {
+				s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"code":    "tenant_limit_exceeded",
+					"message": limitExceeded.Error(),
+					"metric":  limitExceeded.Metric,
+					"limit":   limitExceeded.Limit,
+					"current": limitExceeded.Current,
+				})
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, "run_scan_target_failed", "scan target could not be executed")
 			return
 		}
@@ -696,6 +789,17 @@ func (s *Server) handleIngestionSources(w http.ResponseWriter, r *http.Request) 
 
 		item, err := s.store.CreateIngestionSourceForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
 		if err != nil {
+			var limitExceeded *jobs.TenantLimitExceededError
+			if errors.As(err, &limitExceeded) {
+				s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"code":    "tenant_limit_exceeded",
+					"message": limitExceeded.Error(),
+					"metric":  limitExceeded.Metric,
+					"limit":   limitExceeded.Limit,
+					"current": limitExceeded.Current,
+				})
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, "create_ingestion_source_failed", "ingestion source could not be created")
 			return
 		}
@@ -859,6 +963,7 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 
 	response, err := s.store.HandleIngestionWebhook(r.Context(), sourceID, token, request)
 	if err != nil {
+		var limitExceeded *jobs.TenantLimitExceededError
 		switch {
 		case errors.Is(err, jobs.ErrIngestionSourceNotFound):
 			s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
@@ -866,6 +971,14 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusUnauthorized, "invalid_ingestion_token", "the webhook ingestion token is invalid")
 		case errors.Is(err, jobs.ErrIngestionSourceDisabled):
 			s.writeError(w, http.StatusConflict, "ingestion_source_disabled", "ingestion source is disabled")
+		case errors.As(err, &limitExceeded):
+			s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"code":    "tenant_limit_exceeded",
+				"message": limitExceeded.Error(),
+				"metric":  limitExceeded.Metric,
+				"limit":   limitExceeded.Limit,
+				"current": limitExceeded.Current,
+			})
 		case strings.Contains(strings.ToLower(err.Error()), "requires target_kind and target"):
 			s.writeError(w, http.StatusBadRequest, "validation_error", "ingestion event requires target_kind and target")
 		default:
@@ -879,6 +992,80 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 		status = http.StatusOK
 	}
 	s.writeJSON(w, status, response)
+}
+
+func (s *Server) handlePlatformEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	eventType := strings.TrimSpace(r.URL.Query().Get("type"))
+	items, err := s.store.ListPlatformEventsForTenant(r.Context(), principal.OrganizationID, eventType, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_platform_events_failed", "platform events could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleTenantOperations(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		snapshot, err := s.store.GetTenantOperationsSnapshot(r.Context(), principal.OrganizationID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "tenant_operations_failed", "tenant operations snapshot could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, snapshot)
+	case http.MethodPut:
+		defer r.Body.Close()
+
+		var request models.UpdateTenantLimitsRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		snapshot, err := s.store.UpdateTenantLimitsForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "must be greater than or equal to zero") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "update_tenant_limits_failed", "tenant limits could not be updated")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, snapshot)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
@@ -2358,6 +2545,17 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal
 				"message":   denied.Error(),
 				"policy_id": denied.PolicyID,
 				"rule_hits": denied.RuleHits,
+			})
+			return
+		}
+		var limitExceeded *jobs.TenantLimitExceededError
+		if errors.As(err, &limitExceeded) {
+			s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"code":    "tenant_limit_exceeded",
+				"message": limitExceeded.Error(),
+				"metric":  limitExceeded.Metric,
+				"limit":   limitExceeded.Limit,
+				"current": limitExceeded.Current,
 			})
 			return
 		}

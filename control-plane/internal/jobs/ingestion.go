@@ -77,6 +77,10 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 	actor = strings.TrimSpace(actor)
 	now := time.Now().UTC()
 
+	if err := s.enforceIngestionSourceLimit(ctx, tenantID); err != nil {
+		return models.CreatedIngestionSource{}, err
+	}
+
 	source := normalizeCreateIngestionSourceRequest(tenantID, actor, request, now)
 	token, err := nextIngestionToken()
 	if err != nil {
@@ -101,6 +105,22 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 	if err != nil {
 		return models.CreatedIngestionSource{}, fmt.Errorf("insert ingestion source: %w", err)
 	}
+
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      source.TenantID,
+		EventType:     "ingestion_source.created",
+		SourceService: "control-plane",
+		AggregateType: "ingestion_source",
+		AggregateID:   source.ID,
+		Payload: map[string]any{
+			"name":        source.Name,
+			"provider":    source.Provider,
+			"enabled":     source.Enabled,
+			"target_kind": source.TargetKind,
+			"profile":     source.Profile,
+		},
+		CreatedAt: now,
+	})
 
 	return models.CreatedIngestionSource{
 		Source:      source,
@@ -161,7 +181,19 @@ func (s *Store) DeleteIngestionSourceForTenant(ctx context.Context, tenantID str
 	if err != nil {
 		return false, fmt.Errorf("delete ingestion source: %w", err)
 	}
-	return command.RowsAffected() > 0, nil
+	deleted := command.RowsAffected() > 0
+	if deleted {
+		_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+			TenantID:      strings.TrimSpace(tenantID),
+			EventType:     "ingestion_source.deleted",
+			SourceService: "control-plane",
+			AggregateType: "ingestion_source",
+			AggregateID:   strings.TrimSpace(sourceID),
+			Payload:       map[string]any{},
+			CreatedAt:     time.Now().UTC(),
+		})
+	}
+	return deleted, nil
 }
 
 func (s *Store) RotateIngestionSourceTokenForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceTokenResponse, bool, error) {
@@ -330,10 +362,9 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 	}
 
 	var (
-		job           *models.ScanJob
-		createJobErr  error
-		policyDenied  *PolicyDeniedError
-		internalError string
+		job          *models.ScanJob
+		createJobErr error
+		policyDenied *PolicyDeniedError
 	)
 
 	createdJob, err := s.CreateForTenant(ctx, record.Source.TenantID, models.CreateScanJobRequest{
@@ -353,7 +384,6 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 		} else {
 			event.Status = "failed"
 			event.ErrorMessage = "scan job creation failed"
-			internalError = err.Error()
 			createJobErr = err
 		}
 	} else {
@@ -398,8 +428,23 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 		return models.IngestionWebhookResponse{}, fmt.Errorf("update ingestion source last_event_at: %w", updateErr)
 	}
 
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      record.Source.TenantID,
+		EventType:     "ingestion_event.processed",
+		SourceService: "control-plane",
+		AggregateType: "ingestion_source",
+		AggregateID:   record.Source.ID,
+		Payload: map[string]any{
+			"event_id":            event.ID,
+			"external_id":         event.ExternalID,
+			"status":              event.Status,
+			"created_scan_job_id": event.CreatedScanJobID,
+		},
+		CreatedAt: now,
+	})
+
 	if createJobErr != nil {
-		return models.IngestionWebhookResponse{}, fmt.Errorf("create scan job from ingestion event: %s", internalError)
+		return models.IngestionWebhookResponse{}, createJobErr
 	}
 
 	return models.IngestionWebhookResponse{

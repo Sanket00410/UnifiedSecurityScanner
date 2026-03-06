@@ -123,6 +123,10 @@ func (s *Store) CreateScanTargetForTenant(ctx context.Context, tenantID string, 
 	actor = strings.TrimSpace(actor)
 	now := time.Now().UTC()
 
+	if err := s.enforceScanTargetLimit(ctx, tenantID); err != nil {
+		return models.ScanTarget{}, err
+	}
+
 	target := normalizeCreateScanTargetRequest(tenantID, actor, request, now)
 	labelsJSON, err := json.Marshal(target.Labels)
 	if err != nil {
@@ -142,6 +146,21 @@ func (s *Store) CreateScanTargetForTenant(ctx context.Context, tenantID string, 
 	if err != nil {
 		return models.ScanTarget{}, fmt.Errorf("insert scan target: %w", err)
 	}
+
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      target.TenantID,
+		EventType:     "scan_target.created",
+		SourceService: "control-plane",
+		AggregateType: "scan_target",
+		AggregateID:   target.ID,
+		Payload: map[string]any{
+			"name":        target.Name,
+			"target_kind": target.TargetKind,
+			"profile":     target.Profile,
+			"tool_count":  len(target.Tools),
+		},
+		CreatedAt: now,
+	})
 
 	return target, nil
 }
@@ -195,7 +214,19 @@ func (s *Store) DeleteScanTargetForTenant(ctx context.Context, tenantID string, 
 	if err != nil {
 		return false, fmt.Errorf("delete scan target: %w", err)
 	}
-	return command.RowsAffected() > 0, nil
+	deleted := command.RowsAffected() > 0
+	if deleted {
+		_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+			TenantID:      strings.TrimSpace(tenantID),
+			EventType:     "scan_target.deleted",
+			SourceService: "control-plane",
+			AggregateType: "scan_target",
+			AggregateID:   strings.TrimSpace(targetID),
+			Payload:       map[string]any{},
+			CreatedAt:     time.Now().UTC(),
+		})
+	}
+	return deleted, nil
 }
 
 func (s *Store) RunScanTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error) {

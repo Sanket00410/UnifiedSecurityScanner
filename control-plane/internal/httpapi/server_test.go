@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,6 +29,9 @@ type stubAPIStore struct {
 	ingestionEvents          []models.IngestionEvent
 	ingestionWebhookResponse models.IngestionWebhookResponse
 	ingestionWebhookErr      error
+	platformEvents           []models.PlatformEvent
+	tenantOpsSnapshot        models.TenantOperationsSnapshot
+	operationalMetrics       models.OperationalMetrics
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -377,6 +381,44 @@ func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, _ string, _ str
 			Status: models.ScanJobStatusQueued,
 		},
 	}, nil
+}
+
+func (s *stubAPIStore) ListPlatformEventsForTenant(context.Context, string, string, int) ([]models.PlatformEvent, error) {
+	return s.platformEvents, nil
+}
+
+func (s *stubAPIStore) GetTenantOperationsSnapshot(_ context.Context, tenantID string) (models.TenantOperationsSnapshot, error) {
+	if strings.TrimSpace(s.tenantOpsSnapshot.TenantID) == "" {
+		s.tenantOpsSnapshot.TenantID = strings.TrimSpace(tenantID)
+	}
+	return s.tenantOpsSnapshot, nil
+}
+
+func (s *stubAPIStore) UpdateTenantLimitsForTenant(_ context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error) {
+	snapshot := s.tenantOpsSnapshot
+	snapshot.TenantID = strings.TrimSpace(tenantID)
+	snapshot.Limits.TenantID = strings.TrimSpace(tenantID)
+	snapshot.Limits.UpdatedBy = strings.TrimSpace(actor)
+	snapshot.Limits.UpdatedAt = time.Now().UTC()
+
+	if request.MaxTotalScanJobs != nil {
+		snapshot.Limits.MaxTotalScanJobs = *request.MaxTotalScanJobs
+	}
+	if request.MaxActiveScanJobs != nil {
+		snapshot.Limits.MaxActiveScanJobs = *request.MaxActiveScanJobs
+	}
+	if request.MaxScanTargets != nil {
+		snapshot.Limits.MaxScanTargets = *request.MaxScanTargets
+	}
+	if request.MaxIngestionSources != nil {
+		snapshot.Limits.MaxIngestionSources = *request.MaxIngestionSources
+	}
+	s.tenantOpsSnapshot = snapshot
+	return snapshot, nil
+}
+
+func (s *stubAPIStore) GetOperationalMetrics(context.Context) (models.OperationalMetrics, error) {
+	return s.operationalMetrics, nil
 }
 
 func (s *stubAPIStore) RegisterWorker(context.Context, models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error) {
@@ -1156,6 +1198,174 @@ func TestIngestionWebhookEndpointRejectsMissingOrInvalidToken(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(invalidTokenRecorder, invalidTokenRequest)
 	if invalidTokenRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for invalid ingestion token, got %d", invalidTokenRecorder.Code)
+	}
+}
+
+func TestMetricsEndpointReturnsPrometheusPayload(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		operationalMetrics: models.OperationalMetrics{
+			WorkersTotal:        2,
+			WorkersHealthy:      1,
+			ScanJobsTotal:       8,
+			ScanJobsQueued:      2,
+			ScanJobsRunning:     1,
+			ScanJobsCompleted:   4,
+			ScanJobsFailed:      1,
+			ScanTargetsTotal:    3,
+			IngestionSources:    2,
+			IngestionEvents:     5,
+			PlatformEventsTotal: 9,
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /metrics, got %d", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "uss_scan_jobs_total 8") {
+		t.Fatalf("expected scan job metric in payload, got %s", body)
+	}
+	if !strings.Contains(body, "uss_platform_events_total 9") {
+		t.Fatalf("expected platform events metric in payload, got %s", body)
+	}
+}
+
+func TestPlatformEventsAndTenantOperationsRoutes(t *testing.T) {
+	t.Parallel()
+
+	maxTotal := int64(25)
+	maxActive := int64(10)
+	maxTargets := int64(100)
+	maxIngestion := int64(20)
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		platformEvents: []models.PlatformEvent{
+			{
+				ID:        "event-1",
+				TenantID:  "org-1",
+				EventType: "scan_job.created",
+				CreatedAt: time.Now().UTC(),
+			},
+		},
+		tenantOpsSnapshot: models.TenantOperationsSnapshot{
+			TenantID: "org-1",
+			Limits: models.TenantLimits{
+				TenantID:            "org-1",
+				MaxTotalScanJobs:    10,
+				MaxActiveScanJobs:   5,
+				MaxScanTargets:      50,
+				MaxIngestionSources: 10,
+				UpdatedBy:           "seed",
+				UpdatedAt:           time.Now().UTC(),
+			},
+			Usage: models.TenantUsage{
+				TotalScanJobs:    3,
+				ActiveScanJobs:   2,
+				ScanTargets:      4,
+				IngestionSources: 1,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	eventsRecorder := httptest.NewRecorder()
+	eventsRequest := httptest.NewRequest(http.MethodGet, "/v1/events?type=scan_job.created", nil)
+	eventsRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(eventsRecorder, eventsRequest)
+	if eventsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for platform events, got %d", eventsRecorder.Code)
+	}
+
+	opsGetRecorder := httptest.NewRecorder()
+	opsGetRequest := httptest.NewRequest(http.MethodGet, "/v1/tenant/operations", nil)
+	opsGetRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(opsGetRecorder, opsGetRequest)
+	if opsGetRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for tenant operations get, got %d", opsGetRecorder.Code)
+	}
+
+	opsPutRecorder := httptest.NewRecorder()
+	opsPutRequest := httptest.NewRequest(http.MethodPut, "/v1/tenant/operations", strings.NewReader(fmt.Sprintf(`{
+		"max_total_scan_jobs": %d,
+		"max_active_scan_jobs": %d,
+		"max_scan_targets": %d,
+		"max_ingestion_sources": %d
+	}`, maxTotal, maxActive, maxTargets, maxIngestion)))
+	opsPutRequest.Header.Set("Authorization", "Bearer operator-token")
+	opsPutRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(opsPutRecorder, opsPutRequest)
+	if opsPutRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for tenant operations update, got %d", opsPutRecorder.Code)
+	}
+
+	var updated models.TenantOperationsSnapshot
+	if err := json.NewDecoder(opsPutRecorder.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode tenant operations snapshot: %v", err)
+	}
+	if updated.Limits.MaxTotalScanJobs != maxTotal || updated.Limits.MaxActiveScanJobs != maxActive {
+		t.Fatalf("unexpected updated tenant limits: %#v", updated.Limits)
+	}
+}
+
+func TestScanJobTenantLimitExceededReturnsTooManyRequests(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		createScanJobErr: &jobs.TenantLimitExceededError{
+			TenantID: "org-1",
+			Metric:   "max_total_scan_jobs",
+			Limit:    1,
+			Current:  1,
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/scan-jobs", strings.NewReader(`{
+		"target_kind":"repo",
+		"target":"c:/repo",
+		"profile":"balanced"
+	}`))
+	request.Header.Set("Authorization", "Bearer operator-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 for tenant limit exceeded, got %d", recorder.Code)
 	}
 }
 

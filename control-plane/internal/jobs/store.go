@@ -39,6 +39,7 @@ var (
 	scanTargetSequence              uint64
 	ingestionSourceSequence         uint64
 	ingestionEventSequence          uint64
+	platformEventSequence           uint64
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
 	ErrTaskNotFound                 = errors.New("task not found")
 	ErrProtectedToken               = errors.New("protected token")
@@ -51,6 +52,20 @@ var (
 	ErrInvalidExceptionDecision     = errors.New("invalid remediation exception")
 	ErrInvalidAssignmentDecision    = errors.New("invalid remediation assignment")
 )
+
+type TenantLimitExceededError struct {
+	TenantID string
+	Metric   string
+	Limit    int64
+	Current  int64
+}
+
+func (e *TenantLimitExceededError) Error() string {
+	if e == nil {
+		return "tenant limit exceeded"
+	}
+	return fmt.Sprintf("tenant limit exceeded for %s: current=%d limit=%d", e.Metric, e.Current, e.Limit)
+}
 
 type PolicyDeniedError struct {
 	PolicyID string
@@ -160,6 +175,10 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := s.enforceScanJobTenantLimitsTx(ctx, tx, job.TenantID); err != nil {
+		return models.ScanJob{}, err
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO scan_jobs (
 			id, tenant_id, target_kind, target, profile, requested_by,
@@ -229,6 +248,24 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 				return models.ScanJob{}, fmt.Errorf("insert policy approval: %w", err)
 			}
 		}
+	}
+
+	if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+		TenantID:      job.TenantID,
+		EventType:     "scan_job.created",
+		SourceService: "control-plane",
+		AggregateType: "scan_job",
+		AggregateID:   job.ID,
+		Payload: map[string]any{
+			"target_kind":   job.TargetKind,
+			"target":        job.Target,
+			"profile":       job.Profile,
+			"tool_count":    len(job.Tools),
+			"approval_mode": job.ApprovalMode,
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return models.ScanJob{}, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -329,6 +366,23 @@ func (s *Store) RegisterWorker(ctx context.Context, request models.WorkerRegistr
 		return models.WorkerRegistrationResponse{}, fmt.Errorf("register worker: %w", err)
 	}
 
+	if err := s.publishPlatformEvent(ctx, models.PlatformEvent{
+		EventType:     "worker.registered",
+		SourceService: "control-plane",
+		AggregateType: "worker",
+		AggregateID:   strings.TrimSpace(request.WorkerID),
+		Payload: map[string]any{
+			"lease_id":           leaseID,
+			"operating_system":   request.OperatingSystem,
+			"worker_version":     request.WorkerVersion,
+			"capability_count":   len(request.Capabilities),
+			"heartbeat_interval": heartbeatIntervalSeconds,
+		},
+		CreatedAt: now,
+	}); err != nil {
+		return models.WorkerRegistrationResponse{}, err
+	}
+
 	return models.WorkerRegistrationResponse{
 		Accepted:                 true,
 		LeaseID:                  leaseID,
@@ -368,6 +422,22 @@ func (s *Store) RecordHeartbeat(ctx context.Context, request models.HeartbeatReq
 	assignments, err := claimAssignmentsTx(ctx, tx, request.WorkerID, request.LeaseID, capabilitiesJSON, now, 3)
 	if err != nil {
 		return models.HeartbeatResponse{}, err
+	}
+
+	if len(assignments) > 0 {
+		if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+			EventType:     "worker.assignments.claimed",
+			SourceService: "control-plane",
+			AggregateType: "worker",
+			AggregateID:   strings.TrimSpace(request.WorkerID),
+			Payload: map[string]any{
+				"lease_id":         strings.TrimSpace(request.LeaseID),
+				"assignment_count": len(assignments),
+			},
+			CreatedAt: now,
+		}); err != nil {
+			return models.HeartbeatResponse{}, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -466,6 +536,23 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 	}
 
 	if err := recomputeScanJobStatusTx(ctx, tx, task.ScanJobID, now); err != nil {
+		return err
+	}
+
+	if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+		TenantID:      task.TenantID,
+		EventType:     "scan_task.finalized",
+		SourceService: "control-plane",
+		AggregateType: "scan_job",
+		AggregateID:   task.ScanJobID,
+		Payload: map[string]any{
+			"task_id":                task.TaskID,
+			"worker_id":              strings.TrimSpace(submission.WorkerID),
+			"final_state":            string(finalStatus),
+			"reported_finding_count": len(submission.ReportedFindings),
+		},
+		CreatedAt: now,
+	}); err != nil {
 		return err
 	}
 
