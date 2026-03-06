@@ -36,9 +36,15 @@ var (
 	remediationEvidenceSequence     uint64
 	assignmentSequence              uint64
 	notificationSequence            uint64
+	scanTargetSequence              uint64
+	ingestionSourceSequence         uint64
+	ingestionEventSequence          uint64
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
 	ErrTaskNotFound                 = errors.New("task not found")
 	ErrProtectedToken               = errors.New("protected token")
+	ErrIngestionSourceNotFound      = errors.New("ingestion source not found")
+	ErrInvalidIngestionToken        = errors.New("invalid ingestion token")
+	ErrIngestionSourceDisabled      = errors.New("ingestion source disabled")
 	ErrInvalidWaiver                = errors.New("invalid finding waiver")
 	ErrInvalidRemediationTransition = errors.New("invalid remediation transition")
 	ErrInvalidVerification          = errors.New("invalid remediation verification")

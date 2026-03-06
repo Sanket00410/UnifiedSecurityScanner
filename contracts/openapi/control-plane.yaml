@@ -291,6 +291,390 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/scan-presets:
+    get:
+      operationId: listScanPresets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Available scan presets
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ScanPreset"
+  /v1/scan-targets:
+    get:
+      operationId: listScanTargets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant scan targets
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ScanTarget"
+    post:
+      operationId: createScanTarget
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScanTargetRequest"
+      responses:
+        "201":
+          description: Scan target created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanTarget"
+  /v1/scan-targets/{targetId}:
+    get:
+      operationId: getScanTarget
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: targetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Scan target details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanTarget"
+        "404":
+          description: Scan target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: updateScanTarget
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: targetId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScanTargetRequest"
+      responses:
+        "200":
+          description: Scan target updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanTarget"
+        "404":
+          description: Scan target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteScanTarget
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: targetId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Scan target deleted
+        "404":
+          description: Scan target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/scan-targets/{targetId}/run:
+    post:
+      operationId: runScanTarget
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: targetId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunScanTargetRequest"
+      responses:
+        "201":
+          description: Scan target run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunScanTargetResponse"
+        "403":
+          description: Policy denied the requested run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Scan target not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/ingestion/sources:
+    get:
+      operationId: listIngestionSources
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant ingestion sources
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IngestionSource"
+    post:
+      operationId: createIngestionSource
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIngestionSourceRequest"
+      responses:
+        "201":
+          description: Ingestion source created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedIngestionSource"
+  /v1/ingestion/sources/{sourceId}:
+    get:
+      operationId: getIngestionSource
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ingestion source details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionSource"
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: updateIngestionSource
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateIngestionSourceRequest"
+      responses:
+        "200":
+          description: Ingestion source updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionSource"
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteIngestionSource
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Ingestion source deleted
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/ingestion/sources/{sourceId}/rotate-token:
+    post:
+      operationId: rotateIngestionSourceToken
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ingestion source token rotated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RotateIngestionSourceTokenResponse"
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/ingestion/events:
+    get:
+      operationId: listIngestionEvents
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: source_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Ingestion events
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IngestionEvent"
+  /ingest/webhooks/{sourceId}:
+    post:
+      operationId: ingestWebhookEvent
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-USS-Ingest-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestionWebhookRequest"
+      responses:
+        "200":
+          description: Duplicate event replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionWebhookResponse"
+        "202":
+          description: Ingestion event accepted and processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestionWebhookResponse"
+        "401":
+          description: Invalid or missing ingestion token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Ingestion source not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/workers/register:
     post:
       operationId: registerWorker
@@ -1672,6 +2056,345 @@ components:
         updated_at:
           type: string
           format: date-time
+    ScanPreset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - description
+        - target_kind
+        - profile
+        - tools
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        target_kind:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+    ScanTarget:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - name
+        - target_kind
+        - target
+        - profile
+        - tools
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+        created_by:
+          type: string
+        last_run_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateScanTargetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - target_kind
+        - target
+      properties:
+        name:
+          type: string
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+    UpdateScanTargetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+    RunScanTargetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+    RunScanTargetResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - target
+        - job
+      properties:
+        target:
+          $ref: "#/components/schemas/ScanTarget"
+        job:
+          $ref: "#/components/schemas/ScanJob"
+    IngestionSource:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - name
+        - provider
+        - enabled
+        - target_kind
+        - target
+        - profile
+        - tools
+        - created_by
+        - updated_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        enabled:
+          type: boolean
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+        created_by:
+          type: string
+        updated_by:
+          type: string
+        last_event_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateIngestionSourceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - target_kind
+        - target
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+        enabled:
+          type: boolean
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+    UpdateIngestionSourceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+        enabled:
+          type: boolean
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties: true
+    CreatedIngestionSource:
+      type: object
+      additionalProperties: false
+      required:
+        - source
+        - ingest_token
+      properties:
+        source:
+          $ref: "#/components/schemas/IngestionSource"
+        ingest_token:
+          type: string
+    RotateIngestionSourceTokenResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - source
+        - ingest_token
+      properties:
+        source:
+          $ref: "#/components/schemas/IngestionSource"
+        ingest_token:
+          type: string
+    IngestionEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - source_id
+        - event_type
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        source_id:
+          type: string
+        event_type:
+          type: string
+        external_id:
+          type: string
+        status:
+          type: string
+        error_message:
+          type: string
+        created_scan_job_id:
+          type: string
+        policy_id:
+          type: string
+        policy_rule_hits:
+          type: array
+          items:
+            type: string
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    IngestionWebhookRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        event_type:
+          type: string
+        external_id:
+          type: string
+        target_kind:
+          type: string
+        target:
+          type: string
+        profile:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+        requested_by:
+          type: string
+        labels:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+    IngestionWebhookResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - event
+        - duplicate
+      properties:
+        event:
+          $ref: "#/components/schemas/IngestionEvent"
+        job:
+          $ref: "#/components/schemas/ScanJob"
+        duplicate:
+          type: boolean
     ServiceMetadata:
       type: object
       additionalProperties: false

@@ -1,18 +1,24 @@
 import { FormEvent, useEffect, useState } from "react";
-import { clearToken, getBlob, getJSON, postJSON, putJSON, readToken, saveToken } from "./api";
+import { clearToken, deleteJSON, getBlob, getJSON, postJSON, putJSON, readToken, saveToken } from "./api";
 import {
   Asset,
   AuditEvent,
+  CreatedIngestionSource,
   Finding,
+  IngestionEvent,
+  IngestionSource,
   ListResponse,
   Notification,
   Policy,
   PolicyApproval,
   ReportSummary,
   Remediation,
+  RotatedIngestionSourceToken,
   RiskSummary,
   RouteKey,
   ScanJob,
+  ScanPreset,
+  ScanTarget,
   Session
 } from "./types";
 
@@ -139,12 +145,19 @@ export function App() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [scanJobs, setScanJobs] = useState<ScanJob[]>([]);
+  const [scanPresets, setScanPresets] = useState<ScanPreset[]>([]);
+  const [scanTargets, setScanTargets] = useState<ScanTarget[]>([]);
+  const [ingestionSources, setIngestionSources] = useState<IngestionSource[]>([]);
+  const [ingestionEvents, setIngestionEvents] = useState<IngestionEvent[]>([]);
   const [riskSummary, setRiskSummary] = useState<RiskSummary | null>(null);
 
   const [selectedFindingID, setSelectedFindingID] = useState("");
   const [selectedAssetID, setSelectedAssetID] = useState("");
   const [selectedPolicyID, setSelectedPolicyID] = useState("");
   const [selectedRemediationID, setSelectedRemediationID] = useState("");
+  const [selectedPresetID, setSelectedPresetID] = useState("");
+  const [selectedScanTargetID, setSelectedScanTargetID] = useState("");
+  const [selectedIngestionSourceID, setSelectedIngestionSourceID] = useState("");
 
   const [findingSearch, setFindingSearch] = useState("");
   const [findingSeverity, setFindingSeverity] = useState("");
@@ -168,11 +181,15 @@ export function App() {
   const [pendingExceptionRequests, setPendingExceptionRequests] = useState<any[]>([]);
   const [reportPreview, setReportPreview] = useState<ReportSummary | Record<string, any> | null>(null);
   const [scanJobResult, setScanJobResult] = useState("");
+  const [latestIngestionToken, setLatestIngestionToken] = useState("");
   const [reportExportFormat, setReportExportFormat] = useState<"json" | "csv">("json");
 
   const selectedFinding = findings.find((item) => item.finding_id === selectedFindingID) || null;
   const selectedPolicy = policies.find((item) => item.id === selectedPolicyID) || null;
   const selectedRemediation = remediations.find((item) => item.id === selectedRemediationID) || null;
+  const selectedPreset = scanPresets.find((item) => item.id === selectedPresetID) || null;
+  const selectedScanTarget = scanTargets.find((item) => item.id === selectedScanTargetID) || null;
+  const selectedIngestionSource = ingestionSources.find((item) => item.id === selectedIngestionSourceID) || null;
   const visibleRoutes = ROUTES.filter((item) => sessionHasAnyScope(session, item.anyScope));
   const visibleRouteKeys = visibleRoutes.map((item) => item.key);
 
@@ -215,10 +232,14 @@ export function App() {
       sessionCanReadRemediations ? getJSON<ListResponse<Notification>>("/v1/notifications") : Promise.resolve({ items: [] }),
       sessionCanReadAudit ? getJSON<ListResponse<AuditEvent>>("/v1/audit-events") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanJob>>("/v1/scan-jobs") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<ScanPreset>>("/v1/scan-presets") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<ScanTarget>>("/v1/scan-targets") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<IngestionSource>>("/v1/ingestion/sources") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<IngestionEvent>>("/v1/ingestion/events?limit=100") : Promise.resolve({ items: [] }),
       sessionCanReadFindings ? getJSON<RiskSummary>("/v1/risk/summary") : Promise.resolve(null)
     ]);
 
-    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, riskRes] = tasks;
+    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, presetsRes, targetsRes, sourcesRes, eventsRes, riskRes] = tasks;
 
     const nextFindings = findingsRes.status === "fulfilled" ? toItems(findingsRes.value) : [];
     const nextAssets = assetsRes.status === "fulfilled" ? toItems(assetsRes.value) : [];
@@ -228,6 +249,10 @@ export function App() {
     const nextNotifications = notificationsRes.status === "fulfilled" ? toItems(notificationsRes.value) : [];
     const nextAudit = auditRes.status === "fulfilled" ? toItems(auditRes.value) : [];
     const nextJobs = jobsRes.status === "fulfilled" ? toItems(jobsRes.value) : [];
+    const nextPresets = presetsRes.status === "fulfilled" ? toItems(presetsRes.value) : [];
+    const nextTargets = targetsRes.status === "fulfilled" ? toItems(targetsRes.value) : [];
+    const nextIngestionSources = sourcesRes.status === "fulfilled" ? toItems(sourcesRes.value) : [];
+    const nextIngestionEvents = eventsRes.status === "fulfilled" ? toItems(eventsRes.value) : [];
     const nextRisk = riskRes.status === "fulfilled" ? riskRes.value : null;
 
     setFindings(nextFindings);
@@ -238,12 +263,34 @@ export function App() {
     setNotifications(nextNotifications);
     setAuditEvents(nextAudit);
     setScanJobs(nextJobs);
+    setScanPresets(nextPresets);
+    setScanTargets(nextTargets);
+    setIngestionSources(nextIngestionSources);
+    setIngestionEvents(nextIngestionEvents);
     setRiskSummary(nextRisk);
 
     if (!selectedFindingID && nextFindings.length) setSelectedFindingID(nextFindings[0].finding_id);
     if (!selectedAssetID && nextAssets.length) setSelectedAssetID(nextAssets[0].asset_id);
     if (!selectedPolicyID && nextPolicies.length) setSelectedPolicyID(nextPolicies[0].id);
     if (!selectedRemediationID && nextRemediations.length) setSelectedRemediationID(nextRemediations[0].id);
+    if (nextPresets.length > 0) {
+      const hasSelectedPreset = nextPresets.some((item) => item.id === selectedPresetID);
+      if (!hasSelectedPreset) setSelectedPresetID(nextPresets[0].id);
+    } else {
+      setSelectedPresetID("");
+    }
+    if (nextTargets.length > 0) {
+      const hasSelectedTarget = nextTargets.some((item) => item.id === selectedScanTargetID);
+      if (!hasSelectedTarget) setSelectedScanTargetID(nextTargets[0].id);
+    } else {
+      setSelectedScanTargetID("");
+    }
+    if (nextIngestionSources.length > 0) {
+      const hasSelectedSource = nextIngestionSources.some((item) => item.id === selectedIngestionSourceID);
+      if (!hasSelectedSource) setSelectedIngestionSourceID(nextIngestionSources[0].id);
+    } else {
+      setSelectedIngestionSourceID("");
+    }
 
     setReportPreview({
       generated_at: new Date().toISOString(),
@@ -252,7 +299,9 @@ export function App() {
         assets: nextAssets.length,
         policies: nextPolicies.length,
         remediations: nextRemediations.length,
-        notifications: nextNotifications.length
+        notifications: nextNotifications.length,
+        scan_targets: nextTargets.length,
+        ingestion_sources: nextIngestionSources.length
       },
       risk_summary: nextRisk
     });
@@ -366,6 +415,11 @@ export function App() {
   const filteredRemediations = !remediationStatusFilter
     ? remediations
     : remediations.filter((item) => String(item.status || "").toLowerCase() === remediationStatusFilter);
+
+  const filteredIngestionEvents = ingestionEvents.filter((item) => {
+    if (!selectedIngestionSourceID) return true;
+    return String(item.source_id || "") === selectedIngestionSourceID;
+  });
 
   async function withRefresh(action: () => Promise<void>, successMessage: string) {
     try {
@@ -606,17 +660,164 @@ export function App() {
     event.preventDefault();
     if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
     const formData = new FormData(event.currentTarget);
+    const selectedPresetForJob = scanPresets.find((item) => item.id === String(formData.get("preset_id") || "").trim()) || null;
     withRefresh(
       async () => {
+        const targetKind = String(formData.get("target_kind") || "").trim() || selectedPresetForJob?.target_kind || "";
+        const target = String(formData.get("target") || "").trim();
+        const profile = String(formData.get("profile") || "").trim() || selectedPresetForJob?.profile || "balanced";
+        let tools = splitCSV(formData.get("tools"));
+        if (!tools.length && selectedPresetForJob?.tools?.length) {
+          tools = selectedPresetForJob.tools;
+        }
+
+        if (!targetKind || !target || !profile) {
+          throw new Error("target_kind, target, and profile are required.");
+        }
+
         const job = await postJSON<ScanJob>("/v1/scan-jobs", {
-          target_kind: String(formData.get("target_kind") || "").trim(),
-          target: String(formData.get("target") || "").trim(),
-          profile: String(formData.get("profile") || "").trim(),
-          tools: splitCSV(formData.get("tools"))
+          target_kind: targetKind,
+          target,
+          profile,
+          tools
         });
         setScanJobResult(`Created ${job.id} (${job.status}) with ${job.approval_mode || "standard"} approval mode.`);
       },
       "Scan job created."
+    );
+  }
+
+  function handleCreateScanTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    const formData = new FormData(event.currentTarget);
+    const selectedPresetForTarget = scanPresets.find((item) => item.id === String(formData.get("preset_id") || "").trim()) || null;
+    withRefresh(
+      async () => {
+        const targetKind = String(formData.get("target_kind") || "").trim() || selectedPresetForTarget?.target_kind || "";
+        const target = String(formData.get("target") || "").trim();
+        const profile = String(formData.get("profile") || "").trim() || selectedPresetForTarget?.profile || "balanced";
+        let tools = splitCSV(formData.get("tools"));
+        if (!tools.length && selectedPresetForTarget?.tools?.length) {
+          tools = selectedPresetForTarget.tools;
+        }
+        if (!targetKind || !target) {
+          throw new Error("target_kind and target are required.");
+        }
+
+        const created = await postJSON<ScanTarget>("/v1/scan-targets", {
+          name: String(formData.get("name") || "").trim(),
+          target_kind: targetKind,
+          target,
+          profile,
+          tools
+        });
+        setSelectedScanTargetID(created.id);
+      },
+      "Scan target saved."
+    );
+  }
+
+  function handleRunSelectedScanTarget() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedScanTargetID) {
+      setStatus({ message: "Select a saved scan target first.", error: true });
+      return;
+    }
+
+    withRefresh(
+      async () => {
+        const response = await postJSON<{ target: ScanTarget; job: ScanJob }>(
+          `/v1/scan-targets/${encodeURIComponent(selectedScanTargetID)}/run`,
+          {
+            profile: selectedPreset?.profile || "",
+            tools: selectedPreset?.tools || []
+          }
+        );
+        setScanJobResult(
+          `Created ${response.job.id} (${response.job.status}) from ${response.target.name || response.target.id} with ${response.job.approval_mode || "standard"} approval mode.`
+        );
+      },
+      "Saved target scan started."
+    );
+  }
+
+  function handleDeleteScanTarget() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedScanTargetID) {
+      setStatus({ message: "Select a saved scan target first.", error: true });
+      return;
+    }
+
+    withRefresh(
+      async () => {
+        await deleteJSON<void>(`/v1/scan-targets/${encodeURIComponent(selectedScanTargetID)}`);
+      },
+      "Scan target deleted."
+    );
+  }
+
+  function handleCreateIngestionSource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        const targetKind = String(formData.get("target_kind") || "").trim();
+        const target = String(formData.get("target") || "").trim();
+        if (!targetKind || !target) {
+          throw new Error("target_kind and target are required.");
+        }
+
+        const created = await postJSON<CreatedIngestionSource>("/v1/ingestion/sources", {
+          name: String(formData.get("name") || "").trim(),
+          provider: String(formData.get("provider") || "").trim() || "generic",
+          enabled: String(formData.get("enabled") || "true") === "true",
+          target_kind: targetKind,
+          target,
+          profile: String(formData.get("profile") || "").trim() || "balanced",
+          tools: splitCSV(formData.get("tools"))
+        });
+
+        setLatestIngestionToken(created.ingest_token || "");
+        setSelectedIngestionSourceID(created.source?.id || "");
+      },
+      "Ingestion source created."
+    );
+  }
+
+  function handleRotateIngestionSourceToken() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedIngestionSourceID) {
+      setStatus({ message: "Select an ingestion source first.", error: true });
+      return;
+    }
+
+    withRefresh(
+      async () => {
+        const rotated = await postJSON<RotatedIngestionSourceToken>(
+          `/v1/ingestion/sources/${encodeURIComponent(selectedIngestionSourceID)}/rotate-token`,
+          {}
+        );
+        setLatestIngestionToken(rotated.ingest_token || "");
+      },
+      "Ingestion token rotated."
+    );
+  }
+
+  function handleDeleteIngestionSource() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedIngestionSourceID) {
+      setStatus({ message: "Select an ingestion source first.", error: true });
+      return;
+    }
+
+    withRefresh(
+      async () => {
+        await deleteJSON<void>(`/v1/ingestion/sources/${encodeURIComponent(selectedIngestionSourceID)}`);
+        setLatestIngestionToken("");
+      },
+      "Ingestion source deleted."
     );
   }
 
@@ -959,16 +1160,120 @@ export function App() {
                 ))}
               </ul>
             </div>
-            <div>
-              <form className="form" onSubmit={handleCreateScanJob}>
-                <h3>Create Scan Job</h3>
-                <input name="target_kind" defaultValue="repo" required />
-                <input name="target" placeholder="c:/repo" required />
-                <input name="profile" defaultValue="balanced" required />
-                <input name="tools" placeholder="semgrep,trivy,gitleaks" />
-                <button type="submit" disabled={!canWriteScanJobs}>Create Job</button>
+            <div className="forms-col">
+              <form className="form" onSubmit={handleCreateScanJob} key={`guided-run-${selectedPreset?.id || "none"}`}>
+                <h3>Guided Quick Run</h3>
+                <select name="preset_id" value={selectedPresetID} onChange={(event) => setSelectedPresetID(event.target.value)}>
+                  <option value="">No preset</option>
+                  {scanPresets.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.target_kind}/{item.profile})
+                    </option>
+                  ))}
+                </select>
+                <input name="target_kind" defaultValue={selectedPreset?.target_kind || "repo"} required />
+                <input name="target" placeholder="c:/repo or https://app.example.com" required />
+                <input name="profile" defaultValue={selectedPreset?.profile || "balanced"} required />
+                <input
+                  name="tools"
+                  placeholder="semgrep,trivy,gitleaks"
+                  defaultValue={(selectedPreset?.tools || []).join(",")}
+                />
+                <button type="submit" disabled={!canWriteScanJobs}>Start Guided Scan</button>
               </form>
+
+              <form className="form" onSubmit={handleCreateScanTarget} key={`save-target-${selectedPreset?.id || "none"}`}>
+                <h3>Save Scan Target</h3>
+                <select name="preset_id" defaultValue={selectedPresetID}>
+                  <option value="">No preset</option>
+                  {scanPresets.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.target_kind}/{item.profile})
+                    </option>
+                  ))}
+                </select>
+                <input name="name" placeholder="name (example: Core API Repo)" />
+                <input name="target_kind" defaultValue={selectedPreset?.target_kind || "repo"} required />
+                <input name="target" placeholder="c:/repo or https://app.example.com" required />
+                <input name="profile" defaultValue={selectedPreset?.profile || "balanced"} />
+                <input name="tools" placeholder="optional csv tools" defaultValue={(selectedPreset?.tools || []).join(",")} />
+                <button type="submit" disabled={!canWriteScanJobs}>Save Target</button>
+              </form>
+
+              <div className="meta">
+                Saved targets: {scanTargets.length} | Selected: {selectedScanTarget?.name || "none"}
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Kind</th><th>Target</th><th>Profile</th><th>Last Run</th></tr></thead>
+                <tbody>
+                  {scanTargets.slice(0, 30).map((item) => (
+                    <tr key={item.id} className={selectedScanTargetID === item.id ? "selected" : ""} onClick={() => setSelectedScanTargetID(item.id)}>
+                      <td>{item.name || item.id}</td>
+                      <td>{item.target_kind || "unknown"}</td>
+                      <td>{item.target || "n/a"}</td>
+                      <td>{item.profile || "balanced"}</td>
+                      <td>{fmtDateTime(item.last_run_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="actions left">
+                <button disabled={!selectedScanTargetID || !canWriteScanJobs} onClick={handleRunSelectedScanTarget}>Run Selected Target</button>
+                <button className="ghost" disabled={!selectedScanTargetID || !canWriteScanJobs} onClick={handleDeleteScanTarget}>Delete Target</button>
+              </div>
               <div className="meta">{scanJobResult || "No scan jobs created in this session."}</div>
+
+              <form className="form" onSubmit={handleCreateIngestionSource}>
+                <h3>Automation Ingestion Source</h3>
+                <input name="name" placeholder="name (example: GitHub Core Repo)" />
+                <input name="provider" defaultValue="github" placeholder="provider (github/gitlab/jenkins/generic)" />
+                <select name="enabled" defaultValue="true">
+                  <option value="true">enabled</option>
+                  <option value="false">disabled</option>
+                </select>
+                <input name="target_kind" defaultValue="repo" required />
+                <input name="target" placeholder="https://github.com/org/repo or c:/repo" required />
+                <input name="profile" defaultValue="balanced" />
+                <input name="tools" placeholder="optional csv tools" />
+                <button type="submit" disabled={!canWriteScanJobs}>Create Ingestion Source</button>
+              </form>
+
+              <div className="meta">
+                Ingestion sources: {ingestionSources.length} | Selected: {selectedIngestionSource?.name || "none"}
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Provider</th><th>Kind</th><th>Target</th><th>Last Event</th></tr></thead>
+                <tbody>
+                  {ingestionSources.slice(0, 30).map((item) => (
+                    <tr key={item.id} className={selectedIngestionSourceID === item.id ? "selected" : ""} onClick={() => setSelectedIngestionSourceID(item.id)}>
+                      <td>{item.name || item.id}</td>
+                      <td>{item.provider || "generic"}</td>
+                      <td>{item.target_kind || "unknown"}</td>
+                      <td>{item.target || "n/a"}</td>
+                      <td>{fmtDateTime(item.last_event_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="actions left">
+                <button disabled={!selectedIngestionSourceID || !canWriteScanJobs} onClick={handleRotateIngestionSourceToken}>Rotate Ingestion Token</button>
+                <button className="ghost" disabled={!selectedIngestionSourceID || !canWriteScanJobs} onClick={handleDeleteIngestionSource}>Delete Ingestion Source</button>
+              </div>
+              <div className="meta">
+                {selectedIngestionSource
+                  ? `Webhook path: /ingest/webhooks/${selectedIngestionSource.id}`
+                  : "Select an ingestion source to view webhook details."}
+              </div>
+              {latestIngestionToken && <pre className="code">Newest ingest token (store securely): {latestIngestionToken}</pre>}
+              <h3>Ingestion Events</h3>
+              <ul className="list compact">
+                {filteredIngestionEvents.slice(0, 30).map((item) => (
+                  <li key={item.id}>
+                    {item.event_type || "event"} | {item.status || "unknown"} | job {item.created_scan_job_id || "n/a"} | {fmtDateTime(item.created_at)}
+                  </li>
+                ))}
+              </ul>
+
               <h3>Audit Events</h3>
               <ul className="list compact">
                 {auditEvents.slice(0, 30).map((item) => (

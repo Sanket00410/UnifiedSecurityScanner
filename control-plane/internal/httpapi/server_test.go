@@ -22,6 +22,12 @@ type stubAPIStore struct {
 	authenticated            bool
 	authErr                  error
 	createScanJobErr         error
+	scanPresets              []models.ScanPreset
+	scanTargets              []models.ScanTarget
+	ingestionSources         []models.IngestionSource
+	ingestionEvents          []models.IngestionEvent
+	ingestionWebhookResponse models.IngestionWebhookResponse
+	ingestionWebhookErr      error
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -103,6 +109,274 @@ func (s *stubAPIStore) CreateForTenant(context.Context, string, models.CreateSca
 
 func (s *stubAPIStore) GetForTenant(context.Context, string, string) (models.ScanJob, bool, error) {
 	return models.ScanJob{}, false, nil
+}
+
+func (s *stubAPIStore) ListScanPresetsForTenant(context.Context, string) ([]models.ScanPreset, error) {
+	return s.scanPresets, nil
+}
+
+func (s *stubAPIStore) ListScanTargetsForTenant(context.Context, string, int) ([]models.ScanTarget, error) {
+	return s.scanTargets, nil
+}
+
+func (s *stubAPIStore) GetScanTargetForTenant(_ context.Context, _ string, targetID string) (models.ScanTarget, bool, error) {
+	for _, item := range s.scanTargets {
+		if item.ID == targetID {
+			return item, true, nil
+		}
+	}
+	return models.ScanTarget{}, false, nil
+}
+
+func (s *stubAPIStore) CreateScanTargetForTenant(_ context.Context, tenantID string, actor string, request models.CreateScanTargetRequest) (models.ScanTarget, error) {
+	item := models.ScanTarget{
+		ID:         "scan-target-created",
+		TenantID:   tenantID,
+		Name:       request.Name,
+		TargetKind: request.TargetKind,
+		Target:     request.Target,
+		Profile:    request.Profile,
+		Tools:      request.Tools,
+		Labels:     request.Labels,
+		CreatedBy:  actor,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	}
+	if strings.TrimSpace(item.Name) == "" {
+		item.Name = "Unnamed Scan Target"
+	}
+	if strings.TrimSpace(item.Profile) == "" {
+		item.Profile = "balanced"
+	}
+	s.scanTargets = append(s.scanTargets, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateScanTargetForTenant(_ context.Context, _ string, targetID string, request models.UpdateScanTargetRequest) (models.ScanTarget, bool, error) {
+	for idx := range s.scanTargets {
+		if s.scanTargets[idx].ID != targetID {
+			continue
+		}
+		if strings.TrimSpace(request.Name) != "" {
+			s.scanTargets[idx].Name = strings.TrimSpace(request.Name)
+		}
+		if strings.TrimSpace(request.TargetKind) != "" {
+			s.scanTargets[idx].TargetKind = strings.TrimSpace(request.TargetKind)
+		}
+		if strings.TrimSpace(request.Target) != "" {
+			s.scanTargets[idx].Target = strings.TrimSpace(request.Target)
+		}
+		if strings.TrimSpace(request.Profile) != "" {
+			s.scanTargets[idx].Profile = strings.TrimSpace(request.Profile)
+		}
+		if len(request.Tools) > 0 {
+			s.scanTargets[idx].Tools = request.Tools
+		}
+		if request.Labels != nil {
+			s.scanTargets[idx].Labels = request.Labels
+		}
+		s.scanTargets[idx].UpdatedAt = time.Now().UTC()
+		return s.scanTargets[idx], true, nil
+	}
+
+	return models.ScanTarget{}, false, nil
+}
+
+func (s *stubAPIStore) DeleteScanTargetForTenant(_ context.Context, _ string, targetID string) (bool, error) {
+	next := make([]models.ScanTarget, 0, len(s.scanTargets))
+	deleted := false
+	for _, item := range s.scanTargets {
+		if item.ID == targetID {
+			deleted = true
+			continue
+		}
+		next = append(next, item)
+	}
+	s.scanTargets = next
+	return deleted, nil
+}
+
+func (s *stubAPIStore) RunScanTargetForTenant(_ context.Context, _ string, targetID string, _ string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error) {
+	for idx := range s.scanTargets {
+		if s.scanTargets[idx].ID != targetID {
+			continue
+		}
+
+		now := time.Now().UTC()
+		profile := strings.TrimSpace(request.Profile)
+		if profile == "" {
+			profile = s.scanTargets[idx].Profile
+		}
+		if profile == "" {
+			profile = "balanced"
+		}
+		tools := request.Tools
+		if len(tools) == 0 {
+			tools = s.scanTargets[idx].Tools
+		}
+
+		s.scanTargets[idx].LastRunAt = &now
+		s.scanTargets[idx].UpdatedAt = now
+
+		job := s.scanJob
+		if strings.TrimSpace(job.ID) == "" {
+			job = models.ScanJob{ID: "job-from-target", Status: models.ScanJobStatusQueued}
+		}
+		job.TargetKind = s.scanTargets[idx].TargetKind
+		job.Target = s.scanTargets[idx].Target
+		job.Profile = profile
+		job.Tools = tools
+		if job.Status == "" {
+			job.Status = models.ScanJobStatusQueued
+		}
+		return s.scanTargets[idx], job, true, nil
+	}
+
+	return models.ScanTarget{}, models.ScanJob{}, false, nil
+}
+
+func (s *stubAPIStore) ListIngestionSourcesForTenant(context.Context, string, int) ([]models.IngestionSource, error) {
+	return s.ingestionSources, nil
+}
+
+func (s *stubAPIStore) GetIngestionSourceForTenant(_ context.Context, _ string, sourceID string) (models.IngestionSource, bool, error) {
+	for _, item := range s.ingestionSources {
+		if item.ID == sourceID {
+			return item, true, nil
+		}
+	}
+	return models.IngestionSource{}, false, nil
+}
+
+func (s *stubAPIStore) CreateIngestionSourceForTenant(_ context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error) {
+	enabled := true
+	if request.Enabled != nil {
+		enabled = *request.Enabled
+	}
+
+	item := models.IngestionSource{
+		ID:          "ingestion-source-created",
+		TenantID:    tenantID,
+		Name:        strings.TrimSpace(request.Name),
+		Provider:    strings.TrimSpace(request.Provider),
+		Enabled:     enabled,
+		TargetKind:  strings.TrimSpace(request.TargetKind),
+		Target:      strings.TrimSpace(request.Target),
+		Profile:     strings.TrimSpace(request.Profile),
+		Tools:       request.Tools,
+		Labels:      request.Labels,
+		CreatedBy:   actor,
+		UpdatedBy:   actor,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+		LastEventAt: nil,
+	}
+	if item.Name == "" {
+		item.Name = "Unnamed Ingestion Source"
+	}
+	if item.Provider == "" {
+		item.Provider = "generic"
+	}
+	if item.Profile == "" {
+		item.Profile = "balanced"
+	}
+	if item.Labels == nil {
+		item.Labels = map[string]any{}
+	}
+	s.ingestionSources = append(s.ingestionSources, item)
+
+	return models.CreatedIngestionSource{
+		Source:      item,
+		IngestToken: "stub-ingest-token",
+	}, nil
+}
+
+func (s *stubAPIStore) UpdateIngestionSourceForTenant(_ context.Context, _ string, sourceID string, actor string, request models.UpdateIngestionSourceRequest) (models.IngestionSource, bool, error) {
+	for idx := range s.ingestionSources {
+		if s.ingestionSources[idx].ID != sourceID {
+			continue
+		}
+
+		if value := strings.TrimSpace(request.Name); value != "" {
+			s.ingestionSources[idx].Name = value
+		}
+		if value := strings.TrimSpace(request.Provider); value != "" {
+			s.ingestionSources[idx].Provider = value
+		}
+		if request.Enabled != nil {
+			s.ingestionSources[idx].Enabled = *request.Enabled
+		}
+		if value := strings.TrimSpace(request.TargetKind); value != "" {
+			s.ingestionSources[idx].TargetKind = value
+		}
+		if value := strings.TrimSpace(request.Target); value != "" {
+			s.ingestionSources[idx].Target = value
+		}
+		if value := strings.TrimSpace(request.Profile); value != "" {
+			s.ingestionSources[idx].Profile = value
+		}
+		if len(request.Tools) > 0 {
+			s.ingestionSources[idx].Tools = request.Tools
+		}
+		if request.Labels != nil {
+			s.ingestionSources[idx].Labels = request.Labels
+		}
+		s.ingestionSources[idx].UpdatedBy = actor
+		s.ingestionSources[idx].UpdatedAt = time.Now().UTC()
+		return s.ingestionSources[idx], true, nil
+	}
+
+	return models.IngestionSource{}, false, nil
+}
+
+func (s *stubAPIStore) DeleteIngestionSourceForTenant(_ context.Context, _ string, sourceID string) (bool, error) {
+	next := make([]models.IngestionSource, 0, len(s.ingestionSources))
+	deleted := false
+	for _, item := range s.ingestionSources {
+		if item.ID == sourceID {
+			deleted = true
+			continue
+		}
+		next = append(next, item)
+	}
+	s.ingestionSources = next
+	return deleted, nil
+}
+
+func (s *stubAPIStore) RotateIngestionSourceTokenForTenant(_ context.Context, _ string, sourceID string, _ string) (models.RotateIngestionSourceTokenResponse, bool, error) {
+	for _, item := range s.ingestionSources {
+		if item.ID == sourceID {
+			return models.RotateIngestionSourceTokenResponse{
+				Source:      item,
+				IngestToken: "rotated-stub-ingest-token",
+			}, true, nil
+		}
+	}
+	return models.RotateIngestionSourceTokenResponse{}, false, nil
+}
+
+func (s *stubAPIStore) ListIngestionEventsForTenant(context.Context, string, string, int) ([]models.IngestionEvent, error) {
+	return s.ingestionEvents, nil
+}
+
+func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, _ string, _ string, _ models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error) {
+	if s.ingestionWebhookErr != nil {
+		return models.IngestionWebhookResponse{}, s.ingestionWebhookErr
+	}
+	if s.ingestionWebhookResponse.Event.ID != "" {
+		return s.ingestionWebhookResponse, nil
+	}
+	return models.IngestionWebhookResponse{
+		Event: models.IngestionEvent{
+			ID:       "ingestion-event-1",
+			Status:   "queued",
+			SourceID: "ingestion-source-created",
+		},
+		Job: &models.ScanJob{
+			ID:     "job-ingestion-1",
+			Status: models.ScanJobStatusQueued,
+		},
+	}, nil
 }
 
 func (s *stubAPIStore) RegisterWorker(context.Context, models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error) {
@@ -570,6 +844,318 @@ func TestScanJobPolicyDeniedReturnsForbidden(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", recorder.Code)
+	}
+}
+
+func TestScanPresetsEndpointReturnsItems(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		scanPresets: []models.ScanPreset{
+			{
+				ID:         "repo-balanced",
+				Name:       "Repository Balanced",
+				TargetKind: "repo",
+				Profile:    "balanced",
+				Tools:      []string{"semgrep", "trivy"},
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/scan-presets", nil)
+	request.Header.Set("Authorization", "Bearer operator-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+
+	var payload struct {
+		Items []models.ScanPreset `json:"items"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode scan preset list: %v", err)
+	}
+	if len(payload.Items) != 1 || payload.Items[0].ID != "repo-balanced" {
+		t.Fatalf("unexpected scan presets payload: %#v", payload.Items)
+	}
+}
+
+func TestScanTargetRoutesSupportCrudAndRun(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		scanJob: models.ScanJob{
+			ID:     "job-1",
+			Status: models.ScanJobStatusQueued,
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/scan-targets", strings.NewReader(`{
+		"name": "Repo Main",
+		"target_kind": "repo",
+		"target": "c:/repo/main",
+		"profile": "balanced",
+		"tools": ["semgrep","trivy","gitleaks"]
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer operator-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for scan target create, got %d", createRecorder.Code)
+	}
+
+	var created models.ScanTarget
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created scan target: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("expected created scan target id")
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/scan-targets", nil)
+	listRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for scan target list, got %d", listRecorder.Code)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPut, "/v1/scan-targets/"+created.ID, strings.NewReader(`{
+		"name":"Repo Main Updated",
+		"profile":"fast"
+	}`))
+	updateRequest.Header.Set("Authorization", "Bearer operator-token")
+	updateRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for scan target update, got %d", updateRecorder.Code)
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runRequest := httptest.NewRequest(http.MethodPost, "/v1/scan-targets/"+created.ID+"/run", strings.NewReader(`{"profile":"runtime"}`))
+	runRequest.Header.Set("Authorization", "Bearer operator-token")
+	runRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(runRecorder, runRequest)
+	if runRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for scan target run, got %d", runRecorder.Code)
+	}
+
+	var runPayload struct {
+		Target models.ScanTarget `json:"target"`
+		Job    models.ScanJob    `json:"job"`
+	}
+	if err := json.NewDecoder(runRecorder.Body).Decode(&runPayload); err != nil {
+		t.Fatalf("decode run payload: %v", err)
+	}
+	if runPayload.Job.ID == "" || runPayload.Target.ID != created.ID {
+		t.Fatalf("unexpected run payload: %#v", runPayload)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/scan-targets/"+created.ID, nil)
+	deleteRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for scan target delete, got %d", deleteRecorder.Code)
+	}
+}
+
+func TestIngestionSourceRoutesSupportCrudRotateAndListEvents(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		ingestionEvents: []models.IngestionEvent{
+			{
+				ID:       "event-1",
+				TenantID: "org-1",
+				SourceID: "ingestion-source-created",
+				Status:   "queued",
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/ingestion/sources", strings.NewReader(`{
+		"name":"GitHub Core Repo",
+		"provider":"github",
+		"target_kind":"repo",
+		"target":"https://github.com/acme/core",
+		"profile":"balanced",
+		"tools":["semgrep","trivy","gitleaks"]
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer operator-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for ingestion source create, got %d", createRecorder.Code)
+	}
+
+	var created models.CreatedIngestionSource
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode ingestion source create payload: %v", err)
+	}
+	if created.Source.ID == "" || created.IngestToken == "" {
+		t.Fatalf("expected source id and ingest token, got %#v", created)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/ingestion/sources", nil)
+	listRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ingestion source list, got %d", listRecorder.Code)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPut, "/v1/ingestion/sources/"+created.Source.ID, strings.NewReader(`{
+		"profile":"fast"
+	}`))
+	updateRequest.Header.Set("Authorization", "Bearer operator-token")
+	updateRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ingestion source update, got %d", updateRecorder.Code)
+	}
+
+	rotateRecorder := httptest.NewRecorder()
+	rotateRequest := httptest.NewRequest(http.MethodPost, "/v1/ingestion/sources/"+created.Source.ID+"/rotate-token", nil)
+	rotateRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(rotateRecorder, rotateRequest)
+	if rotateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ingestion source token rotation, got %d", rotateRecorder.Code)
+	}
+
+	eventsRecorder := httptest.NewRecorder()
+	eventsRequest := httptest.NewRequest(http.MethodGet, "/v1/ingestion/events", nil)
+	eventsRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(eventsRecorder, eventsRequest)
+	if eventsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ingestion events list, got %d", eventsRecorder.Code)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/ingestion/sources/"+created.Source.ID, nil)
+	deleteRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for ingestion source delete, got %d", deleteRecorder.Code)
+	}
+}
+
+func TestIngestionWebhookEndpointHandlesAcceptedAndDuplicate(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		ingestionWebhookResponse: models.IngestionWebhookResponse{
+			Event: models.IngestionEvent{
+				ID:       "ingestion-event-1",
+				SourceID: "ingestion-source-1",
+				Status:   "queued",
+			},
+			Job: &models.ScanJob{
+				ID:     "job-1",
+				Status: models.ScanJobStatusQueued,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	acceptedRecorder := httptest.NewRecorder()
+	acceptedRequest := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/ingestion-source-1", strings.NewReader(`{
+		"event_type":"github.push",
+		"external_id":"evt-1"
+	}`))
+	acceptedRequest.Header.Set(ingestionTokenHeader, "stub-token")
+	acceptedRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(acceptedRecorder, acceptedRequest)
+	if acceptedRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for webhook accepted, got %d", acceptedRecorder.Code)
+	}
+
+	store.ingestionWebhookResponse.Duplicate = true
+	duplicateRecorder := httptest.NewRecorder()
+	duplicateRequest := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/ingestion-source-1", strings.NewReader(`{
+		"event_type":"github.push",
+		"external_id":"evt-1"
+	}`))
+	duplicateRequest.Header.Set(ingestionTokenHeader, "stub-token")
+	duplicateRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(duplicateRecorder, duplicateRequest)
+	if duplicateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for duplicate webhook, got %d", duplicateRecorder.Code)
+	}
+}
+
+func TestIngestionWebhookEndpointRejectsMissingOrInvalidToken(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{}
+	server := New(config.Load(), store)
+
+	missingTokenRecorder := httptest.NewRecorder()
+	missingTokenRequest := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/source-1", strings.NewReader(`{}`))
+	missingTokenRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(missingTokenRecorder, missingTokenRequest)
+	if missingTokenRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing ingestion token, got %d", missingTokenRecorder.Code)
+	}
+
+	store.ingestionWebhookErr = jobs.ErrInvalidIngestionToken
+	invalidTokenRecorder := httptest.NewRecorder()
+	invalidTokenRequest := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/source-1", strings.NewReader(`{}`))
+	invalidTokenRequest.Header.Set(ingestionTokenHeader, "invalid-token")
+	invalidTokenRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(invalidTokenRecorder, invalidTokenRequest)
+	if invalidTokenRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid ingestion token, got %d", invalidTokenRecorder.Code)
 	}
 }
 

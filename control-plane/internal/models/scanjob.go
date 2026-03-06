@@ -34,6 +34,53 @@ type ScanJob struct {
 	UpdatedAt    time.Time     `json:"updated_at"`
 }
 
+type ScanPreset struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	TargetKind  string   `json:"target_kind"`
+	Profile     string   `json:"profile"`
+	Tools       []string `json:"tools"`
+}
+
+type ScanTarget struct {
+	ID         string         `json:"id"`
+	TenantID   string         `json:"tenant_id"`
+	Name       string         `json:"name"`
+	TargetKind string         `json:"target_kind"`
+	Target     string         `json:"target"`
+	Profile    string         `json:"profile"`
+	Tools      []string       `json:"tools"`
+	Labels     map[string]any `json:"labels,omitempty"`
+	CreatedBy  string         `json:"created_by"`
+	LastRunAt  *time.Time     `json:"last_run_at,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+}
+
+type CreateScanTargetRequest struct {
+	Name       string         `json:"name"`
+	TargetKind string         `json:"target_kind"`
+	Target     string         `json:"target"`
+	Profile    string         `json:"profile"`
+	Tools      []string       `json:"tools"`
+	Labels     map[string]any `json:"labels,omitempty"`
+}
+
+type UpdateScanTargetRequest struct {
+	Name       string         `json:"name"`
+	TargetKind string         `json:"target_kind"`
+	Target     string         `json:"target"`
+	Profile    string         `json:"profile"`
+	Tools      []string       `json:"tools"`
+	Labels     map[string]any `json:"labels,omitempty"`
+}
+
+type RunScanTargetRequest struct {
+	Profile string   `json:"profile"`
+	Tools   []string `json:"tools"`
+}
+
 type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

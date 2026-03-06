@@ -28,6 +28,8 @@ import (
 //go:embed static/*
 var staticAssets embed.FS
 
+const ingestionTokenHeader = "X-USS-Ingest-Token"
+
 type Server struct {
 	cfg           config.Config
 	httpServer    *http.Server
@@ -48,6 +50,21 @@ type apiStore interface {
 	ListForTenant(ctx context.Context, tenantID string, limit int) ([]models.ScanJob, error)
 	CreateForTenant(ctx context.Context, tenantID string, request models.CreateScanJobRequest) (models.ScanJob, error)
 	GetForTenant(ctx context.Context, tenantID string, id string) (models.ScanJob, bool, error)
+	ListScanPresetsForTenant(ctx context.Context, tenantID string) ([]models.ScanPreset, error)
+	ListScanTargetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.ScanTarget, error)
+	GetScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (models.ScanTarget, bool, error)
+	CreateScanTargetForTenant(ctx context.Context, tenantID string, actor string, request models.CreateScanTargetRequest) (models.ScanTarget, error)
+	UpdateScanTargetForTenant(ctx context.Context, tenantID string, targetID string, request models.UpdateScanTargetRequest) (models.ScanTarget, bool, error)
+	DeleteScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (bool, error)
+	RunScanTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error)
+	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
+	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
+	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
+	UpdateIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string, actor string, request models.UpdateIngestionSourceRequest) (models.IngestionSource, bool, error)
+	DeleteIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (bool, error)
+	RotateIngestionSourceTokenForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceTokenResponse, bool, error)
+	ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error)
+	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error)
 	RegisterWorker(ctx context.Context, request models.WorkerRegistrationRequest) (models.WorkerRegistrationResponse, error)
 	RecordHeartbeat(ctx context.Context, request models.HeartbeatRequest) (models.HeartbeatResponse, error)
 	ListFindingsForTenant(ctx context.Context, tenantID string, limit int) ([]models.CanonicalFinding, error)
@@ -128,6 +145,29 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost: auth.PermissionScanJobsWrite,
 	}, "scan_jobs", "scan_job", server.handleScanJobs))
 	mux.HandleFunc("/v1/scan-jobs/", server.withUserAuth(auth.PermissionScanJobsRead, "scan_job.read", "scan_job", server.handleScanJobByID))
+	mux.HandleFunc("/v1/scan-presets", server.withUserAuth(auth.PermissionScanJobsRead, "scan_presets.list", "scan_preset", server.handleScanPresets))
+	mux.HandleFunc("/v1/scan-targets", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionScanJobsRead,
+		http.MethodPost: auth.PermissionScanJobsWrite,
+	}, "scan_targets", "scan_target", server.handleScanTargets))
+	mux.HandleFunc("/v1/scan-targets/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionScanJobsRead,
+		http.MethodPut:    auth.PermissionScanJobsWrite,
+		http.MethodDelete: auth.PermissionScanJobsWrite,
+		http.MethodPost:   auth.PermissionScanJobsWrite,
+	}, "scan_target", "scan_target", server.handleScanTargetRoute))
+	mux.HandleFunc("/v1/ingestion/sources", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionScanJobsRead,
+		http.MethodPost: auth.PermissionScanJobsWrite,
+	}, "ingestion_sources", "ingestion_source", server.handleIngestionSources))
+	mux.HandleFunc("/v1/ingestion/sources/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionScanJobsRead,
+		http.MethodPut:    auth.PermissionScanJobsWrite,
+		http.MethodDelete: auth.PermissionScanJobsWrite,
+		http.MethodPost:   auth.PermissionScanJobsWrite,
+	}, "ingestion_source", "ingestion_source", server.handleIngestionSourceRoute))
+	mux.HandleFunc("/v1/ingestion/events", server.withUserAuth(auth.PermissionScanJobsRead, "ingestion_events.list", "ingestion_event", server.handleIngestionEvents))
+	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionFindingsRead,
@@ -425,6 +465,420 @@ func (s *Server) handleScanJobByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) handleScanPresets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	items, err := s.store.ListScanPresetsForTenant(r.Context(), principal.OrganizationID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_scan_presets_failed", "scan presets could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleScanTargets(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListScanTargetsForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_scan_targets_failed", "scan targets could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateScanTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		if strings.TrimSpace(request.TargetKind) == "" || strings.TrimSpace(request.Target) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "target_kind and target are required")
+			return
+		}
+
+		item, err := s.store.CreateScanTargetForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "create_scan_target_failed", "scan target could not be created")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleScanTargetRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-targets/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "scan_target_route_not_found", "the requested scan target route was not found")
+		return
+	}
+
+	targetID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetScanTargetForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_scan_target_failed", "scan target could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "scan_target_not_found", "scan target was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpdateScanTargetRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, found, err := s.store.UpdateScanTargetForTenant(r.Context(), principal.OrganizationID, targetID, request)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "update_scan_target_failed", "scan target could not be updated")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "scan_target_not_found", "scan target was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodDelete:
+			deleted, err := s.store.DeleteScanTargetForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "delete_scan_target_failed", "scan target could not be deleted")
+				return
+			}
+			if !deleted {
+				s.writeError(w, http.StatusNotFound, "scan_target_not_found", "scan target was not found")
+				return
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "run" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		defer r.Body.Close()
+
+		var request models.RunScanTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		target, job, found, err := s.store.RunScanTargetForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+		if err != nil {
+			var denied *jobs.PolicyDeniedError
+			if errors.As(err, &denied) {
+				s.writeJSON(w, http.StatusForbidden, map[string]any{
+					"code":      "policy_denied",
+					"message":   denied.Error(),
+					"policy_id": denied.PolicyID,
+					"rule_hits": denied.RuleHits,
+				})
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "run_scan_target_failed", "scan target could not be executed")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "scan_target_not_found", "scan target was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, map[string]any{
+			"target": target,
+			"job":    job,
+		})
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "scan_target_route_not_found", "the requested scan target route was not found")
+}
+
+func (s *Server) handleIngestionSources(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListIngestionSourcesForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_ingestion_sources_failed", "ingestion sources could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateIngestionSourceRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		if strings.TrimSpace(request.TargetKind) == "" || strings.TrimSpace(request.Target) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "target_kind and target are required")
+			return
+		}
+
+		item, err := s.store.CreateIngestionSourceForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "create_ingestion_source_failed", "ingestion source could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleIngestionSourceRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/ingestion/sources/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "ingestion_source_route_not_found", "the requested ingestion source route was not found")
+		return
+	}
+
+	sourceID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetIngestionSourceForTenant(r.Context(), principal.OrganizationID, sourceID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_ingestion_source_failed", "ingestion source could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpdateIngestionSourceRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, found, err := s.store.UpdateIngestionSourceForTenant(r.Context(), principal.OrganizationID, sourceID, principal.Email, request)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "update_ingestion_source_failed", "ingestion source could not be updated")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodDelete:
+			deleted, err := s.store.DeleteIngestionSourceForTenant(r.Context(), principal.OrganizationID, sourceID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "delete_ingestion_source_failed", "ingestion source could not be deleted")
+				return
+			}
+			if !deleted {
+				s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "rotate-token" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		rotated, found, err := s.store.RotateIngestionSourceTokenForTenant(r.Context(), principal.OrganizationID, sourceID, principal.Email)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "rotate_ingestion_source_token_failed", "ingestion source token could not be rotated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, rotated)
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "ingestion_source_route_not_found", "the requested ingestion source route was not found")
+}
+
+func (s *Server) handleIngestionEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	sourceID := strings.TrimSpace(r.URL.Query().Get("source_id"))
+	items, err := s.store.ListIngestionEventsForTenant(r.Context(), principal.OrganizationID, sourceID, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_ingestion_events_failed", "ingestion events could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	sourceID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/ingest/webhooks/"))
+	if idx := strings.Index(sourceID, "/"); idx >= 0 {
+		sourceID = strings.TrimSpace(sourceID[:idx])
+	}
+	if sourceID == "" {
+		s.writeError(w, http.StatusNotFound, "ingestion_webhook_not_found", "the requested webhook endpoint was not found")
+		return
+	}
+
+	token := strings.TrimSpace(r.Header.Get(ingestionTokenHeader))
+	if token == "" {
+		token = auth.ParseBearerToken(r.Header.Get("Authorization"))
+	}
+	if token == "" {
+		s.writeError(w, http.StatusUnauthorized, "invalid_ingestion_token", "a webhook ingestion token is required")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.IngestionWebhookRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	response, err := s.store.HandleIngestionWebhook(r.Context(), sourceID, token, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrIngestionSourceNotFound):
+			s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
+		case errors.Is(err, jobs.ErrInvalidIngestionToken):
+			s.writeError(w, http.StatusUnauthorized, "invalid_ingestion_token", "the webhook ingestion token is invalid")
+		case errors.Is(err, jobs.ErrIngestionSourceDisabled):
+			s.writeError(w, http.StatusConflict, "ingestion_source_disabled", "ingestion source is disabled")
+		case strings.Contains(strings.ToLower(err.Error()), "requires target_kind and target"):
+			s.writeError(w, http.StatusBadRequest, "validation_error", "ingestion event requires target_kind and target")
+		default:
+			s.writeError(w, http.StatusInternalServerError, "ingestion_webhook_failed", "webhook ingestion could not be processed")
+		}
+		return
+	}
+
+	status := http.StatusAccepted
+	if response.Duplicate {
+		status = http.StatusOK
+	}
+	s.writeJSON(w, status, response)
 }
 
 func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {
@@ -2092,6 +2546,18 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/v1/scan-jobs/"):
 		return strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-jobs/"))
+	case strings.HasPrefix(r.URL.Path, "/v1/scan-targets/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-targets/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/ingestion/sources/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/ingestion/sources/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/auth/tokens/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/auth/tokens/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {

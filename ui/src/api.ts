@@ -78,6 +78,12 @@ export function putJSON<T>(path: string, body: unknown) {
   });
 }
 
+export function deleteJSON<T>(path: string) {
+  return request<T>(path, {
+    method: "DELETE"
+  });
+}
+
 export function getBlob(path: string) {
   return requestBlob(path, { method: "GET" });
 }

@@ -7,7 +7,7 @@ This guide runs the new `ui/` app with the control plane, worker, and PostgreSQL
 - Docker Desktop (for PostgreSQL)
 - Go (for control-plane API/scheduler)
 - Rust + Cargo (for worker runtime)
-- Node.js 20+ + npm (for dedicated UI)
+- Node.js 20+ + npm (for dedicated UI local dev) or Docker UI mode
 - At least one scanner binary available in PATH for real scan execution:
   - recommended first path: `semgrep`, `gitleaks`, `trivy`
 
@@ -74,18 +74,37 @@ go run .\cmd\api
 
 Then opening `http://localhost:8080/` redirects to `/ui/`.
 
-## Use the Dedicated UI
+## Use the Dedicated UI (Guided Scan Flow)
 
 - Open `http://localhost:5173`
 - Token: `uss-local-admin-token`
-- Go to **Operations** and create a scan job:
-  - target_kind: `repo`
-  - target: local repo path or allowed target
-  - profile: `balanced`
-  - tools: `semgrep,gitleaks,trivy`
+- Go to **Operations**:
+  - use **Guided Quick Run**:
+    - select a preset (optional)
+    - set `target_kind` + `target`
+    - start scan with one click
+  - use **Save Scan Target** to store reusable targets
+  - select a saved target and click **Run Selected Target** for one-click reruns
+  - use **Automation Ingestion Source** to create webhook-driven scan automation:
+    - create a source with provider + default target/profile/tools
+    - copy the generated ingest token (shown once in UI)
+    - use displayed webhook path `/ingest/webhooks/{sourceId}` in your CI/repo webhook
+    - rotate token anytime with **Rotate Ingestion Token**
+    - monitor automation in **Ingestion Events**
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
   - `/v1/reports/findings/export?format=json|csv`
+
+Backend API endpoints used by the guided UI:
+- `GET /v1/scan-presets`
+- `GET/POST /v1/scan-targets`
+- `GET/PUT/DELETE /v1/scan-targets/{id}`
+- `POST /v1/scan-targets/{id}/run`
+- `GET/POST /v1/ingestion/sources`
+- `GET/PUT/DELETE /v1/ingestion/sources/{id}`
+- `POST /v1/ingestion/sources/{id}/rotate-token`
+- `GET /v1/ingestion/events`
+- `POST /ingest/webhooks/{sourceId}` with `X-USS-Ingest-Token`
 
 ## Dedicated UI in Docker (standalone)
 
@@ -110,10 +129,5 @@ docker compose -f .\ops\docker-compose.ui.yml up -d ui-prod
 You can run end-to-end as soon as all prerequisites are installed and the 4 services are up.
 
 Typical setup time on a fresh machine:
-- install Node.js + npm: 5-10 minutes
-- `npm install` in `ui/`: 1-3 minutes
-- start stack: 1-2 minutes
-
-Estimated total: **~10-15 minutes** from a fresh environment.
-
-If Node/npm is already installed: **~2-5 minutes**.
+- Docker-only UI path: 2-6 minutes
+- local Node/npm UI path: 10-15 minutes

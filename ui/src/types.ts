@@ -120,8 +120,72 @@ export type ScanJob = {
   target_kind?: string;
   target?: string;
   profile?: string;
+  tools?: string[];
   status?: string;
   approval_mode?: string;
+};
+
+export type ScanPreset = {
+  id: string;
+  name: string;
+  description?: string;
+  target_kind: string;
+  profile: string;
+  tools: string[];
+};
+
+export type ScanTarget = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  target_kind: string;
+  target: string;
+  profile: string;
+  tools: string[];
+  labels?: Record<string, any>;
+  created_by?: string;
+  last_run_at?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type IngestionSource = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  provider?: string;
+  enabled?: boolean;
+  target_kind: string;
+  target: string;
+  profile: string;
+  tools: string[];
+  labels?: Record<string, any>;
+  created_by?: string;
+  updated_by?: string;
+  last_event_at?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type IngestionEvent = {
+  id: string;
+  source_id?: string;
+  event_type?: string;
+  external_id?: string;
+  status?: string;
+  error_message?: string;
+  created_scan_job_id?: string;
+  created_at?: string;
+};
+
+export type CreatedIngestionSource = {
+  source: IngestionSource;
+  ingest_token: string;
+};
+
+export type RotatedIngestionSourceToken = {
+  source: IngestionSource;
+  ingest_token: string;
 };
 
 export type RiskSummary = {
