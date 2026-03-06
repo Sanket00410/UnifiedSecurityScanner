@@ -53,6 +53,21 @@ type apiStore interface {
 	ListScanPresetsForTenant(ctx context.Context, tenantID string) ([]models.ScanPreset, error)
 	ListScanEngineControlsForTenant(ctx context.Context, tenantID string, targetKind string, limit int) ([]models.ScanEngineControl, error)
 	UpsertScanEngineControlForTenant(ctx context.Context, tenantID string, adapterID string, actor string, request models.UpsertScanEngineControlRequest) (models.ScanEngineControl, error)
+	ListWebTargetsForTenant(ctx context.Context, tenantID string, targetType string, limit int) ([]models.WebTarget, error)
+	GetWebTargetForTenant(ctx context.Context, tenantID string, targetID string) (models.WebTarget, bool, error)
+	CreateWebTargetForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebTargetRequest) (models.WebTarget, error)
+	UpdateWebTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpdateWebTargetRequest) (models.WebTarget, bool, error)
+	DeleteWebTargetForTenant(ctx context.Context, tenantID string, targetID string) (bool, error)
+	GetWebCrawlPolicyForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCrawlPolicy, bool, error)
+	UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCrawlPolicyRequest) (models.WebCrawlPolicy, error)
+	GetWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageBaseline, bool, error)
+	UpsertWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCoverageBaselineRequest) (models.WebCoverageBaseline, error)
+	EvaluateWebTargetScopeForTenant(ctx context.Context, tenantID string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error)
+	ListWebAuthProfilesForTenant(ctx context.Context, tenantID string, limit int) ([]models.WebAuthProfile, error)
+	GetWebAuthProfileForTenant(ctx context.Context, tenantID string, profileID string) (models.WebAuthProfile, bool, error)
+	CreateWebAuthProfileForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebAuthProfileRequest) (models.WebAuthProfile, error)
+	UpdateWebAuthProfileForTenant(ctx context.Context, tenantID string, profileID string, actor string, request models.UpdateWebAuthProfileRequest) (models.WebAuthProfile, bool, error)
+	DeleteWebAuthProfileForTenant(ctx context.Context, tenantID string, profileID string) (bool, error)
 	ListScanTargetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.ScanTarget, error)
 	GetScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (models.ScanTarget, bool, error)
 	CreateScanTargetForTenant(ctx context.Context, tenantID string, actor string, request models.CreateScanTargetRequest) (models.ScanTarget, error)
@@ -203,6 +218,24 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/v1/scan-engine-controls/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodPut: auth.PermissionPoliciesWrite,
 	}, "scan_engine_control", "scan_engine_control", server.handleScanEngineControlRoute))
+	mux.HandleFunc("/v1/web-targets", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionScanJobsRead,
+		http.MethodPost: auth.PermissionScanJobsWrite,
+	}, "web_targets", "web_target", server.handleWebTargets))
+	mux.HandleFunc("/v1/web-targets/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionScanJobsRead,
+		http.MethodPut:    auth.PermissionScanJobsWrite,
+		http.MethodDelete: auth.PermissionScanJobsWrite,
+	}, "web_target", "web_target", server.handleWebTargetRoute))
+	mux.HandleFunc("/v1/web-auth-profiles", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionScanJobsRead,
+		http.MethodPost: auth.PermissionScanJobsWrite,
+	}, "web_auth_profiles", "web_auth_profile", server.handleWebAuthProfiles))
+	mux.HandleFunc("/v1/web-auth-profiles/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionScanJobsRead,
+		http.MethodPut:    auth.PermissionScanJobsWrite,
+		http.MethodDelete: auth.PermissionScanJobsWrite,
+	}, "web_auth_profile", "web_auth_profile", server.handleWebAuthProfileRoute))
 	mux.HandleFunc("/v1/scan-targets", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionScanJobsRead,
 		http.MethodPost: auth.PermissionScanJobsWrite,
@@ -750,6 +783,368 @@ func (s *Server) handleScanEngineControlRoute(w http.ResponseWriter, r *http.Req
 	}
 
 	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleWebTargets(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		targetType := strings.TrimSpace(r.URL.Query().Get("target_type"))
+		items, err := s.store.ListWebTargetsForTenant(r.Context(), principal.OrganizationID, targetType, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_web_targets_failed", "web targets could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateWebTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.BaseURL) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "base_url is required")
+			return
+		}
+
+		item, err := s.store.CreateWebTargetForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "required") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_web_target_failed", "web target could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleWebTargetRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/web-targets/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "web_target_route_not_found", "the requested web target route was not found")
+		return
+	}
+
+	targetID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetWebTargetForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_web_target_failed", "web target could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpdateWebTargetRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, found, err := s.store.UpdateWebTargetForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+			if err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "required") {
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "update_web_target_failed", "web target could not be updated")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodDelete:
+			deleted, err := s.store.DeleteWebTargetForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "delete_web_target_failed", "web target could not be deleted")
+				return
+			}
+			if !deleted {
+				s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "crawl-policy" {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetWebCrawlPolicyForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_web_crawl_policy_failed", "web crawl policy could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "web_crawl_policy_not_found", "web crawl policy was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpsertWebCrawlPolicyRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, err := s.store.UpsertWebCrawlPolicyForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+			if err != nil {
+				switch {
+				case errors.Is(err, jobs.ErrWebTargetNotFound):
+					s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+					return
+				case errors.Is(err, jobs.ErrWebAuthProfileNotFound):
+					s.writeError(w, http.StatusBadRequest, "validation_error", "auth_profile_id is invalid")
+					return
+				case strings.Contains(strings.ToLower(err.Error()), "must be greater than or equal to zero"):
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				default:
+					s.writeError(w, http.StatusInternalServerError, "upsert_web_crawl_policy_failed", "web crawl policy could not be saved")
+					return
+				}
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "coverage-baseline" {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetWebCoverageBaselineForTenant(r.Context(), principal.OrganizationID, targetID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_web_coverage_baseline_failed", "web coverage baseline could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "web_coverage_baseline_not_found", "web coverage baseline was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpsertWebCoverageBaselineRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, err := s.store.UpsertWebCoverageBaselineForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+			if err != nil {
+				switch {
+				case errors.Is(err, jobs.ErrWebTargetNotFound):
+					s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+					return
+				case strings.Contains(strings.ToLower(err.Error()), "must be greater than or equal to zero"):
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				case strings.Contains(strings.ToLower(err.Error()), "must be between 0 and 100"):
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				default:
+					s.writeError(w, http.StatusInternalServerError, "upsert_web_coverage_baseline_failed", "web coverage baseline could not be saved")
+					return
+				}
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) == 3 && parts[1] == "scope" && parts[2] == "evaluate" {
+		if r.Method != http.MethodGet {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+		evaluateURL := strings.TrimSpace(r.URL.Query().Get("url"))
+		if evaluateURL == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "url is required")
+			return
+		}
+		result, err := s.store.EvaluateWebTargetScopeForTenant(r.Context(), principal.OrganizationID, targetID, evaluateURL)
+		if err != nil {
+			if errors.Is(err, jobs.ErrWebTargetNotFound) {
+				s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "evaluate_web_target_scope_failed", "web target scope could not be evaluated")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	s.writeError(w, http.StatusNotFound, "web_target_route_not_found", "the requested web target route was not found")
+}
+
+func (s *Server) handleWebAuthProfiles(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListWebAuthProfilesForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_web_auth_profiles_failed", "web auth profiles could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateWebAuthProfileRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.Name) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "name is required")
+			return
+		}
+
+		item, err := s.store.CreateWebAuthProfileForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "required") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_web_auth_profile_failed", "web auth profile could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleWebAuthProfileRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/web-auth-profiles/"))
+	if path == "" || strings.Contains(path, "/") {
+		s.writeError(w, http.StatusNotFound, "web_auth_profile_route_not_found", "the requested web auth profile route was not found")
+		return
+	}
+	profileID := strings.TrimSpace(path)
+
+	switch r.Method {
+	case http.MethodGet:
+		item, found, err := s.store.GetWebAuthProfileForTenant(r.Context(), principal.OrganizationID, profileID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_web_auth_profile_failed", "web auth profile could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "web_auth_profile_not_found", "web auth profile was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		defer r.Body.Close()
+
+		var request models.UpdateWebAuthProfileRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		item, found, err := s.store.UpdateWebAuthProfileForTenant(r.Context(), principal.OrganizationID, profileID, principal.Email, request)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "required") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "update_web_auth_profile_failed", "web auth profile could not be updated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "web_auth_profile_not_found", "web auth profile was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		deleted, err := s.store.DeleteWebAuthProfileForTenant(r.Context(), principal.OrganizationID, profileID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "delete_web_auth_profile_failed", "web auth profile could not be deleted")
+			return
+		}
+		if !deleted {
+			s.writeError(w, http.StatusNotFound, "web_auth_profile_not_found", "web auth profile was not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleScanTargets(w http.ResponseWriter, r *http.Request) {

@@ -37,6 +37,10 @@ var (
 	assignmentSequence              uint64
 	notificationSequence            uint64
 	scanTargetSequence              uint64
+	webTargetSequence               uint64
+	webAuthProfileSequence          uint64
+	webCrawlPolicySequence          uint64
+	webCoverageBaselineSequence     uint64
 	apiAssetSequence                uint64
 	apiEndpointSequence             uint64
 	externalAssetSequence           uint64
@@ -46,6 +50,8 @@ var (
 	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
 	ErrTaskNotFound                 = errors.New("task not found")
 	ErrProtectedToken               = errors.New("protected token")
+	ErrWebTargetNotFound            = errors.New("web target not found")
+	ErrWebAuthProfileNotFound       = errors.New("web auth profile not found")
 	ErrIngestionSourceNotFound      = errors.New("ingestion source not found")
 	ErrInvalidIngestionToken        = errors.New("invalid ingestion token")
 	ErrInvalidIngestionSignature    = errors.New("invalid ingestion signature")

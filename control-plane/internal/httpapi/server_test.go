@@ -35,6 +35,10 @@ type stubAPIStore struct {
 	caBundleErr              error
 	scanPresets              []models.ScanPreset
 	scanEngineControls       []models.ScanEngineControl
+	webTargets               []models.WebTarget
+	webAuthProfiles          []models.WebAuthProfile
+	webCrawlPolicies         map[string]models.WebCrawlPolicy
+	webCoverageBaselines     map[string]models.WebCoverageBaseline
 	scanTargets              []models.ScanTarget
 	kmsKeys                  []models.KMSKey
 	ingestionSources         []models.IngestionSource
@@ -226,6 +230,367 @@ func (s *stubAPIStore) UpsertScanEngineControlForTenant(_ context.Context, tenan
 	}
 	s.scanEngineControls = append(s.scanEngineControls, item)
 	return item, nil
+}
+
+func (s *stubAPIStore) ListWebTargetsForTenant(_ context.Context, _ string, targetType string, _ int) ([]models.WebTarget, error) {
+	targetType = strings.ToLower(strings.TrimSpace(targetType))
+	if targetType == "" {
+		return s.webTargets, nil
+	}
+	out := make([]models.WebTarget, 0, len(s.webTargets))
+	for _, item := range s.webTargets {
+		if strings.ToLower(strings.TrimSpace(item.TargetType)) == targetType {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubAPIStore) GetWebTargetForTenant(_ context.Context, _ string, targetID string) (models.WebTarget, bool, error) {
+	targetID = strings.TrimSpace(targetID)
+	for _, item := range s.webTargets {
+		if strings.TrimSpace(item.ID) == targetID {
+			return item, true, nil
+		}
+	}
+	return models.WebTarget{}, false, nil
+}
+
+func (s *stubAPIStore) CreateWebTargetForTenant(_ context.Context, tenantID string, actor string, request models.CreateWebTargetRequest) (models.WebTarget, error) {
+	now := time.Now().UTC()
+	item := models.WebTarget{
+		ID:                 fmt.Sprintf("web-target-%d", len(s.webTargets)+1),
+		TenantID:           strings.TrimSpace(tenantID),
+		Name:               strings.TrimSpace(request.Name),
+		TargetType:         strings.ToLower(strings.TrimSpace(request.TargetType)),
+		BaseURL:            strings.TrimSpace(request.BaseURL),
+		APISchemaURL:       strings.TrimSpace(request.APISchemaURL),
+		InScopePatterns:    request.InScopePatterns,
+		OutOfScopePatterns: request.OutOfScopePatterns,
+		Labels:             request.Labels,
+		CreatedBy:          strings.TrimSpace(actor),
+		UpdatedBy:          strings.TrimSpace(actor),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	if item.TargetType == "" {
+		item.TargetType = "webapp"
+	}
+	if item.Name == "" {
+		item.Name = "Unnamed Web Target"
+	}
+	if item.Labels == nil {
+		item.Labels = map[string]any{}
+	}
+	s.webTargets = append(s.webTargets, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateWebTargetForTenant(_ context.Context, _ string, targetID string, actor string, request models.UpdateWebTargetRequest) (models.WebTarget, bool, error) {
+	targetID = strings.TrimSpace(targetID)
+	for idx := range s.webTargets {
+		if strings.TrimSpace(s.webTargets[idx].ID) != targetID {
+			continue
+		}
+		if trimmed := strings.TrimSpace(request.Name); trimmed != "" {
+			s.webTargets[idx].Name = trimmed
+		}
+		if trimmed := strings.TrimSpace(request.TargetType); trimmed != "" {
+			s.webTargets[idx].TargetType = strings.ToLower(trimmed)
+		}
+		if trimmed := strings.TrimSpace(request.BaseURL); trimmed != "" {
+			s.webTargets[idx].BaseURL = trimmed
+		}
+		s.webTargets[idx].APISchemaURL = strings.TrimSpace(request.APISchemaURL)
+		if request.InScopePatterns != nil {
+			s.webTargets[idx].InScopePatterns = request.InScopePatterns
+		}
+		if request.OutOfScopePatterns != nil {
+			s.webTargets[idx].OutOfScopePatterns = request.OutOfScopePatterns
+		}
+		if request.Labels != nil {
+			s.webTargets[idx].Labels = request.Labels
+		}
+		s.webTargets[idx].UpdatedBy = strings.TrimSpace(actor)
+		s.webTargets[idx].UpdatedAt = time.Now().UTC()
+		return s.webTargets[idx], true, nil
+	}
+	return models.WebTarget{}, false, nil
+}
+
+func (s *stubAPIStore) DeleteWebTargetForTenant(_ context.Context, _ string, targetID string) (bool, error) {
+	targetID = strings.TrimSpace(targetID)
+	for idx := range s.webTargets {
+		if strings.TrimSpace(s.webTargets[idx].ID) != targetID {
+			continue
+		}
+		s.webTargets = append(s.webTargets[:idx], s.webTargets[idx+1:]...)
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *stubAPIStore) GetWebCrawlPolicyForTenant(_ context.Context, _ string, targetID string) (models.WebCrawlPolicy, bool, error) {
+	if s.webCrawlPolicies == nil {
+		return models.WebCrawlPolicy{}, false, nil
+	}
+	item, ok := s.webCrawlPolicies[strings.TrimSpace(targetID)]
+	return item, ok, nil
+}
+
+func (s *stubAPIStore) UpsertWebCrawlPolicyForTenant(_ context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCrawlPolicyRequest) (models.WebCrawlPolicy, error) {
+	if s.webCrawlPolicies == nil {
+		s.webCrawlPolicies = map[string]models.WebCrawlPolicy{}
+	}
+	now := time.Now().UTC()
+	key := strings.TrimSpace(targetID)
+	item, ok := s.webCrawlPolicies[key]
+	if !ok {
+		item = models.WebCrawlPolicy{
+			ID:                     fmt.Sprintf("web-crawl-%d", len(s.webCrawlPolicies)+1),
+			TenantID:               strings.TrimSpace(tenantID),
+			WebTargetID:            key,
+			SafeMode:               true,
+			MaxDepth:               3,
+			MaxRequests:            500,
+			RequestBudgetPerMinute: 120,
+			AllowPaths:             []string{},
+			DenyPaths:              []string{},
+			SeedURLs:               []string{},
+			Headers:                map[string]any{},
+			CreatedBy:              strings.TrimSpace(actor),
+			UpdatedBy:              strings.TrimSpace(actor),
+			CreatedAt:              now,
+			UpdatedAt:              now,
+		}
+	}
+	item.AuthProfileID = strings.TrimSpace(request.AuthProfileID)
+	if request.SafeMode != nil {
+		item.SafeMode = *request.SafeMode
+	}
+	if request.MaxDepth != nil {
+		item.MaxDepth = *request.MaxDepth
+	}
+	if request.MaxRequests != nil {
+		item.MaxRequests = *request.MaxRequests
+	}
+	if request.RequestBudgetPerMinute != nil {
+		item.RequestBudgetPerMinute = *request.RequestBudgetPerMinute
+	}
+	if request.AllowPaths != nil {
+		item.AllowPaths = request.AllowPaths
+	}
+	if request.DenyPaths != nil {
+		item.DenyPaths = request.DenyPaths
+	}
+	if request.SeedURLs != nil {
+		item.SeedURLs = request.SeedURLs
+	}
+	if request.Headers != nil {
+		item.Headers = request.Headers
+	}
+	item.UpdatedBy = strings.TrimSpace(actor)
+	item.UpdatedAt = now
+	s.webCrawlPolicies[key] = item
+	return item, nil
+}
+
+func (s *stubAPIStore) GetWebCoverageBaselineForTenant(_ context.Context, _ string, targetID string) (models.WebCoverageBaseline, bool, error) {
+	if s.webCoverageBaselines == nil {
+		return models.WebCoverageBaseline{}, false, nil
+	}
+	item, ok := s.webCoverageBaselines[strings.TrimSpace(targetID)]
+	return item, ok, nil
+}
+
+func (s *stubAPIStore) UpsertWebCoverageBaselineForTenant(_ context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCoverageBaselineRequest) (models.WebCoverageBaseline, error) {
+	if s.webCoverageBaselines == nil {
+		s.webCoverageBaselines = map[string]models.WebCoverageBaseline{}
+	}
+	now := time.Now().UTC()
+	key := strings.TrimSpace(targetID)
+	item, ok := s.webCoverageBaselines[key]
+	if !ok {
+		item = models.WebCoverageBaseline{
+			ID:                        fmt.Sprintf("web-coverage-%d", len(s.webCoverageBaselines)+1),
+			TenantID:                  strings.TrimSpace(tenantID),
+			WebTargetID:               key,
+			ExpectedRouteCount:        0,
+			ExpectedAPIOperationCount: 0,
+			ExpectedAuthStateCount:    0,
+			MinimumRouteCoverage:      0,
+			MinimumAPICoverage:        0,
+			MinimumAuthCoverage:       0,
+			CreatedBy:                 strings.TrimSpace(actor),
+			UpdatedBy:                 strings.TrimSpace(actor),
+			CreatedAt:                 now,
+			UpdatedAt:                 now,
+		}
+	}
+	if request.ExpectedRouteCount != nil {
+		item.ExpectedRouteCount = *request.ExpectedRouteCount
+	}
+	if request.ExpectedAPIOperationCount != nil {
+		item.ExpectedAPIOperationCount = *request.ExpectedAPIOperationCount
+	}
+	if request.ExpectedAuthStateCount != nil {
+		item.ExpectedAuthStateCount = *request.ExpectedAuthStateCount
+	}
+	if request.MinimumRouteCoverage != nil {
+		item.MinimumRouteCoverage = *request.MinimumRouteCoverage
+	}
+	if request.MinimumAPICoverage != nil {
+		item.MinimumAPICoverage = *request.MinimumAPICoverage
+	}
+	if request.MinimumAuthCoverage != nil {
+		item.MinimumAuthCoverage = *request.MinimumAuthCoverage
+	}
+	item.Notes = strings.TrimSpace(request.Notes)
+	item.UpdatedBy = strings.TrimSpace(actor)
+	item.UpdatedAt = now
+	s.webCoverageBaselines[key] = item
+	return item, nil
+}
+
+func (s *stubAPIStore) EvaluateWebTargetScopeForTenant(_ context.Context, _ string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error) {
+	result := models.WebTargetScopeEvaluation{
+		WebTargetID: strings.TrimSpace(targetID),
+		URL:         strings.TrimSpace(rawURL),
+		InScope:     false,
+		Reason:      "web target not found",
+	}
+	targetID = strings.TrimSpace(targetID)
+	for _, target := range s.webTargets {
+		if strings.TrimSpace(target.ID) != targetID {
+			continue
+		}
+		if strings.TrimSpace(rawURL) == "" {
+			result.Reason = "url is invalid"
+			return result, nil
+		}
+		if strings.Contains(strings.ToLower(strings.TrimSpace(rawURL)), strings.ToLower(strings.TrimSpace(target.BaseURL))) {
+			result.InScope = true
+			result.Reason = "matched allow pattern"
+		} else {
+			result.InScope = false
+			result.Reason = "url host is out of scope for target base_url"
+		}
+		return result, nil
+	}
+	return result, nil
+}
+
+func (s *stubAPIStore) ListWebAuthProfilesForTenant(context.Context, string, int) ([]models.WebAuthProfile, error) {
+	return s.webAuthProfiles, nil
+}
+
+func (s *stubAPIStore) GetWebAuthProfileForTenant(_ context.Context, _ string, profileID string) (models.WebAuthProfile, bool, error) {
+	profileID = strings.TrimSpace(profileID)
+	for _, item := range s.webAuthProfiles {
+		if strings.TrimSpace(item.ID) == profileID {
+			return item, true, nil
+		}
+	}
+	return models.WebAuthProfile{}, false, nil
+}
+
+func (s *stubAPIStore) CreateWebAuthProfileForTenant(_ context.Context, tenantID string, actor string, request models.CreateWebAuthProfileRequest) (models.WebAuthProfile, error) {
+	now := time.Now().UTC()
+	enabled := true
+	if request.Enabled != nil {
+		enabled = *request.Enabled
+	}
+	item := models.WebAuthProfile{
+		ID:                   fmt.Sprintf("web-auth-%d", len(s.webAuthProfiles)+1),
+		TenantID:             strings.TrimSpace(tenantID),
+		Name:                 strings.TrimSpace(request.Name),
+		AuthType:             strings.ToLower(strings.TrimSpace(request.AuthType)),
+		LoginURL:             strings.TrimSpace(request.LoginURL),
+		UsernameSecretRef:    strings.TrimSpace(request.UsernameSecretRef),
+		PasswordSecretRef:    strings.TrimSpace(request.PasswordSecretRef),
+		BearerTokenSecretRef: strings.TrimSpace(request.BearerTokenSecretRef),
+		CSRFMode:             strings.TrimSpace(request.CSRFMode),
+		SessionBootstrap:     request.SessionBootstrap,
+		TestPersonas:         request.TestPersonas,
+		TokenRefreshStrategy: strings.TrimSpace(request.TokenRefreshStrategy),
+		Enabled:              enabled,
+		CreatedBy:            strings.TrimSpace(actor),
+		UpdatedBy:            strings.TrimSpace(actor),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if item.AuthType == "" {
+		item.AuthType = "form"
+	}
+	if item.CSRFMode == "" {
+		item.CSRFMode = "auto"
+	}
+	if item.SessionBootstrap == nil {
+		item.SessionBootstrap = map[string]any{}
+	}
+	if item.TestPersonas == nil {
+		item.TestPersonas = []map[string]any{}
+	}
+	s.webAuthProfiles = append(s.webAuthProfiles, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateWebAuthProfileForTenant(_ context.Context, _ string, profileID string, actor string, request models.UpdateWebAuthProfileRequest) (models.WebAuthProfile, bool, error) {
+	profileID = strings.TrimSpace(profileID)
+	for idx := range s.webAuthProfiles {
+		if strings.TrimSpace(s.webAuthProfiles[idx].ID) != profileID {
+			continue
+		}
+		if trimmed := strings.TrimSpace(request.Name); trimmed != "" {
+			s.webAuthProfiles[idx].Name = trimmed
+		}
+		if trimmed := strings.TrimSpace(request.AuthType); trimmed != "" {
+			s.webAuthProfiles[idx].AuthType = strings.ToLower(trimmed)
+		}
+		if request.LoginURL != "" {
+			s.webAuthProfiles[idx].LoginURL = strings.TrimSpace(request.LoginURL)
+		}
+		if request.UsernameSecretRef != "" {
+			s.webAuthProfiles[idx].UsernameSecretRef = strings.TrimSpace(request.UsernameSecretRef)
+		}
+		if request.PasswordSecretRef != "" {
+			s.webAuthProfiles[idx].PasswordSecretRef = strings.TrimSpace(request.PasswordSecretRef)
+		}
+		if request.BearerTokenSecretRef != "" {
+			s.webAuthProfiles[idx].BearerTokenSecretRef = strings.TrimSpace(request.BearerTokenSecretRef)
+		}
+		if request.CSRFMode != "" {
+			s.webAuthProfiles[idx].CSRFMode = strings.TrimSpace(request.CSRFMode)
+		}
+		if request.SessionBootstrap != nil {
+			s.webAuthProfiles[idx].SessionBootstrap = request.SessionBootstrap
+		}
+		if request.TestPersonas != nil {
+			s.webAuthProfiles[idx].TestPersonas = request.TestPersonas
+		}
+		if request.TokenRefreshStrategy != "" {
+			s.webAuthProfiles[idx].TokenRefreshStrategy = strings.TrimSpace(request.TokenRefreshStrategy)
+		}
+		if request.Enabled != nil {
+			s.webAuthProfiles[idx].Enabled = *request.Enabled
+		}
+		s.webAuthProfiles[idx].UpdatedBy = strings.TrimSpace(actor)
+		s.webAuthProfiles[idx].UpdatedAt = time.Now().UTC()
+		return s.webAuthProfiles[idx], true, nil
+	}
+	return models.WebAuthProfile{}, false, nil
+}
+
+func (s *stubAPIStore) DeleteWebAuthProfileForTenant(_ context.Context, _ string, profileID string) (bool, error) {
+	profileID = strings.TrimSpace(profileID)
+	for idx := range s.webAuthProfiles {
+		if strings.TrimSpace(s.webAuthProfiles[idx].ID) != profileID {
+			continue
+		}
+		s.webAuthProfiles = append(s.webAuthProfiles[:idx], s.webAuthProfiles[idx+1:]...)
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *stubAPIStore) ListScanTargetsForTenant(context.Context, string, int) ([]models.ScanTarget, error) {
