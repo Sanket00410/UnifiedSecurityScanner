@@ -535,6 +535,11 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 		}
 	}
 
+	registeredEvidenceCount, err := registerTaskEvidenceTx(ctx, tx, task, submission.EvidencePaths, now)
+	if err != nil {
+		return err
+	}
+
 	if err := recomputeScanJobStatusTx(ctx, tx, task.ScanJobID, now); err != nil {
 		return err
 	}
@@ -546,10 +551,12 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 		AggregateType: "scan_job",
 		AggregateID:   task.ScanJobID,
 		Payload: map[string]any{
-			"task_id":                task.TaskID,
-			"worker_id":              strings.TrimSpace(submission.WorkerID),
-			"final_state":            string(finalStatus),
-			"reported_finding_count": len(submission.ReportedFindings),
+			"task_id":                   task.TaskID,
+			"worker_id":                 strings.TrimSpace(submission.WorkerID),
+			"final_state":               string(finalStatus),
+			"reported_finding_count":    len(submission.ReportedFindings),
+			"reported_evidence_count":   len(submission.EvidencePaths),
+			"registered_evidence_count": registeredEvidenceCount,
 		},
 		CreatedAt: now,
 	}); err != nil {

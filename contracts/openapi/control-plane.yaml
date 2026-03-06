@@ -810,6 +810,134 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/evidence:
+    get:
+      operationId: listEvidenceObjects
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: scan_job_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: task_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: finding_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: archived
+          in: query
+          required: false
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Tenant evidence objects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceListResult"
+        "400":
+          description: Invalid evidence query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/evidence/{evidenceId}:
+    get:
+      operationId: getEvidenceObject
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: evidenceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Evidence object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceObject"
+        "404":
+          description: Evidence object not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/evidence/retention/runs:
+    get:
+      operationId: listEvidenceRetentionRuns
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Evidence retention runs
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EvidenceRetentionRun"
+  /v1/evidence/retention/run:
+    post:
+      operationId: runEvidenceRetention
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunEvidenceRetentionRequest"
+      responses:
+        "200":
+          description: Evidence retention run result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceRetentionRun"
   /v1/findings/{findingId}/waivers:
     get:
       operationId: listFindingWaivers
@@ -3822,6 +3950,142 @@ components:
           type: integer
         offset:
           type: integer
+    EvidenceObject:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - scan_job_id
+        - task_id
+        - object_ref
+        - storage_provider
+        - storage_tier
+        - archived
+        - retention_until
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        scan_job_id:
+          type: string
+        task_id:
+          type: string
+        finding_id:
+          type: string
+        object_key:
+          type: string
+        object_ref:
+          type: string
+        storage_provider:
+          type: string
+        storage_tier:
+          type: string
+        archived:
+          type: boolean
+        retention_until:
+          type: string
+          format: date-time
+        archived_at:
+          type: string
+          format: date-time
+          nullable: true
+        size_bytes:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+        content_type:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    EvidenceListResult:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - total
+        - limit
+        - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvidenceObject"
+        total:
+          type: integer
+          format: int64
+        limit:
+          type: integer
+        offset:
+          type: integer
+    RunEvidenceRetentionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        archive_before:
+          type: string
+          format: date-time
+        delete_archived_before:
+          type: string
+          format: date-time
+        dry_run:
+          type: boolean
+    EvidenceRetentionRun:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - status
+        - scanned_count
+        - archived_count
+        - deleted_count
+        - dry_run
+        - archive_before
+        - started_at
+        - completed_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        triggered_by:
+          type: string
+        status:
+          type: string
+        scanned_count:
+          type: integer
+          format: int64
+        archived_count:
+          type: integer
+          format: int64
+        deleted_count:
+          type: integer
+          format: int64
+        dry_run:
+          type: boolean
+        archive_before:
+          type: string
+          format: date-time
+        delete_archived_before:
+          type: string
+          format: date-time
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
     ApiError:
       type: object
       additionalProperties: false

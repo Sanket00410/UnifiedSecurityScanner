@@ -34,6 +34,13 @@ type stubAPIStore struct {
 	operationalMetrics       models.OperationalMetrics
 	findingSearchResult      models.FindingSearchResult
 	findingSearchErr         error
+	evidenceListResult       models.EvidenceListResult
+	evidenceListErr          error
+	evidenceObject           models.EvidenceObject
+	evidenceObjectFound      bool
+	evidenceRetentionRuns    []models.EvidenceRetentionRun
+	evidenceRetentionRun     models.EvidenceRetentionRun
+	evidenceRetentionErr     error
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -448,6 +455,42 @@ func (s *stubAPIStore) SearchFindingsForTenant(_ context.Context, _ string, _ mo
 		}, nil
 	}
 	return s.findingSearchResult, nil
+}
+
+func (s *stubAPIStore) ListEvidenceObjectsForTenant(_ context.Context, _ string, _ models.EvidenceListQuery) (models.EvidenceListResult, error) {
+	if s.evidenceListErr != nil {
+		return models.EvidenceListResult{}, s.evidenceListErr
+	}
+	if len(s.evidenceListResult.Items) == 0 {
+		return models.EvidenceListResult{
+			Items:  nil,
+			Total:  0,
+			Limit:  100,
+			Offset: 0,
+		}, nil
+	}
+	return s.evidenceListResult, nil
+}
+
+func (s *stubAPIStore) GetEvidenceObjectForTenant(_ context.Context, _ string, _ string) (models.EvidenceObject, bool, error) {
+	if !s.evidenceObjectFound {
+		return models.EvidenceObject{}, false, nil
+	}
+	return s.evidenceObject, true, nil
+}
+
+func (s *stubAPIStore) ListEvidenceRetentionRunsForTenant(_ context.Context, _ string, _ int) ([]models.EvidenceRetentionRun, error) {
+	if s.evidenceRetentionErr != nil {
+		return nil, s.evidenceRetentionErr
+	}
+	return s.evidenceRetentionRuns, nil
+}
+
+func (s *stubAPIStore) RunEvidenceRetentionForTenant(_ context.Context, _ string, _ string, _ models.RunEvidenceRetentionRequest) (models.EvidenceRetentionRun, error) {
+	if s.evidenceRetentionErr != nil {
+		return models.EvidenceRetentionRun{}, s.evidenceRetentionErr
+	}
+	return s.evidenceRetentionRun, nil
 }
 
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
@@ -1490,6 +1533,137 @@ func TestFindingSearchEndpointValidatesOverdueParameter(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid overdue filter, got %d", recorder.Code)
+	}
+}
+
+func TestEvidenceEndpointsListGetAndRetentionRun(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		evidenceListResult: models.EvidenceListResult{
+			Items: []models.EvidenceObject{
+				{
+					ID:              "evidence-1",
+					TenantID:        "org-1",
+					ScanJobID:       "job-1",
+					TaskID:          "task-1",
+					ObjectRef:       "C:/evidence/scan-1.log",
+					StorageProvider: "filesystem",
+					StorageTier:     "hot",
+					Archived:        false,
+					RetentionUntil:  now.AddDate(0, 0, 30),
+					CreatedAt:       now,
+					UpdatedAt:       now,
+				},
+			},
+			Total:  1,
+			Limit:  25,
+			Offset: 0,
+		},
+		evidenceObjectFound: true,
+		evidenceObject: models.EvidenceObject{
+			ID:              "evidence-1",
+			TenantID:        "org-1",
+			ScanJobID:       "job-1",
+			TaskID:          "task-1",
+			ObjectRef:       "C:/evidence/scan-1.log",
+			StorageProvider: "filesystem",
+			StorageTier:     "hot",
+			Archived:        false,
+			RetentionUntil:  now.AddDate(0, 0, 30),
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		},
+		evidenceRetentionRun: models.EvidenceRetentionRun{
+			ID:            "evidence-retention-1",
+			TenantID:      "org-1",
+			TriggeredBy:   "admin@example.com",
+			Status:        "dry_run",
+			ScannedCount:  5,
+			ArchivedCount: 2,
+			DeletedCount:  0,
+			DryRun:        true,
+			ArchiveBefore: now,
+			StartedAt:     now,
+			CompletedAt:   now,
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/evidence?task_id=task-1&limit=25", nil)
+	listRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for evidence list, got %d", listRecorder.Code)
+	}
+
+	getRecorder := httptest.NewRecorder()
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/evidence/evidence-1", nil)
+	getRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for evidence object, got %d", getRecorder.Code)
+	}
+
+	retentionRecorder := httptest.NewRecorder()
+	retentionRequest := httptest.NewRequest(http.MethodPost, "/v1/evidence/retention/run", strings.NewReader(`{"dry_run":true}`))
+	retentionRequest.Header.Set("Authorization", "Bearer admin-token")
+	retentionRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(retentionRecorder, retentionRequest)
+	if retentionRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for evidence retention run, got %d", retentionRecorder.Code)
+	}
+
+	var retentionPayload models.EvidenceRetentionRun
+	if err := json.NewDecoder(retentionRecorder.Body).Decode(&retentionPayload); err != nil {
+		t.Fatalf("decode retention run response: %v", err)
+	}
+	if !retentionPayload.DryRun || retentionPayload.ArchivedCount != 2 {
+		t.Fatalf("unexpected retention payload: %+v", retentionPayload)
+	}
+}
+
+func TestEvidenceEndpointValidatesArchivedParameter(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/evidence?archived=maybe", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid archived filter, got %d", recorder.Code)
 	}
 }
 

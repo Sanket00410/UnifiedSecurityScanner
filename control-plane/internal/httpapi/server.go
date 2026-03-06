@@ -58,6 +58,10 @@ type apiStore interface {
 	DeleteScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (bool, error)
 	RunScanTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error)
 	SearchFindingsForTenant(ctx context.Context, tenantID string, query models.FindingSearchQuery) (models.FindingSearchResult, error)
+	ListEvidenceObjectsForTenant(ctx context.Context, tenantID string, query models.EvidenceListQuery) (models.EvidenceListResult, error)
+	GetEvidenceObjectForTenant(ctx context.Context, tenantID string, evidenceID string) (models.EvidenceObject, bool, error)
+	ListEvidenceRetentionRunsForTenant(ctx context.Context, tenantID string, limit int) ([]models.EvidenceRetentionRun, error)
+	RunEvidenceRetentionForTenant(ctx context.Context, tenantID string, actor string, request models.RunEvidenceRetentionRequest) (models.EvidenceRetentionRun, error)
 	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
 	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
 	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
@@ -181,6 +185,10 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/search/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.search", "finding", server.handleFindingSearch))
+	mux.HandleFunc("/v1/evidence", server.withUserAuth(auth.PermissionFindingsRead, "evidence.list", "evidence", server.handleEvidence))
+	mux.HandleFunc("/v1/evidence/retention/runs", server.withUserAuth(auth.PermissionPoliciesRead, "evidence_retention_runs.list", "evidence_retention_run", server.handleEvidenceRetentionRuns))
+	mux.HandleFunc("/v1/evidence/retention/run", server.withUserAuth(auth.PermissionPoliciesWrite, "evidence_retention.run", "evidence_retention_run", server.handleEvidenceRetentionRun))
+	mux.HandleFunc("/v1/evidence/", server.withUserAuth(auth.PermissionFindingsRead, "evidence.read", "evidence", server.handleEvidenceRoute))
 	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
@@ -1215,6 +1223,162 @@ func (s *Server) handleFindingSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "offset must be zero or a positive integer")
+			return
+		}
+		offset = parsed
+	}
+
+	var archived *bool
+	if raw := strings.TrimSpace(r.URL.Query().Get("archived")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "archived must be true or false")
+			return
+		}
+		archived = &parsed
+	}
+
+	result, err := s.store.ListEvidenceObjectsForTenant(r.Context(), principal.OrganizationID, models.EvidenceListQuery{
+		ScanJobID: strings.TrimSpace(r.URL.Query().Get("scan_job_id")),
+		TaskID:    strings.TrimSpace(r.URL.Query().Get("task_id")),
+		FindingID: strings.TrimSpace(r.URL.Query().Get("finding_id")),
+		Archived:  archived,
+		Limit:     limit,
+		Offset:    offset,
+	})
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_evidence_failed", "evidence objects could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleEvidenceRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	evidenceID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/evidence/"))
+	if evidenceID == "" || strings.Contains(evidenceID, "/") {
+		s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
+		return
+	}
+
+	item, found, err := s.store.GetEvidenceObjectForTenant(r.Context(), principal.OrganizationID, evidenceID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "get_evidence_failed", "evidence object could not be loaded")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleEvidenceRetentionRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	runs, err := s.store.ListEvidenceRetentionRunsForTenant(r.Context(), principal.OrganizationID, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_evidence_retention_runs_failed", "evidence retention run history could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": runs,
+	})
+}
+
+func (s *Server) handleEvidenceRetentionRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	var request models.RunEvidenceRetentionRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+	}
+
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.UserID)
+	}
+
+	run, err := s.store.RunEvidenceRetentionForTenant(r.Context(), principal.OrganizationID, actor, request)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "run_evidence_retention_failed", "evidence retention run could not be executed")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, run)
 }
 
 func (s *Server) handleFindingRoute(w http.ResponseWriter, r *http.Request) {
