@@ -86,11 +86,17 @@ func EvaluateSubmission(policies []models.Policy, request models.CreateScanJobRe
 			Status: TaskDecisionApproved,
 		}
 
-		for _, item := range matchingRules(enforced, "tool", "require_approval", toolContext) {
+		approvalRules := make([]boundRule, 0)
+		approvalRules = append(approvalRules, matchingRules(enforced, "tool", "require_approval", toolContext)...)
+		approvalRules = append(approvalRules, matchingRules(enforced, "target", "require_approval", toolContext)...)
+		approvalRules = append(approvalRules, matchingRules(enforced, "target_kind", "require_approval", toolContext)...)
+		approvalRules = append(approvalRules, matchingRules(enforced, "profile", "require_approval", toolContext)...)
+
+		for _, item := range approvalRules {
 			decision.Status = TaskDecisionPendingApproval
 			if decision.PolicyID == "" {
 				decision.PolicyID = item.PolicyID
-				decision.Reason = "restricted adapter requires explicit approval before dispatch"
+				decision.Reason = approvalReasonForField(normalizeField(item.Rule.Field))
 			}
 			decision.RuleHits = append(decision.RuleHits, summarizeRule(item.Rule))
 		}
@@ -308,6 +314,21 @@ func rejectionReason(field string, effect string) string {
 			return "requested operation is not allow-listed by enforced policy"
 		}
 		return "requested operation is blocked by enforced policy"
+	}
+}
+
+func approvalReasonForField(field string) string {
+	switch field {
+	case "tool":
+		return "restricted adapter requires explicit approval before dispatch"
+	case "target":
+		return "scan target requires explicit approval before dispatch"
+	case "target_kind":
+		return "target kind requires explicit approval before dispatch"
+	case "profile":
+		return "scan profile requires explicit approval before dispatch"
+	default:
+		return "scan task requires explicit approval before dispatch"
 	}
 }
 

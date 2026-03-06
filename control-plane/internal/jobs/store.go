@@ -198,6 +198,13 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 	if err := s.enforceScanJobTenantLimitsTx(ctx, tx, job.TenantID); err != nil {
 		return models.ScanJob{}, err
 	}
+	violation, err := checkTenantExecutionControlsTx(ctx, tx, job.TenantID, job.TargetKind, now)
+	if err != nil {
+		return models.ScanJob{}, err
+	}
+	if violation != nil {
+		return models.ScanJob{}, violation
+	}
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO scan_jobs (
@@ -882,6 +889,11 @@ func claimAssignmentsTx(
 		return make([]models.JobAssignment, 0), nil
 	}
 
+	queryLimit := limit * 5
+	if queryLimit < limit {
+		queryLimit = limit
+	}
+
 	rows, err := tx.Query(ctx, `
 		SELECT id, scan_job_id, tenant_id, adapter_id, target_kind, target,
 		       approved_modules, labels_json, max_runtime_seconds, evidence_upload_url
@@ -892,7 +904,7 @@ func claimAssignmentsTx(
 		ORDER BY created_at ASC
 		FOR UPDATE SKIP LOCKED
 		LIMIT $2
-	`, adapters, limit)
+	`, adapters, queryLimit)
 	if err != nil {
 		return nil, fmt.Errorf("claim task query: %w", err)
 	}
@@ -951,7 +963,25 @@ func claimAssignmentsTx(
 	rows.Close()
 
 	assignments := make([]models.JobAssignment, 0, len(queued))
+	tenantDecisionCache := make(map[string]*ExecutionControlViolationError)
 	for _, task := range queued {
+		cacheKey := task.tenantID + "|" + task.targetKind
+		violation, seen := tenantDecisionCache[cacheKey]
+		if !seen {
+			decision, err := checkTenantExecutionControlsTx(ctx, tx, task.tenantID, task.targetKind, now)
+			if err != nil {
+				return nil, err
+			}
+			tenantDecisionCache[cacheKey] = decision
+			violation = decision
+		}
+		if violation != nil {
+			continue
+		}
+		if len(assignments) >= limit {
+			break
+		}
+
 		_, err := tx.Exec(ctx, `
 			UPDATE scan_job_tasks
 			SET status = $1,

@@ -96,6 +96,8 @@ type apiStore interface {
 	ListPlatformEventsForTenant(ctx context.Context, tenantID string, eventType string, limit int) ([]models.PlatformEvent, error)
 	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
 	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
+	GetTenantExecutionControlsForTenant(ctx context.Context, tenantID string) (models.TenantExecutionControls, error)
+	UpdateTenantExecutionControlsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantExecutionControlsRequest) (models.TenantExecutionControls, error)
 	GetOperationalMetrics(ctx context.Context) (models.OperationalMetrics, error)
 	ListTenantConfigForTenant(ctx context.Context, tenantID string, prefix string, limit int) ([]models.TenantConfigEntry, error)
 	GetTenantConfigEntryForTenant(ctx context.Context, tenantID string, key string) (models.TenantConfigEntry, bool, error)
@@ -209,6 +211,10 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet: auth.PermissionScanJobsRead,
 		http.MethodPut: auth.PermissionPoliciesWrite,
 	}, "tenant_operations", "tenant", server.handleTenantOperations))
+	mux.HandleFunc("/v1/tenant/execution-controls", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionPoliciesRead,
+		http.MethodPut: auth.PermissionPoliciesWrite,
+	}, "tenant_execution_controls", "tenant", server.handleTenantExecutionControls))
 	mux.HandleFunc("/v1/config", server.withUserAuth(auth.PermissionPoliciesRead, "tenant_config.list", "tenant_config", server.handleTenantConfig))
 	mux.HandleFunc("/v1/config/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:    auth.PermissionPoliciesRead,
@@ -806,6 +812,17 @@ func (s *Server) handleScanTargetRoute(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
+			var controlViolation *jobs.ExecutionControlViolationError
+			if errors.As(err, &controlViolation) {
+				s.writeJSON(w, http.StatusConflict, map[string]any{
+					"code":        strings.TrimSpace(controlViolation.Code),
+					"message":     controlViolation.Error(),
+					"reason":      strings.TrimSpace(controlViolation.Reason),
+					"window_id":   strings.TrimSpace(controlViolation.WindowID),
+					"window_name": strings.TrimSpace(controlViolation.WindowName),
+				})
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, "run_scan_target_failed", "scan target could not be executed")
 			return
 		}
@@ -1144,6 +1161,46 @@ func (s *Server) handleTenantOperations(w http.ResponseWriter, r *http.Request) 
 		}
 
 		s.writeJSON(w, http.StatusOK, snapshot)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleTenantExecutionControls(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		controls, err := s.store.GetTenantExecutionControlsForTenant(r.Context(), principal.OrganizationID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "tenant_execution_controls_failed", "tenant execution controls could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, controls)
+	case http.MethodPut:
+		defer r.Body.Close()
+
+		var request models.UpdateTenantExecutionControlsRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		controls, err := s.store.UpdateTenantExecutionControlsForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "maintenance window") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "update_tenant_execution_controls_failed", "tenant execution controls could not be updated")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, controls)
 	default:
 		s.writeMethodNotAllowed(w)
 	}
@@ -3662,6 +3719,17 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal
 				"metric":  limitExceeded.Metric,
 				"limit":   limitExceeded.Limit,
 				"current": limitExceeded.Current,
+			})
+			return
+		}
+		var controlViolation *jobs.ExecutionControlViolationError
+		if errors.As(err, &controlViolation) {
+			s.writeJSON(w, http.StatusConflict, map[string]any{
+				"code":        strings.TrimSpace(controlViolation.Code),
+				"message":     controlViolation.Error(),
+				"reason":      strings.TrimSpace(controlViolation.Reason),
+				"window_id":   strings.TrimSpace(controlViolation.WindowID),
+				"window_name": strings.TrimSpace(controlViolation.WindowName),
 			})
 			return
 		}

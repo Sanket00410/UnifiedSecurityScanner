@@ -716,6 +716,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/tenant/execution-controls:
+    get:
+      operationId: getTenantExecutionControls
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Tenant emergency-stop and maintenance-window controls
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantExecutionControls"
+    put:
+      operationId: updateTenantExecutionControls
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantExecutionControlsRequest"
+      responses:
+        "200":
+          description: Updated tenant execution controls
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantExecutionControls"
+        "400":
+          description: Invalid execution controls payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/config:
     get:
       operationId: listTenantConfig
@@ -3600,6 +3637,71 @@ components:
           $ref: "#/components/schemas/TenantLimits"
         usage:
           $ref: "#/components/schemas/TenantUsage"
+    MaintenanceWindow:
+      type: object
+      additionalProperties: false
+      required:
+        - start_hour
+        - end_hour
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        timezone:
+          type: string
+        days:
+          type: array
+          items:
+            type: string
+        start_hour:
+          type: integer
+        start_minute:
+          type: integer
+        end_hour:
+          type: integer
+        end_minute:
+          type: integer
+        target_kinds:
+          type: array
+          items:
+            type: string
+        reason:
+          type: string
+    TenantExecutionControls:
+      type: object
+      additionalProperties: false
+      required:
+        - tenant_id
+        - emergency_stop_enabled
+      properties:
+        tenant_id:
+          type: string
+        emergency_stop_enabled:
+          type: boolean
+        emergency_stop_reason:
+          type: string
+        maintenance_windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaintenanceWindow"
+        updated_by:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+    UpdateTenantExecutionControlsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        emergency_stop_enabled:
+          type: boolean
+        emergency_stop_reason:
+          type: string
+        maintenance_windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaintenanceWindow"
     OperationalMetrics:
       type: object
       additionalProperties: false

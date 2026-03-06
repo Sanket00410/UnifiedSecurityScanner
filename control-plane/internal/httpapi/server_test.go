@@ -42,6 +42,8 @@ type stubAPIStore struct {
 	ingestionWebhookErr      error
 	platformEvents           []models.PlatformEvent
 	tenantOpsSnapshot        models.TenantOperationsSnapshot
+	tenantExecutionControls  models.TenantExecutionControls
+	tenantExecutionErr       error
 	operationalMetrics       models.OperationalMetrics
 	findingSearchResult      models.FindingSearchResult
 	findingSearchErr         error
@@ -452,6 +454,44 @@ func (s *stubAPIStore) UpdateTenantLimitsForTenant(_ context.Context, tenantID s
 	}
 	s.tenantOpsSnapshot = snapshot
 	return snapshot, nil
+}
+
+func (s *stubAPIStore) GetTenantExecutionControlsForTenant(_ context.Context, tenantID string) (models.TenantExecutionControls, error) {
+	if s.tenantExecutionErr != nil {
+		return models.TenantExecutionControls{}, s.tenantExecutionErr
+	}
+	if strings.TrimSpace(s.tenantExecutionControls.TenantID) == "" {
+		return models.TenantExecutionControls{
+			TenantID:           strings.TrimSpace(tenantID),
+			MaintenanceWindows: []models.MaintenanceWindow{},
+		}, nil
+	}
+	return s.tenantExecutionControls, nil
+}
+
+func (s *stubAPIStore) UpdateTenantExecutionControlsForTenant(_ context.Context, tenantID string, actor string, request models.UpdateTenantExecutionControlsRequest) (models.TenantExecutionControls, error) {
+	if s.tenantExecutionErr != nil {
+		return models.TenantExecutionControls{}, s.tenantExecutionErr
+	}
+
+	current := s.tenantExecutionControls
+	if strings.TrimSpace(current.TenantID) == "" {
+		current.TenantID = strings.TrimSpace(tenantID)
+	}
+
+	if request.EmergencyStopEnabled != nil {
+		current.EmergencyStopEnabled = *request.EmergencyStopEnabled
+	}
+	if request.EmergencyStopReason != nil {
+		current.EmergencyStopReason = strings.TrimSpace(*request.EmergencyStopReason)
+	}
+	if request.MaintenanceWindows != nil {
+		current.MaintenanceWindows = *request.MaintenanceWindows
+	}
+	current.UpdatedBy = strings.TrimSpace(actor)
+	current.UpdatedAt = time.Now().UTC()
+	s.tenantExecutionControls = current
+	return current, nil
 }
 
 func (s *stubAPIStore) GetOperationalMetrics(context.Context) (models.OperationalMetrics, error) {
@@ -2322,6 +2362,134 @@ func TestScanJobTenantLimitExceededReturnsTooManyRequests(t *testing.T) {
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429 for tenant limit exceeded, got %d", recorder.Code)
+	}
+}
+
+func TestScanJobExecutionControlViolationReturnsConflict(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		createScanJobErr: &jobs.ExecutionControlViolationError{
+			Code:    jobs.ExecutionControlEmergencyStop,
+			Message: "tenant emergency stop is active: incident response",
+			Reason:  "incident response",
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/scan-jobs", strings.NewReader(`{
+		"target_kind":"repo",
+		"target":"c:/repo",
+		"profile":"balanced"
+	}`))
+	request.Header.Set("Authorization", "Bearer operator-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for execution controls violation, got %d", recorder.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode conflict payload: %v", err)
+	}
+	if payload["code"] != jobs.ExecutionControlEmergencyStop {
+		t.Fatalf("unexpected conflict code payload: %#v", payload["code"])
+	}
+}
+
+func TestTenantExecutionControlsEndpointFlow(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "operator@example.com",
+			DisplayName:      "Operator",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		tenantExecutionControls: models.TenantExecutionControls{
+			TenantID: "org-1",
+			MaintenanceWindows: []models.MaintenanceWindow{
+				{
+					ID:        "nightly-window",
+					Timezone:  "UTC",
+					Days:      []string{"sat"},
+					StartHour: 1,
+					EndHour:   3,
+				},
+			},
+			UpdatedBy: "seed",
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	getRecorder := httptest.NewRecorder()
+	getRequest := httptest.NewRequest(http.MethodGet, "/v1/tenant/execution-controls", nil)
+	getRequest.Header.Set("Authorization", "Bearer operator-token")
+	server.httpServer.Handler.ServeHTTP(getRecorder, getRequest)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for tenant execution controls get, got %d", getRecorder.Code)
+	}
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/v1/tenant/execution-controls", strings.NewReader(`{
+		"emergency_stop_enabled": true,
+		"emergency_stop_reason": "incident response",
+		"maintenance_windows": [
+			{
+				"id": "weekend",
+				"name": "Weekend Freeze",
+				"timezone": "UTC",
+				"days": ["sat","sun"],
+				"start_hour": 0,
+				"start_minute": 0,
+				"end_hour": 6,
+				"end_minute": 0,
+				"target_kinds": ["domain"],
+				"reason": "change freeze"
+			}
+		]
+	}`))
+	putRequest.Header.Set("Authorization", "Bearer operator-token")
+	putRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(putRecorder, putRequest)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for tenant execution controls put, got %d", putRecorder.Code)
+	}
+
+	var updated models.TenantExecutionControls
+	if err := json.NewDecoder(putRecorder.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode execution controls payload: %v", err)
+	}
+	if !updated.EmergencyStopEnabled {
+		t.Fatal("expected emergency stop to be enabled")
+	}
+	if len(updated.MaintenanceWindows) != 1 {
+		t.Fatalf("expected 1 maintenance window, got %d", len(updated.MaintenanceWindows))
 	}
 }
 

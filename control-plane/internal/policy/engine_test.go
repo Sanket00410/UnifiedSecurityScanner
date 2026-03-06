@@ -162,3 +162,43 @@ func TestEvaluateSubmissionSupportsMatchTypesAndExceptions(t *testing.T) {
 		t.Fatalf("unexpected approval mode: %s", plan.ApprovalMode)
 	}
 }
+
+func TestEvaluateSubmissionRequiresApprovalForTargetRule(t *testing.T) {
+	t.Parallel()
+
+	plan, rejection := EvaluateSubmission([]models.Policy{
+		{
+			ID:      "policy-target-approval",
+			Enabled: true,
+			Scope:   "runtime",
+			Mode:    "enforce",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "require_approval",
+					Field:  "target",
+					Match:  "suffix",
+					Values: []string{"corp.example.com"},
+				},
+			},
+		},
+	}, models.CreateScanJobRequest{
+		TargetKind: "domain",
+		Profile:    "default",
+		Target:     "api.corp.example.com",
+	}, []string{"zap"})
+
+	if rejection != nil {
+		t.Fatalf("unexpected rejection: %v", rejection)
+	}
+
+	decision := plan.Decisions["zap"]
+	if decision.Status != TaskDecisionPendingApproval {
+		t.Fatalf("expected pending approval for target rule, got %s", decision.Status)
+	}
+	if decision.Reason != "scan target requires explicit approval before dispatch" {
+		t.Fatalf("unexpected target approval reason: %s", decision.Reason)
+	}
+	if plan.ApprovalMode != "manual-approval" {
+		t.Fatalf("unexpected approval mode: %s", plan.ApprovalMode)
+	}
+}
