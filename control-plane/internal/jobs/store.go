@@ -51,6 +51,10 @@ var (
 	ErrInvalidVerification          = errors.New("invalid remediation verification")
 	ErrInvalidExceptionDecision     = errors.New("invalid remediation exception")
 	ErrInvalidAssignmentDecision    = errors.New("invalid remediation assignment")
+	ErrKMSKeyNotFound               = errors.New("kms key not found")
+	ErrSecretReferenceNotFound      = errors.New("secret reference not found")
+	ErrSecretLeaseNotFound          = errors.New("secret lease not found")
+	ErrSecretLeaseExpired           = errors.New("secret lease expired")
 )
 
 type TenantLimitExceededError struct {
@@ -89,6 +93,8 @@ type Store struct {
 	bootstrapOrgID     string
 	bootstrapOrgName   string
 	oidcDefaultRole    string
+	kmsMasterKey       string
+	secretLeaseMaxTTL  time.Duration
 }
 
 func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
@@ -117,6 +123,8 @@ func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
 		bootstrapOrgID:     "bootstrap-org-" + normalizeSlug(cfg.BootstrapOrgSlug, "local"),
 		bootstrapOrgName:   strings.TrimSpace(cfg.BootstrapOrgName),
 		oidcDefaultRole:    normalizeRole(cfg.OIDCDefaultRole),
+		kmsMasterKey:       strings.TrimSpace(cfg.KMSMasterKey),
+		secretLeaseMaxTTL:  cfg.SecretLeaseMaxTTL,
 	}
 
 	if err := store.EnsureBootstrap(ctx, cfg); err != nil {

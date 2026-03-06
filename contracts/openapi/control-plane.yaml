@@ -856,6 +856,431 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/kms/keys:
+    get:
+      operationId: listKmsKeys
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Tenant KMS keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KMSKey"
+    post:
+      operationId: createKmsKey
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKMSKeyRequest"
+      responses:
+        "201":
+          description: KMS key metadata created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KMSKey"
+        "400":
+          description: Invalid KMS key request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/kms/encrypt:
+    post:
+      operationId: encryptWithKms
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KMSEncryptRequest"
+      responses:
+        "200":
+          description: Encryption response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KMSEncryptResponse"
+        "400":
+          description: Invalid encryption request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: KMS key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: KMS service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/kms/decrypt:
+    post:
+      operationId: decryptWithKms
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KMSDecryptRequest"
+      responses:
+        "200":
+          description: Decryption response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KMSDecryptResponse"
+        "400":
+          description: Invalid decryption request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: KMS key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: KMS service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/kms/sign:
+    post:
+      operationId: signWithKms
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KMSSignRequest"
+      responses:
+        "200":
+          description: Signing response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KMSSignResponse"
+        "400":
+          description: Invalid signing request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: KMS key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: KMS service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/kms/verify:
+    post:
+      operationId: verifyWithKms
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KMSVerifyRequest"
+      responses:
+        "200":
+          description: Signature verification response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KMSVerifyResponse"
+        "400":
+          description: Invalid verify request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: KMS key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: KMS service not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/secrets/references:
+    get:
+      operationId: listSecretReferences
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Tenant secret references
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SecretReference"
+    post:
+      operationId: createSecretReference
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSecretReferenceRequest"
+      responses:
+        "201":
+          description: Secret reference created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretReference"
+        "400":
+          description: Invalid secret reference request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/secrets/references/{referenceId}:
+    get:
+      operationId: getSecretReference
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: referenceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Secret reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretReference"
+        "404":
+          description: Secret reference not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: updateSecretReference
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: referenceId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSecretReferenceRequest"
+      responses:
+        "200":
+          description: Secret reference updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretReference"
+        "400":
+          description: Invalid secret reference update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Secret reference not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteSecretReference
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: referenceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Secret reference deleted
+        "404":
+          description: Secret reference not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/secrets/leases:
+    get:
+      operationId: listSecretLeases
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: secret_reference_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Secret lease history
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SecretLease"
+  /v1/secrets/leases/issue:
+    post:
+      operationId: issueSecretLease
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueSecretLeaseRequest"
+      responses:
+        "201":
+          description: Secret lease issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedSecretLease"
+        "400":
+          description: Invalid secret lease request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Secret reference not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/secrets/leases/{leaseId}/revoke:
+    post:
+      operationId: revokeSecretLease
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: leaseId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Secret lease revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SecretLease"
+        "404":
+          description: Secret lease not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /ingest/webhooks/{sourceId}:
     post:
       operationId: ingestWebhookEvent
@@ -4762,6 +5187,291 @@ components:
           type: integer
           format: int64
         audience:
+          type: string
+    KMSKey:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - key_ref
+        - provider
+        - algorithm
+        - purpose
+        - status
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        key_ref:
+          type: string
+        provider:
+          type: string
+        algorithm:
+          type: string
+        purpose:
+          type: string
+        status:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateKMSKeyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+      properties:
+        key_ref:
+          type: string
+        provider:
+          type: string
+        algorithm:
+          type: string
+        purpose:
+          type: string
+    KMSEncryptRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - plaintext_b64
+      properties:
+        key_ref:
+          type: string
+        plaintext_b64:
+          type: string
+        aad_b64:
+          type: string
+    KMSEncryptResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - algorithm
+        - nonce_b64
+        - ciphertext_b64
+      properties:
+        key_ref:
+          type: string
+        algorithm:
+          type: string
+        nonce_b64:
+          type: string
+        ciphertext_b64:
+          type: string
+    KMSDecryptRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - nonce_b64
+        - ciphertext_b64
+      properties:
+        key_ref:
+          type: string
+        nonce_b64:
+          type: string
+        ciphertext_b64:
+          type: string
+        aad_b64:
+          type: string
+    KMSDecryptResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - plaintext_b64
+      properties:
+        key_ref:
+          type: string
+        plaintext_b64:
+          type: string
+    KMSSignRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - message_b64
+      properties:
+        key_ref:
+          type: string
+        message_b64:
+          type: string
+    KMSSignResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - algorithm
+        - signature_b64
+      properties:
+        key_ref:
+          type: string
+        algorithm:
+          type: string
+        signature_b64:
+          type: string
+    KMSVerifyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - message_b64
+        - signature_b64
+      properties:
+        key_ref:
+          type: string
+        message_b64:
+          type: string
+        signature_b64:
+          type: string
+    KMSVerifyResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - key_ref
+        - valid
+      properties:
+        key_ref:
+          type: string
+        valid:
+          type: boolean
+    SecretReference:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - name
+        - provider
+        - secret_path
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        provider:
+          type: string
+        secret_path:
+          type: string
+        secret_version:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateSecretReferenceRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - secret_path
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+        secret_path:
+          type: string
+        secret_version:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    UpdateSecretReferenceRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        provider:
+          type: string
+        secret_path:
+          type: string
+        secret_version:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    SecretLease:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - secret_reference_id
+        - worker_id
+        - status
+        - expires_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        secret_reference_id:
+          type: string
+        worker_id:
+          type: string
+        status:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+    IssueSecretLeaseRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - secret_reference_id
+        - worker_id
+      properties:
+        secret_reference_id:
+          type: string
+        worker_id:
+          type: string
+        ttl_seconds:
+          type: integer
+          format: int64
+    IssuedSecretLease:
+      type: object
+      additionalProperties: false
+      required:
+        - lease
+        - lease_token
+      properties:
+        lease:
+          $ref: "#/components/schemas/SecretLease"
+        lease_token:
           type: string
     ApiError:
       type: object

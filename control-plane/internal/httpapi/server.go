@@ -66,6 +66,20 @@ type apiStore interface {
 	CreateBackupSnapshotForTenant(ctx context.Context, tenantID string, actor string, request models.CreateBackupSnapshotRequest) (models.BackupSnapshot, error)
 	ListRecoveryDrillsForTenant(ctx context.Context, tenantID string, limit int) ([]models.RecoveryDrill, error)
 	CreateRecoveryDrillForTenant(ctx context.Context, tenantID string, actor string, request models.CreateRecoveryDrillRequest) (models.RecoveryDrill, error)
+	ListKMSKeysForTenant(ctx context.Context, tenantID string, limit int) ([]models.KMSKey, error)
+	CreateKMSKeyForTenant(ctx context.Context, tenantID string, actor string, request models.CreateKMSKeyRequest) (models.KMSKey, error)
+	EncryptWithKMSForTenant(ctx context.Context, tenantID string, request models.KMSEncryptRequest) (models.KMSEncryptResponse, error)
+	DecryptWithKMSForTenant(ctx context.Context, tenantID string, request models.KMSDecryptRequest) (models.KMSDecryptResponse, error)
+	SignWithKMSForTenant(ctx context.Context, tenantID string, request models.KMSSignRequest) (models.KMSSignResponse, error)
+	VerifyWithKMSForTenant(ctx context.Context, tenantID string, request models.KMSVerifyRequest) (models.KMSVerifyResponse, error)
+	ListSecretReferencesForTenant(ctx context.Context, tenantID string, limit int) ([]models.SecretReference, error)
+	GetSecretReferenceForTenant(ctx context.Context, tenantID string, referenceID string) (models.SecretReference, bool, error)
+	CreateSecretReferenceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateSecretReferenceRequest) (models.SecretReference, error)
+	UpdateSecretReferenceForTenant(ctx context.Context, tenantID string, referenceID string, actor string, request models.UpdateSecretReferenceRequest) (models.SecretReference, bool, error)
+	DeleteSecretReferenceForTenant(ctx context.Context, tenantID string, referenceID string) (bool, error)
+	ListSecretLeasesForTenant(ctx context.Context, tenantID string, referenceID string, limit int) ([]models.SecretLease, error)
+	IssueSecretLeaseForTenant(ctx context.Context, tenantID string, actor string, request models.IssueSecretLeaseRequest) (models.IssuedSecretLease, error)
+	RevokeSecretLeaseForTenant(ctx context.Context, tenantID string, leaseID string, actor string) (models.SecretLease, bool, error)
 	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
 	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
 	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
@@ -197,6 +211,26 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodDelete: auth.PermissionPoliciesWrite,
 	}, "tenant_config", "tenant_config", server.handleTenantConfigRoute))
 	mux.HandleFunc("/v1/workload-identities/workers/issue", server.withUserAuth(auth.PermissionPoliciesWrite, "workload_identity.issue", "workload_identity", server.handleIssueWorkerIdentity))
+	mux.HandleFunc("/v1/kms/keys", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "kms_keys", "kms_key", server.handleKMSKeys))
+	mux.HandleFunc("/v1/kms/encrypt", server.withUserAuth(auth.PermissionPoliciesWrite, "kms.encrypt", "kms_operation", server.handleKMSEncrypt))
+	mux.HandleFunc("/v1/kms/decrypt", server.withUserAuth(auth.PermissionPoliciesWrite, "kms.decrypt", "kms_operation", server.handleKMSDecrypt))
+	mux.HandleFunc("/v1/kms/sign", server.withUserAuth(auth.PermissionPoliciesWrite, "kms.sign", "kms_operation", server.handleKMSSign))
+	mux.HandleFunc("/v1/kms/verify", server.withUserAuth(auth.PermissionPoliciesWrite, "kms.verify", "kms_operation", server.handleKMSVerify))
+	mux.HandleFunc("/v1/secrets/references", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "secret_references", "secret_reference", server.handleSecretReferences))
+	mux.HandleFunc("/v1/secrets/references/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:    auth.PermissionPoliciesRead,
+		http.MethodPut:    auth.PermissionPoliciesWrite,
+		http.MethodDelete: auth.PermissionPoliciesWrite,
+	}, "secret_reference", "secret_reference", server.handleSecretReferenceRoute))
+	mux.HandleFunc("/v1/secrets/leases", server.withUserAuth(auth.PermissionPoliciesRead, "secret_leases.list", "secret_lease", server.handleSecretLeases))
+	mux.HandleFunc("/v1/secrets/leases/issue", server.withUserAuth(auth.PermissionPoliciesWrite, "secret_lease.issue", "secret_lease", server.handleSecretLeaseIssue))
+	mux.HandleFunc("/v1/secrets/leases/", server.withUserAuth(auth.PermissionPoliciesWrite, "secret_lease.revoke", "secret_lease", server.handleSecretLeaseRoute))
 	mux.HandleFunc("/ingest/webhooks/", server.handleIngestionWebhook)
 	mux.HandleFunc("/v1/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.list", "finding", server.handleFindings))
 	mux.HandleFunc("/v1/search/findings", server.withUserAuth(auth.PermissionFindingsRead, "findings.search", "finding", server.handleFindingSearch))
@@ -1265,6 +1299,393 @@ func (s *Server) handleIssueWorkerIdentity(w http.ResponseWriter, r *http.Reques
 		TTLSeconds: int64(expiresAt.Sub(issuedAt).Seconds()),
 		Audience:   claims.Audience,
 	})
+}
+
+func (s *Server) handleKMSKeys(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListKMSKeysForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_kms_keys_failed", "kms keys could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateKMSKeyRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+		item, err := s.store.CreateKMSKeyForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "create_kms_key_failed", err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleKMSEncrypt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+	defer r.Body.Close()
+
+	var request models.KMSEncryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	response, err := s.store.EncryptWithKMSForTenant(r.Context(), principal.OrganizationID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrKMSKeyNotFound):
+			s.writeError(w, http.StatusNotFound, "kms_key_not_found", "kms key was not found")
+		case strings.Contains(strings.ToLower(err.Error()), "not configured"):
+			s.writeError(w, http.StatusServiceUnavailable, "kms_unavailable", "kms service is not configured")
+		default:
+			s.writeError(w, http.StatusBadRequest, "kms_encrypt_failed", err.Error())
+		}
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleKMSDecrypt(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+	defer r.Body.Close()
+
+	var request models.KMSDecryptRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	response, err := s.store.DecryptWithKMSForTenant(r.Context(), principal.OrganizationID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrKMSKeyNotFound):
+			s.writeError(w, http.StatusNotFound, "kms_key_not_found", "kms key was not found")
+		case strings.Contains(strings.ToLower(err.Error()), "not configured"):
+			s.writeError(w, http.StatusServiceUnavailable, "kms_unavailable", "kms service is not configured")
+		default:
+			s.writeError(w, http.StatusBadRequest, "kms_decrypt_failed", err.Error())
+		}
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleKMSSign(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+	defer r.Body.Close()
+
+	var request models.KMSSignRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	response, err := s.store.SignWithKMSForTenant(r.Context(), principal.OrganizationID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrKMSKeyNotFound):
+			s.writeError(w, http.StatusNotFound, "kms_key_not_found", "kms key was not found")
+		case strings.Contains(strings.ToLower(err.Error()), "not configured"):
+			s.writeError(w, http.StatusServiceUnavailable, "kms_unavailable", "kms service is not configured")
+		default:
+			s.writeError(w, http.StatusBadRequest, "kms_sign_failed", err.Error())
+		}
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleKMSVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+	defer r.Body.Close()
+
+	var request models.KMSVerifyRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	response, err := s.store.VerifyWithKMSForTenant(r.Context(), principal.OrganizationID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, jobs.ErrKMSKeyNotFound):
+			s.writeError(w, http.StatusNotFound, "kms_key_not_found", "kms key was not found")
+		case strings.Contains(strings.ToLower(err.Error()), "not configured"):
+			s.writeError(w, http.StatusServiceUnavailable, "kms_unavailable", "kms service is not configured")
+		default:
+			s.writeError(w, http.StatusBadRequest, "kms_verify_failed", err.Error())
+		}
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleSecretReferences(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		items, err := s.store.ListSecretReferencesForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_secret_references_failed", "secret references could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+		var request models.CreateSecretReferenceRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+		item, err := s.store.CreateSecretReferenceForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "create_secret_reference_failed", err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleSecretReferenceRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	referenceID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/secrets/references/"))
+	if referenceID == "" || strings.Contains(referenceID, "/") {
+		s.writeError(w, http.StatusNotFound, "secret_reference_not_found", "secret reference was not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		item, found, err := s.store.GetSecretReferenceForTenant(r.Context(), principal.OrganizationID, referenceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_secret_reference_failed", "secret reference could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "secret_reference_not_found", "secret reference was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		defer r.Body.Close()
+		var request models.UpdateSecretReferenceRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+		item, found, err := s.store.UpdateSecretReferenceForTenant(r.Context(), principal.OrganizationID, referenceID, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "update_secret_reference_failed", err.Error())
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "secret_reference_not_found", "secret reference was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		deleted, err := s.store.DeleteSecretReferenceForTenant(r.Context(), principal.OrganizationID, referenceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "delete_secret_reference_failed", "secret reference could not be deleted")
+			return
+		}
+		if !deleted {
+			s.writeError(w, http.StatusNotFound, "secret_reference_not_found", "secret reference was not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleSecretLeases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	referenceID := strings.TrimSpace(r.URL.Query().Get("secret_reference_id"))
+	items, err := s.store.ListSecretLeasesForTenant(r.Context(), principal.OrganizationID, referenceID, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_secret_leases_failed", "secret leases could not be loaded")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleSecretLeaseIssue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+	defer r.Body.Close()
+
+	var request models.IssueSecretLeaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.UserID)
+	}
+	lease, err := s.store.IssueSecretLeaseForTenant(r.Context(), principal.OrganizationID, actor, request)
+	if err != nil {
+		if errors.Is(err, jobs.ErrSecretReferenceNotFound) {
+			s.writeError(w, http.StatusNotFound, "secret_reference_not_found", "secret reference was not found")
+			return
+		}
+		s.writeError(w, http.StatusBadRequest, "issue_secret_lease_failed", err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, lease)
+}
+
+func (s *Server) handleSecretLeaseRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/secrets/leases/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "revoke" {
+		s.writeError(w, http.StatusNotFound, "secret_lease_route_not_found", "the requested secret lease route was not found")
+		return
+	}
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.UserID)
+	}
+	item, found, err := s.store.RevokeSecretLeaseForTenant(r.Context(), principal.OrganizationID, parts[0], actor)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "revoke_secret_lease_failed", "secret lease could not be revoked")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "secret_lease_not_found", "secret lease was not found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handleWorkerRegister(w http.ResponseWriter, r *http.Request) {

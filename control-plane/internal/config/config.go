@@ -31,6 +31,8 @@ type Config struct {
 	OIDCDefaultRole            string
 	WorkloadIdentitySigningKey string
 	WorkloadIdentityTTL        time.Duration
+	KMSMasterKey               string
+	SecretLeaseMaxTTL          time.Duration
 }
 
 func Load() Config {
@@ -61,6 +63,8 @@ func Load() Config {
 		OIDCDefaultRole:            getEnv("USS_OIDC_DEFAULT_ROLE", "viewer"),
 		WorkloadIdentitySigningKey: getEnv("USS_WORKLOAD_IDENTITY_SIGNING_KEY", workerSecret),
 		WorkloadIdentityTTL:        getDuration("USS_WORKLOAD_IDENTITY_TTL", 2*time.Hour),
+		KMSMasterKey:               getEnv("USS_KMS_MASTER_KEY", workerSecret),
+		SecretLeaseMaxTTL:          getDuration("USS_SECRET_LEASE_MAX_TTL", 30*time.Minute),
 	}
 }
 

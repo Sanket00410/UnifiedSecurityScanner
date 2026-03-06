@@ -24,8 +24,16 @@ type stubAPIStore struct {
 	authenticated            bool
 	authErr                  error
 	createScanJobErr         error
+	createKMSKeyErr          error
+	kmsEncryptErr            error
+	kmsDecryptErr            error
+	kmsSignErr               error
+	kmsVerifyErr             error
+	createSecretReferenceErr error
+	issueSecretLeaseErr      error
 	scanPresets              []models.ScanPreset
 	scanTargets              []models.ScanTarget
+	kmsKeys                  []models.KMSKey
 	ingestionSources         []models.IngestionSource
 	ingestionEvents          []models.IngestionEvent
 	ingestionWebhookResponse models.IngestionWebhookResponse
@@ -45,6 +53,13 @@ type stubAPIStore struct {
 	backupSnapshots          []models.BackupSnapshot
 	recoveryDrills           []models.RecoveryDrill
 	backupDRErr              error
+	secretReferences         []models.SecretReference
+	secretLeases             []models.SecretLease
+	kmsEncryptResponse       models.KMSEncryptResponse
+	kmsDecryptResponse       models.KMSDecryptResponse
+	kmsSignResponse          models.KMSSignResponse
+	kmsVerifyResponse        models.KMSVerifyResponse
+	issuedSecretLease        models.IssuedSecretLease
 	tenantConfigEntries      []models.TenantConfigEntry
 	tenantConfigErr          error
 	findings                 []models.CanonicalFinding
@@ -623,6 +638,228 @@ func (s *stubAPIStore) CreateRecoveryDrillForTenant(_ context.Context, tenantID 
 	return item, nil
 }
 
+func (s *stubAPIStore) ListKMSKeysForTenant(context.Context, string, int) ([]models.KMSKey, error) {
+	return s.kmsKeys, nil
+}
+
+func (s *stubAPIStore) CreateKMSKeyForTenant(_ context.Context, tenantID string, actor string, request models.CreateKMSKeyRequest) (models.KMSKey, error) {
+	if s.createKMSKeyErr != nil {
+		return models.KMSKey{}, s.createKMSKeyErr
+	}
+	now := time.Now().UTC()
+	item := models.KMSKey{
+		ID:        "kms-key-created",
+		TenantID:  strings.TrimSpace(tenantID),
+		KeyRef:    strings.TrimSpace(request.KeyRef),
+		Provider:  strings.TrimSpace(request.Provider),
+		Algorithm: strings.TrimSpace(request.Algorithm),
+		Purpose:   strings.TrimSpace(request.Purpose),
+		Status:    "active",
+		CreatedBy: strings.TrimSpace(actor),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if item.Provider == "" {
+		item.Provider = "local"
+	}
+	if item.Algorithm == "" {
+		item.Algorithm = "aes-256-gcm"
+	}
+	if item.Purpose == "" {
+		item.Purpose = "encrypt_decrypt"
+	}
+	s.kmsKeys = append(s.kmsKeys, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) EncryptWithKMSForTenant(context.Context, string, models.KMSEncryptRequest) (models.KMSEncryptResponse, error) {
+	if s.kmsEncryptErr != nil {
+		return models.KMSEncryptResponse{}, s.kmsEncryptErr
+	}
+	if strings.TrimSpace(s.kmsEncryptResponse.KeyRef) != "" {
+		return s.kmsEncryptResponse, nil
+	}
+	return models.KMSEncryptResponse{
+		KeyRef:        "stub-key",
+		Algorithm:     "aes-256-gcm",
+		NonceB64:      "bm9uY2U=",
+		CiphertextB64: "Y2lwaGVydGV4dA==",
+	}, nil
+}
+
+func (s *stubAPIStore) DecryptWithKMSForTenant(context.Context, string, models.KMSDecryptRequest) (models.KMSDecryptResponse, error) {
+	if s.kmsDecryptErr != nil {
+		return models.KMSDecryptResponse{}, s.kmsDecryptErr
+	}
+	if strings.TrimSpace(s.kmsDecryptResponse.KeyRef) != "" || strings.TrimSpace(s.kmsDecryptResponse.PlaintextB64) != "" {
+		return s.kmsDecryptResponse, nil
+	}
+	return models.KMSDecryptResponse{
+		KeyRef:       "stub-key",
+		PlaintextB64: "cGxhaW50ZXh0",
+	}, nil
+}
+
+func (s *stubAPIStore) SignWithKMSForTenant(context.Context, string, models.KMSSignRequest) (models.KMSSignResponse, error) {
+	if s.kmsSignErr != nil {
+		return models.KMSSignResponse{}, s.kmsSignErr
+	}
+	if strings.TrimSpace(s.kmsSignResponse.KeyRef) != "" || strings.TrimSpace(s.kmsSignResponse.SignatureB64) != "" {
+		return s.kmsSignResponse, nil
+	}
+	return models.KMSSignResponse{
+		KeyRef:       "stub-key",
+		Algorithm:    "hmac-sha256",
+		SignatureB64: "c2ln",
+	}, nil
+}
+
+func (s *stubAPIStore) VerifyWithKMSForTenant(context.Context, string, models.KMSVerifyRequest) (models.KMSVerifyResponse, error) {
+	if s.kmsVerifyErr != nil {
+		return models.KMSVerifyResponse{}, s.kmsVerifyErr
+	}
+	if strings.TrimSpace(s.kmsVerifyResponse.KeyRef) != "" {
+		return s.kmsVerifyResponse, nil
+	}
+	return models.KMSVerifyResponse{
+		KeyRef: "stub-key",
+		Valid:  true,
+	}, nil
+}
+
+func (s *stubAPIStore) ListSecretReferencesForTenant(context.Context, string, int) ([]models.SecretReference, error) {
+	return s.secretReferences, nil
+}
+
+func (s *stubAPIStore) GetSecretReferenceForTenant(_ context.Context, _ string, referenceID string) (models.SecretReference, bool, error) {
+	for _, item := range s.secretReferences {
+		if item.ID == referenceID {
+			return item, true, nil
+		}
+	}
+	return models.SecretReference{}, false, nil
+}
+
+func (s *stubAPIStore) CreateSecretReferenceForTenant(_ context.Context, tenantID string, actor string, request models.CreateSecretReferenceRequest) (models.SecretReference, error) {
+	if s.createSecretReferenceErr != nil {
+		return models.SecretReference{}, s.createSecretReferenceErr
+	}
+	now := time.Now().UTC()
+	item := models.SecretReference{
+		ID:            "secret-ref-created",
+		TenantID:      strings.TrimSpace(tenantID),
+		Name:          strings.TrimSpace(request.Name),
+		Provider:      strings.TrimSpace(request.Provider),
+		SecretPath:    strings.TrimSpace(request.SecretPath),
+		SecretVersion: strings.TrimSpace(request.SecretVersion),
+		Metadata:      request.Metadata,
+		CreatedBy:     strings.TrimSpace(actor),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if item.Provider == "" {
+		item.Provider = "vault"
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	s.secretReferences = append(s.secretReferences, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateSecretReferenceForTenant(_ context.Context, _ string, referenceID string, _ string, request models.UpdateSecretReferenceRequest) (models.SecretReference, bool, error) {
+	for idx := range s.secretReferences {
+		if s.secretReferences[idx].ID != referenceID {
+			continue
+		}
+		if value := strings.TrimSpace(request.Name); value != "" {
+			s.secretReferences[idx].Name = value
+		}
+		if value := strings.TrimSpace(request.Provider); value != "" {
+			s.secretReferences[idx].Provider = value
+		}
+		if value := strings.TrimSpace(request.SecretPath); value != "" {
+			s.secretReferences[idx].SecretPath = value
+		}
+		if request.SecretVersion != "" {
+			s.secretReferences[idx].SecretVersion = strings.TrimSpace(request.SecretVersion)
+		}
+		if request.Metadata != nil {
+			s.secretReferences[idx].Metadata = request.Metadata
+		}
+		s.secretReferences[idx].UpdatedAt = time.Now().UTC()
+		return s.secretReferences[idx], true, nil
+	}
+	return models.SecretReference{}, false, nil
+}
+
+func (s *stubAPIStore) DeleteSecretReferenceForTenant(_ context.Context, _ string, referenceID string) (bool, error) {
+	next := make([]models.SecretReference, 0, len(s.secretReferences))
+	deleted := false
+	for _, item := range s.secretReferences {
+		if item.ID == referenceID {
+			deleted = true
+			continue
+		}
+		next = append(next, item)
+	}
+	s.secretReferences = next
+	return deleted, nil
+}
+
+func (s *stubAPIStore) ListSecretLeasesForTenant(_ context.Context, _ string, referenceID string, _ int) ([]models.SecretLease, error) {
+	if strings.TrimSpace(referenceID) == "" {
+		return s.secretLeases, nil
+	}
+	filtered := make([]models.SecretLease, 0, len(s.secretLeases))
+	for _, item := range s.secretLeases {
+		if item.SecretReferenceID == referenceID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) IssueSecretLeaseForTenant(_ context.Context, tenantID string, actor string, request models.IssueSecretLeaseRequest) (models.IssuedSecretLease, error) {
+	if s.issueSecretLeaseErr != nil {
+		return models.IssuedSecretLease{}, s.issueSecretLeaseErr
+	}
+	if strings.TrimSpace(s.issuedSecretLease.Lease.ID) != "" {
+		return s.issuedSecretLease, nil
+	}
+	now := time.Now().UTC()
+	lease := models.SecretLease{
+		ID:                "secret-lease-created",
+		TenantID:          strings.TrimSpace(tenantID),
+		SecretReferenceID: strings.TrimSpace(request.SecretReferenceID),
+		WorkerID:          strings.TrimSpace(request.WorkerID),
+		Status:            "active",
+		ExpiresAt:         now.Add(10 * time.Minute),
+		CreatedBy:         strings.TrimSpace(actor),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	s.secretLeases = append(s.secretLeases, lease)
+	return models.IssuedSecretLease{
+		Lease:      lease,
+		LeaseToken: "stub-lease-token",
+	}, nil
+}
+
+func (s *stubAPIStore) RevokeSecretLeaseForTenant(_ context.Context, _ string, leaseID string, _ string) (models.SecretLease, bool, error) {
+	now := time.Now().UTC()
+	for idx := range s.secretLeases {
+		if s.secretLeases[idx].ID != leaseID {
+			continue
+		}
+		s.secretLeases[idx].Status = "revoked"
+		s.secretLeases[idx].UpdatedAt = now
+		s.secretLeases[idx].RevokedAt = &now
+		return s.secretLeases[idx], true, nil
+	}
+	return models.SecretLease{}, false, nil
+}
+
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
 	return s.findingWaivers, nil
 }
@@ -1105,6 +1342,228 @@ func TestWorkerIdentityRejectsMismatchedWorkerID(t *testing.T) {
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for worker identity mismatch, got %d", recorder.Code)
+	}
+}
+
+func TestKMSKeyEndpoints(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/kms/keys", strings.NewReader(`{
+		"key_ref":"tenant-master",
+		"provider":"local",
+		"algorithm":"aes-256-gcm",
+		"purpose":"all"
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer admin-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for create kms key, got %d", createRecorder.Code)
+	}
+
+	var created models.KMSKey
+	if err := json.NewDecoder(createRecorder.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create kms key response: %v", err)
+	}
+	if created.KeyRef != "tenant-master" {
+		t.Fatalf("expected key_ref tenant-master, got %s", created.KeyRef)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/kms/keys?limit=10", nil)
+	listRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for list kms keys, got %d", listRecorder.Code)
+	}
+
+	var payload struct {
+		Items []models.KMSKey `json:"items"`
+	}
+	if err := json.NewDecoder(listRecorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode list kms keys response: %v", err)
+	}
+	if len(payload.Items) != 1 {
+		t.Fatalf("expected 1 kms key, got %d", len(payload.Items))
+	}
+}
+
+func TestKMSEncryptSignAndVerifyEndpoints(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		kmsEncryptResponse: models.KMSEncryptResponse{
+			KeyRef:        "tenant-master",
+			Algorithm:     "aes-256-gcm",
+			NonceB64:      "bm9uY2U=",
+			CiphertextB64: "Y2lwaGVydGV4dA==",
+		},
+		kmsDecryptResponse: models.KMSDecryptResponse{
+			KeyRef:       "tenant-master",
+			PlaintextB64: "cGxhaW50ZXh0",
+		},
+		kmsSignResponse: models.KMSSignResponse{
+			KeyRef:       "tenant-master",
+			Algorithm:    "hmac-sha256",
+			SignatureB64: "c2lnbmF0dXJl",
+		},
+		kmsVerifyResponse: models.KMSVerifyResponse{
+			KeyRef: "tenant-master",
+			Valid:  true,
+		},
+	}
+
+	server := New(config.Load(), store)
+	requests := []struct {
+		path     string
+		payload  string
+		decodeAs any
+	}{
+		{
+			path:     "/v1/kms/encrypt",
+			payload:  `{"key_ref":"tenant-master","plaintext_b64":"cGxhaW50ZXh0"}`,
+			decodeAs: &models.KMSEncryptResponse{},
+		},
+		{
+			path:     "/v1/kms/decrypt",
+			payload:  `{"key_ref":"tenant-master","nonce_b64":"bm9uY2U=","ciphertext_b64":"Y2lwaGVydGV4dA=="}`,
+			decodeAs: &models.KMSDecryptResponse{},
+		},
+		{
+			path:     "/v1/kms/sign",
+			payload:  `{"key_ref":"tenant-master","message_b64":"c2lnbi1tZQ=="}`,
+			decodeAs: &models.KMSSignResponse{},
+		},
+		{
+			path:     "/v1/kms/verify",
+			payload:  `{"key_ref":"tenant-master","message_b64":"c2lnbi1tZQ==","signature_b64":"c2lnbmF0dXJl"}`,
+			decodeAs: &models.KMSVerifyResponse{},
+		},
+	}
+
+	for _, item := range requests {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, item.path, strings.NewReader(item.payload))
+		request.Header.Set("Authorization", "Bearer admin-token")
+		request.Header.Set("Content-Type", "application/json")
+
+		server.httpServer.Handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected 200 for %s, got %d", item.path, recorder.Code)
+		}
+		if err := json.NewDecoder(recorder.Body).Decode(item.decodeAs); err != nil {
+			t.Fatalf("decode response for %s: %v", item.path, err)
+		}
+	}
+}
+
+func TestSecretReferenceAndLeaseEndpoints(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	createSecretRecorder := httptest.NewRecorder()
+	createSecretRequest := httptest.NewRequest(http.MethodPost, "/v1/secrets/references", strings.NewReader(`{
+		"name":"db-password",
+		"provider":"vault",
+		"secret_path":"kv/apps/payments/db",
+		"metadata":{"env":"prod"}
+	}`))
+	createSecretRequest.Header.Set("Authorization", "Bearer admin-token")
+	createSecretRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createSecretRecorder, createSecretRequest)
+	if createSecretRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 create secret reference, got %d", createSecretRecorder.Code)
+	}
+
+	var createdSecret models.SecretReference
+	if err := json.NewDecoder(createSecretRecorder.Body).Decode(&createdSecret); err != nil {
+		t.Fatalf("decode create secret reference response: %v", err)
+	}
+	if createdSecret.ID == "" {
+		t.Fatal("expected secret reference id")
+	}
+
+	issueLeaseRecorder := httptest.NewRecorder()
+	issueLeaseRequest := httptest.NewRequest(http.MethodPost, "/v1/secrets/leases/issue", strings.NewReader(fmt.Sprintf(`{
+		"secret_reference_id":"%s",
+		"worker_id":"worker-1",
+		"ttl_seconds":300
+	}`, createdSecret.ID)))
+	issueLeaseRequest.Header.Set("Authorization", "Bearer admin-token")
+	issueLeaseRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(issueLeaseRecorder, issueLeaseRequest)
+	if issueLeaseRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 issue secret lease, got %d", issueLeaseRecorder.Code)
+	}
+
+	var issuedLease models.IssuedSecretLease
+	if err := json.NewDecoder(issueLeaseRecorder.Body).Decode(&issuedLease); err != nil {
+		t.Fatalf("decode issued secret lease response: %v", err)
+	}
+	if issuedLease.Lease.ID == "" || issuedLease.LeaseToken == "" {
+		t.Fatalf("expected lease id and token, got %+v", issuedLease)
+	}
+
+	revokeRecorder := httptest.NewRecorder()
+	revokeRequest := httptest.NewRequest(http.MethodPost, "/v1/secrets/leases/"+issuedLease.Lease.ID+"/revoke", nil)
+	revokeRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(revokeRecorder, revokeRequest)
+	if revokeRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 revoke secret lease, got %d", revokeRecorder.Code)
+	}
+
+	var revoked models.SecretLease
+	if err := json.NewDecoder(revokeRecorder.Body).Decode(&revoked); err != nil {
+		t.Fatalf("decode revoke secret lease response: %v", err)
+	}
+	if revoked.Status != "revoked" {
+		t.Fatalf("expected revoked status, got %s", revoked.Status)
 	}
 }
 
