@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"unifiedsecurityscanner/control-plane/internal/auth"
 	"unifiedsecurityscanner/control-plane/internal/models"
@@ -113,10 +114,10 @@ func (s *Store) CreateKMSKeyForTenant(ctx context.Context, tenantID string, acto
 		AggregateType: "kms_key",
 		AggregateID:   item.ID,
 		Payload: map[string]any{
-			"key_ref":   item.KeyRef,
-			"provider":  item.Provider,
-			"algorithm": item.Algorithm,
-			"purpose":   item.Purpose,
+			"key_ref":    item.KeyRef,
+			"provider":   item.Provider,
+			"algorithm":  item.Algorithm,
+			"purpose":    item.Purpose,
 			"created_by": actor,
 		},
 		CreatedAt: now,
@@ -550,6 +551,55 @@ func (s *Store) IssueSecretLeaseForTenant(ctx context.Context, tenantID string, 
 	}
 
 	now := time.Now().UTC()
+	issued, err := issueSecretLeaseTx(ctx, s.pool, tenantID, actor, workerID, referenceID, ttl, now)
+	if err != nil {
+		return models.IssuedSecretLease{}, err
+	}
+
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      tenantID,
+		EventType:     "secret_lease.issued",
+		SourceService: "control-plane",
+		AggregateType: "secret_lease",
+		AggregateID:   issued.Lease.ID,
+		Payload: map[string]any{
+			"secret_reference_id": issued.Lease.SecretReferenceID,
+			"worker_id":           issued.Lease.WorkerID,
+			"expires_at":          issued.Lease.ExpiresAt,
+		},
+		CreatedAt: now,
+	})
+
+	return issued, nil
+}
+
+func issueSecretLeaseTx(
+	ctx context.Context,
+	exec interface {
+		Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	},
+	tenantID string,
+	actor string,
+	workerID string,
+	referenceID string,
+	ttl time.Duration,
+	now time.Time,
+) (models.IssuedSecretLease, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+	workerID = strings.TrimSpace(workerID)
+	referenceID = strings.TrimSpace(referenceID)
+	if workerID == "" || referenceID == "" {
+		return models.IssuedSecretLease{}, fmt.Errorf("worker_id and secret_reference_id are required")
+	}
+
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+
 	expiresAt := now.Add(ttl)
 	leaseTokenRaw, err := randomBytes(24)
 	if err != nil {
@@ -569,7 +619,7 @@ func (s *Store) IssueSecretLeaseForTenant(ctx context.Context, tenantID string, 
 		UpdatedAt:         now,
 	}
 
-	_, err = s.pool.Exec(ctx, `
+	_, err = exec.Exec(ctx, `
 		INSERT INTO secret_leases (
 			id, tenant_id, secret_reference_id, worker_id, lease_token_hash, status,
 			expires_at, created_by, created_at, updated_at, revoked_at
@@ -581,20 +631,6 @@ func (s *Store) IssueSecretLeaseForTenant(ctx context.Context, tenantID string, 
 	if err != nil {
 		return models.IssuedSecretLease{}, fmt.Errorf("insert secret lease: %w", err)
 	}
-
-	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
-		TenantID:      tenantID,
-		EventType:     "secret_lease.issued",
-		SourceService: "control-plane",
-		AggregateType: "secret_lease",
-		AggregateID:   item.ID,
-		Payload: map[string]any{
-			"secret_reference_id": item.SecretReferenceID,
-			"worker_id":           item.WorkerID,
-			"expires_at":          item.ExpiresAt,
-		},
-		CreatedAt: now,
-	})
 
 	return models.IssuedSecretLease{
 		Lease:      item,

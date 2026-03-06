@@ -65,6 +65,32 @@ func TestPhase7WebRuntimeRunGuardrailsAndAuthLabels(t *testing.T) {
 		t.Fatal("expected created web target id")
 	}
 
+	createUsernameReferenceResponse, createUsernameReferenceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/secrets/references", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":        "phase7-web-username",
+		"provider":    "vault",
+		"secret_path": "secret://phase7/web/username",
+	}, http.StatusCreated)
+	defer createUsernameReferenceResponse.Body.Close()
+
+	var usernameReference models.SecretReference
+	decodeJSONResponse(t, createUsernameReferenceBody, &usernameReference)
+	if strings.TrimSpace(usernameReference.ID) == "" {
+		t.Fatal("expected username secret reference id")
+	}
+
+	createPasswordReferenceResponse, createPasswordReferenceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/secrets/references", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":        "phase7-web-password",
+		"provider":    "vault",
+		"secret_path": "secret://phase7/web/password",
+	}, http.StatusCreated)
+	defer createPasswordReferenceResponse.Body.Close()
+
+	var passwordReference models.SecretReference
+	decodeJSONResponse(t, createPasswordReferenceBody, &passwordReference)
+	if strings.TrimSpace(passwordReference.ID) == "" {
+		t.Fatal("expected password secret reference id")
+	}
+
 	createProfileResponse, createProfileBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/web-auth-profiles", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
 		"name":                   "Phase7 Runtime Auth",
 		"auth_type":              "form",
@@ -303,5 +329,69 @@ func TestPhase7WebRuntimeRunGuardrailsAndAuthLabels(t *testing.T) {
 	}
 	if assignment.Labels["web_auth_password_secret_ref"] != "secret://phase7/web/password" {
 		t.Fatalf("expected password secret ref label, got %#v", assignment.Labels["web_auth_password_secret_ref"])
+	}
+	if assignment.Labels["web_auth_username_secret_reference_id"] != usernameReference.ID {
+		t.Fatalf("expected username secret reference id label %s, got %#v", usernameReference.ID, assignment.Labels["web_auth_username_secret_reference_id"])
+	}
+	if strings.TrimSpace(assignment.Labels["web_auth_username_secret_lease_id"]) == "" {
+		t.Fatalf("expected username secret lease id label, got %#v", assignment.Labels["web_auth_username_secret_lease_id"])
+	}
+	if strings.TrimSpace(assignment.Labels["web_auth_username_secret_lease_token"]) == "" {
+		t.Fatalf("expected username secret lease token label, got %#v", assignment.Labels["web_auth_username_secret_lease_token"])
+	}
+	if assignment.Labels["web_auth_password_secret_reference_id"] != passwordReference.ID {
+		t.Fatalf("expected password secret reference id label %s, got %#v", passwordReference.ID, assignment.Labels["web_auth_password_secret_reference_id"])
+	}
+	if strings.TrimSpace(assignment.Labels["web_auth_password_secret_lease_id"]) == "" {
+		t.Fatalf("expected password secret lease id label, got %#v", assignment.Labels["web_auth_password_secret_lease_id"])
+	}
+	if strings.TrimSpace(assignment.Labels["web_auth_password_secret_lease_token"]) == "" {
+		t.Fatalf("expected password secret lease token label, got %#v", assignment.Labels["web_auth_password_secret_lease_token"])
+	}
+
+	usernameLeasesResponse, usernameLeasesBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/secrets/leases?secret_reference_id="+usernameReference.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer usernameLeasesResponse.Body.Close()
+	var usernameLeasesPayload struct {
+		Items []models.SecretLease `json:"items"`
+	}
+	decodeJSONResponse(t, usernameLeasesBody, &usernameLeasesPayload)
+	if len(usernameLeasesPayload.Items) != 1 {
+		t.Fatalf("expected 1 username secret lease, got %d", len(usernameLeasesPayload.Items))
+	}
+	if usernameLeasesPayload.Items[0].WorkerID != workerRequest.WorkerID {
+		t.Fatalf("expected username lease worker_id %s, got %s", workerRequest.WorkerID, usernameLeasesPayload.Items[0].WorkerID)
+	}
+
+	passwordLeasesResponse, passwordLeasesBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/secrets/leases?secret_reference_id="+passwordReference.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer passwordLeasesResponse.Body.Close()
+	var passwordLeasesPayload struct {
+		Items []models.SecretLease `json:"items"`
+	}
+	decodeJSONResponse(t, passwordLeasesBody, &passwordLeasesPayload)
+	if len(passwordLeasesPayload.Items) != 1 {
+		t.Fatalf("expected 1 password secret lease, got %d", len(passwordLeasesPayload.Items))
+	}
+	if passwordLeasesPayload.Items[0].WorkerID != workerRequest.WorkerID {
+		t.Fatalf("expected password lease worker_id %s, got %s", workerRequest.WorkerID, passwordLeasesPayload.Items[0].WorkerID)
 	}
 }

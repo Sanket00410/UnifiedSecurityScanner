@@ -95,6 +95,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
 - Go to **Web Runtime** for website/API runtime onboarding and one-click execution:
   - create or update a **Web Target** (`base_url`, scope patterns, optional API schema)
   - create or update **Web Auth Profiles** (form/bearer/basic with secret refs)
+    - create matching secret references first via `/v1/secrets/references` for each `secret://...` path used by the profile
   - configure **Crawl Policy** per target (safe mode, limits, auth profile, allow/deny paths)
     - safe mode enforces web-safe tools only (`zap`, `zap-api`, `nuclei`)
     - restricted tools (`metasploit`, `sqlmap`, `nmap`) require disabling safe mode and policy approval
@@ -102,6 +103,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
   - run **Scope Check** on any URL against target rules
   - start runtime scans with **Run Selected Target** (profile + tools such as `zap,nuclei,browser-probe`)
     - if auth profile is attached, it must be enabled or run creation is rejected
+    - on worker assignment, short-lived secret leases are auto-issued for web auth secret refs and passed to runtime adapters via assignment labels
   - post run results into **Coverage Runs** and track **Coverage Status**
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
@@ -128,6 +130,9 @@ Backend API endpoints used by the guided UI:
 - `POST /v1/web-targets/{id}/run`
 - `GET/POST /v1/web-auth-profiles`
 - `GET/PUT/DELETE /v1/web-auth-profiles/{id}`
+- `GET/POST /v1/secrets/references`
+- `GET/PUT/DELETE /v1/secrets/references/{id}`
+- `GET /v1/secrets/leases`
 
 ## Dedicated UI in Docker (standalone)
 

@@ -2018,6 +2018,52 @@ fn append_browser_probe_policy_args(request: &AdapterRequest, args: &mut Vec<Str
             args.push(normalized.to_string());
         }
     }
+
+    struct SecretLeaseArgDescriptor<'a> {
+        secret_ref_label: &'a str,
+        lease_token_label: &'a str,
+        secret_ref_arg: &'a str,
+        lease_token_arg: &'a str,
+    }
+
+    let descriptors = [
+        SecretLeaseArgDescriptor {
+            secret_ref_label: "web_auth_username_secret_ref",
+            lease_token_label: "web_auth_username_secret_lease_token",
+            secret_ref_arg: "--username-secret-ref",
+            lease_token_arg: "--username-secret-lease-token",
+        },
+        SecretLeaseArgDescriptor {
+            secret_ref_label: "web_auth_password_secret_ref",
+            lease_token_label: "web_auth_password_secret_lease_token",
+            secret_ref_arg: "--password-secret-ref",
+            lease_token_arg: "--password-secret-lease-token",
+        },
+        SecretLeaseArgDescriptor {
+            secret_ref_label: "web_auth_bearer_token_secret_ref",
+            lease_token_label: "web_auth_bearer_token_secret_lease_token",
+            secret_ref_arg: "--bearer-secret-ref",
+            lease_token_arg: "--bearer-secret-lease-token",
+        },
+    ];
+
+    for descriptor in descriptors {
+        if let Some(secret_ref) = request.labels.get(descriptor.secret_ref_label) {
+            let normalized = secret_ref.trim();
+            if !normalized.is_empty() {
+                args.push(descriptor.secret_ref_arg.to_string());
+                args.push(normalized.to_string());
+            }
+        }
+
+        if let Some(lease_token) = request.labels.get(descriptor.lease_token_label) {
+            let normalized = lease_token.trim();
+            if !normalized.is_empty() {
+                args.push(descriptor.lease_token_arg.to_string());
+                args.push(normalized.to_string());
+            }
+        }
+    }
 }
 
 fn write_web_runtime_policy_snapshot(request: &AdapterRequest) -> Result<Option<PathBuf>, String> {
@@ -2161,6 +2207,22 @@ mod tests {
         request
             .labels
             .insert("web_auth_type".to_string(), "form".to_string());
+        request.labels.insert(
+            "web_auth_username_secret_ref".to_string(),
+            "secret://phase7/web/username".to_string(),
+        );
+        request.labels.insert(
+            "web_auth_username_secret_lease_token".to_string(),
+            "username-lease-token".to_string(),
+        );
+        request.labels.insert(
+            "web_auth_password_secret_ref".to_string(),
+            "secret://phase7/web/password".to_string(),
+        );
+        request.labels.insert(
+            "web_auth_password_secret_lease_token".to_string(),
+            "password-lease-token".to_string(),
+        );
 
         let mut args = vec!["--target".to_string(), request.target.clone()];
         append_browser_probe_policy_args(&request, &mut args);
@@ -2171,6 +2233,10 @@ mod tests {
         assert!(joined.contains("--rate-limit 220"));
         assert!(joined.contains("--login-url https://app.example.com/login"));
         assert!(joined.contains("--auth-type form"));
+        assert!(joined.contains("--username-secret-ref secret://phase7/web/username"));
+        assert!(joined.contains("--username-secret-lease-token username-lease-token"));
+        assert!(joined.contains("--password-secret-ref secret://phase7/web/password"));
+        assert!(joined.contains("--password-secret-lease-token password-lease-token"));
     }
 
     #[test]

@@ -524,7 +524,7 @@ func (s *Store) RecordHeartbeat(ctx context.Context, request models.HeartbeatReq
 		return models.HeartbeatResponse{}, fmt.Errorf("record heartbeat: %w", err)
 	}
 
-	assignments, err := claimAssignmentsTx(ctx, tx, request.WorkerID, request.LeaseID, capabilitiesJSON, now, 3)
+	assignments, err := claimAssignmentsTx(ctx, tx, request.WorkerID, request.LeaseID, capabilitiesJSON, now, 3, s.secretLeaseMaxTTL)
 	if err != nil {
 		return models.HeartbeatResponse{}, err
 	}
@@ -954,6 +954,7 @@ func claimAssignmentsTx(
 	capabilitiesJSON []byte,
 	now time.Time,
 	limit int,
+	secretLeaseMaxTTL time.Duration,
 ) ([]models.JobAssignment, error) {
 	var capabilities []models.WorkerCapability
 	if len(capabilitiesJSON) > 0 {
@@ -1059,6 +1060,9 @@ func claimAssignmentsTx(
 		if len(assignments) >= limit {
 			break
 		}
+		if err := attachWebAuthSecretLeasesTx(ctx, tx, task.tenantID, task.taskID, workerID, task.labels, task.maxRuntimeSeconds, secretLeaseMaxTTL, now); err != nil {
+			return nil, err
+		}
 
 		_, err := tx.Exec(ctx, `
 			UPDATE scan_job_tasks
@@ -1099,6 +1103,143 @@ func claimAssignmentsTx(
 	}
 
 	return assignments, nil
+}
+
+func attachWebAuthSecretLeasesTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	taskID string,
+	workerID string,
+	labels map[string]string,
+	maxRuntimeSeconds int64,
+	secretLeaseMaxTTL time.Duration,
+	now time.Time,
+) error {
+	if len(labels) == 0 {
+		return nil
+	}
+
+	type secretLeaseLabelDescriptor struct {
+		secretPathLabelKey     string
+		referenceIDLabelKey    string
+		leaseIDLabelKey        string
+		leaseTokenLabelKey     string
+		leaseExpiresAtLabelKey string
+	}
+
+	descriptors := []secretLeaseLabelDescriptor{
+		{
+			secretPathLabelKey:     "web_auth_username_secret_ref",
+			referenceIDLabelKey:    "web_auth_username_secret_reference_id",
+			leaseIDLabelKey:        "web_auth_username_secret_lease_id",
+			leaseTokenLabelKey:     "web_auth_username_secret_lease_token",
+			leaseExpiresAtLabelKey: "web_auth_username_secret_lease_expires_at",
+		},
+		{
+			secretPathLabelKey:     "web_auth_password_secret_ref",
+			referenceIDLabelKey:    "web_auth_password_secret_reference_id",
+			leaseIDLabelKey:        "web_auth_password_secret_lease_id",
+			leaseTokenLabelKey:     "web_auth_password_secret_lease_token",
+			leaseExpiresAtLabelKey: "web_auth_password_secret_lease_expires_at",
+		},
+		{
+			secretPathLabelKey:     "web_auth_bearer_token_secret_ref",
+			referenceIDLabelKey:    "web_auth_bearer_token_secret_reference_id",
+			leaseIDLabelKey:        "web_auth_bearer_token_secret_lease_id",
+			leaseTokenLabelKey:     "web_auth_bearer_token_secret_lease_token",
+			leaseExpiresAtLabelKey: "web_auth_bearer_token_secret_lease_expires_at",
+		},
+	}
+
+	leaseTTL := secretLeaseTTLForTask(maxRuntimeSeconds, secretLeaseMaxTTL)
+	for _, descriptor := range descriptors {
+		secretPath := strings.TrimSpace(labels[descriptor.secretPathLabelKey])
+		if secretPath == "" {
+			continue
+		}
+
+		referenceID, err := resolveSecretReferenceIDByPathTx(ctx, tx, tenantID, secretPath)
+		if err != nil {
+			if errors.Is(err, ErrSecretReferenceNotFound) {
+				return fmt.Errorf("resolve %s for task %s: %w", descriptor.secretPathLabelKey, taskID, err)
+			}
+			return err
+		}
+
+		issued, err := issueSecretLeaseTx(ctx, tx, tenantID, "control-plane:worker-assignment", workerID, referenceID, leaseTTL, now)
+		if err != nil {
+			return fmt.Errorf("issue secret lease for task %s: %w", taskID, err)
+		}
+
+		labels[descriptor.referenceIDLabelKey] = issued.Lease.SecretReferenceID
+		labels[descriptor.leaseIDLabelKey] = issued.Lease.ID
+		labels[descriptor.leaseTokenLabelKey] = issued.LeaseToken
+		labels[descriptor.leaseExpiresAtLabelKey] = issued.Lease.ExpiresAt.Format(time.RFC3339)
+
+		if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+			TenantID:      tenantID,
+			EventType:     "secret_lease.issued",
+			SourceService: "control-plane",
+			AggregateType: "secret_lease",
+			AggregateID:   issued.Lease.ID,
+			Payload: map[string]any{
+				"secret_reference_id": issued.Lease.SecretReferenceID,
+				"worker_id":           issued.Lease.WorkerID,
+				"task_id":             taskID,
+				"secret_path_label":   descriptor.secretPathLabelKey,
+				"expires_at":          issued.Lease.ExpiresAt,
+			},
+			CreatedAt: now,
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func resolveSecretReferenceIDByPathTx(ctx context.Context, tx pgx.Tx, tenantID string, secretPath string) (string, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	secretPath = strings.TrimSpace(secretPath)
+	if tenantID == "" || secretPath == "" {
+		return "", ErrSecretReferenceNotFound
+	}
+
+	var referenceID string
+	err := tx.QueryRow(ctx, `
+		SELECT id
+		FROM secret_references
+		WHERE tenant_id = $1
+		  AND secret_path = $2
+		ORDER BY updated_at DESC, id DESC
+		LIMIT 1
+	`, tenantID, secretPath).Scan(&referenceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrSecretReferenceNotFound
+		}
+		return "", fmt.Errorf("query secret reference by path: %w", err)
+	}
+
+	return strings.TrimSpace(referenceID), nil
+}
+
+func secretLeaseTTLForTask(maxRuntimeSeconds int64, maxTTL time.Duration) time.Duration {
+	ttl := 10 * time.Minute
+	if maxRuntimeSeconds > 0 {
+		runtimeTTL := (time.Duration(maxRuntimeSeconds) * time.Second) + (2 * time.Minute)
+		if runtimeTTL > ttl {
+			ttl = runtimeTTL
+		}
+	}
+	if ttl < 5*time.Minute {
+		ttl = 5 * time.Minute
+	}
+	if maxTTL > 0 && ttl > maxTTL {
+		ttl = maxTTL
+	}
+	return ttl
 }
 
 func recomputeScanJobStatusTx(ctx context.Context, tx pgx.Tx, scanJobID string, now time.Time) error {
