@@ -62,6 +62,10 @@ type apiStore interface {
 	GetEvidenceObjectForTenant(ctx context.Context, tenantID string, evidenceID string) (models.EvidenceObject, bool, error)
 	ListEvidenceRetentionRunsForTenant(ctx context.Context, tenantID string, limit int) ([]models.EvidenceRetentionRun, error)
 	RunEvidenceRetentionForTenant(ctx context.Context, tenantID string, actor string, request models.RunEvidenceRetentionRequest) (models.EvidenceRetentionRun, error)
+	ListBackupSnapshotsForTenant(ctx context.Context, tenantID string, limit int) ([]models.BackupSnapshot, error)
+	CreateBackupSnapshotForTenant(ctx context.Context, tenantID string, actor string, request models.CreateBackupSnapshotRequest) (models.BackupSnapshot, error)
+	ListRecoveryDrillsForTenant(ctx context.Context, tenantID string, limit int) ([]models.RecoveryDrill, error)
+	CreateRecoveryDrillForTenant(ctx context.Context, tenantID string, actor string, request models.CreateRecoveryDrillRequest) (models.RecoveryDrill, error)
 	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
 	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
 	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
@@ -189,6 +193,14 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/v1/evidence/retention/runs", server.withUserAuth(auth.PermissionPoliciesRead, "evidence_retention_runs.list", "evidence_retention_run", server.handleEvidenceRetentionRuns))
 	mux.HandleFunc("/v1/evidence/retention/run", server.withUserAuth(auth.PermissionPoliciesWrite, "evidence_retention.run", "evidence_retention_run", server.handleEvidenceRetentionRun))
 	mux.HandleFunc("/v1/evidence/", server.withUserAuth(auth.PermissionFindingsRead, "evidence.read", "evidence", server.handleEvidenceRoute))
+	mux.HandleFunc("/v1/backups/snapshots", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "backup_snapshots", "backup_snapshot", server.handleBackupSnapshots))
+	mux.HandleFunc("/v1/backups/recovery-drills", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "recovery_drills", "recovery_drill", server.handleRecoveryDrills))
 	mux.HandleFunc("/v1/findings/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionRemediationsWrite,
@@ -1379,6 +1391,110 @@ func (s *Server) handleEvidenceRetentionRun(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.writeJSON(w, http.StatusOK, run)
+}
+
+func (s *Server) handleBackupSnapshots(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListBackupSnapshotsForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_backup_snapshots_failed", "backup snapshots could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		var request models.CreateBackupSnapshotRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+
+		item, err := s.store.CreateBackupSnapshotForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "create_backup_snapshot_failed", err.Error())
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleRecoveryDrills(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListRecoveryDrillsForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_recovery_drills_failed", "recovery drills could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		var request models.CreateRecoveryDrillRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+
+		item, err := s.store.CreateRecoveryDrillForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, "create_recovery_drill_failed", err.Error())
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleFindingRoute(w http.ResponseWriter, r *http.Request) {

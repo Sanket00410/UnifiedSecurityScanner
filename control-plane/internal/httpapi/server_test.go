@@ -41,6 +41,9 @@ type stubAPIStore struct {
 	evidenceRetentionRuns    []models.EvidenceRetentionRun
 	evidenceRetentionRun     models.EvidenceRetentionRun
 	evidenceRetentionErr     error
+	backupSnapshots          []models.BackupSnapshot
+	recoveryDrills           []models.RecoveryDrill
+	backupDRErr              error
 	findings                 []models.CanonicalFinding
 	auditEvents              []models.AuditEvent
 	apiTokens                []models.APIToken
@@ -491,6 +494,58 @@ func (s *stubAPIStore) RunEvidenceRetentionForTenant(_ context.Context, _ string
 		return models.EvidenceRetentionRun{}, s.evidenceRetentionErr
 	}
 	return s.evidenceRetentionRun, nil
+}
+
+func (s *stubAPIStore) ListBackupSnapshotsForTenant(_ context.Context, _ string, _ int) ([]models.BackupSnapshot, error) {
+	if s.backupDRErr != nil {
+		return nil, s.backupDRErr
+	}
+	return s.backupSnapshots, nil
+}
+
+func (s *stubAPIStore) CreateBackupSnapshotForTenant(_ context.Context, tenantID string, actor string, request models.CreateBackupSnapshotRequest) (models.BackupSnapshot, error) {
+	if s.backupDRErr != nil {
+		return models.BackupSnapshot{}, s.backupDRErr
+	}
+	item := models.BackupSnapshot{
+		ID:             "backup-snapshot-created",
+		TenantID:       strings.TrimSpace(tenantID),
+		Scope:          strings.TrimSpace(request.Scope),
+		StorageRef:     strings.TrimSpace(request.StorageRef),
+		ChecksumSHA256: strings.TrimSpace(request.ChecksumSHA256),
+		SizeBytes:      request.SizeBytes,
+		Status:         "completed",
+		CreatedBy:      strings.TrimSpace(actor),
+		Notes:          strings.TrimSpace(request.Notes),
+		CreatedAt:      time.Now().UTC(),
+	}
+	s.backupSnapshots = append(s.backupSnapshots, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) ListRecoveryDrillsForTenant(_ context.Context, _ string, _ int) ([]models.RecoveryDrill, error) {
+	if s.backupDRErr != nil {
+		return nil, s.backupDRErr
+	}
+	return s.recoveryDrills, nil
+}
+
+func (s *stubAPIStore) CreateRecoveryDrillForTenant(_ context.Context, tenantID string, actor string, request models.CreateRecoveryDrillRequest) (models.RecoveryDrill, error) {
+	if s.backupDRErr != nil {
+		return models.RecoveryDrill{}, s.backupDRErr
+	}
+	item := models.RecoveryDrill{
+		ID:         "recovery-drill-created",
+		TenantID:   strings.TrimSpace(tenantID),
+		SnapshotID: strings.TrimSpace(request.SnapshotID),
+		Status:     "completed",
+		StartedBy:  strings.TrimSpace(actor),
+		Notes:      strings.TrimSpace(request.Notes),
+		RTOSeconds: request.RTOSeconds,
+		StartedAt:  time.Now().UTC(),
+	}
+	s.recoveryDrills = append(s.recoveryDrills, item)
+	return item, nil
 }
 
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
@@ -1664,6 +1719,91 @@ func TestEvidenceEndpointValidatesArchivedParameter(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid archived filter, got %d", recorder.Code)
+	}
+}
+
+func TestBackupAndRecoveryDrillEndpoints(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		backupSnapshots: []models.BackupSnapshot{
+			{
+				ID:         "backup-1",
+				TenantID:   "org-1",
+				Scope:      "full_platform",
+				StorageRef: "s3://uss-backups/org-1/backup-1.tar.zst",
+				Status:     "completed",
+				CreatedBy:  "admin@example.com",
+				CreatedAt:  now,
+			},
+		},
+		recoveryDrills: []models.RecoveryDrill{
+			{
+				ID:         "drill-1",
+				TenantID:   "org-1",
+				SnapshotID: "backup-1",
+				Status:     "completed",
+				StartedBy:  "admin@example.com",
+				StartedAt:  now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listSnapshotRecorder := httptest.NewRecorder()
+	listSnapshotRequest := httptest.NewRequest(http.MethodGet, "/v1/backups/snapshots?limit=10", nil)
+	listSnapshotRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listSnapshotRecorder, listSnapshotRequest)
+	if listSnapshotRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for backup snapshot list, got %d", listSnapshotRecorder.Code)
+	}
+
+	createSnapshotRecorder := httptest.NewRecorder()
+	createSnapshotRequest := httptest.NewRequest(http.MethodPost, "/v1/backups/snapshots", strings.NewReader(`{
+		"scope":"full_platform",
+		"storage_ref":"s3://uss-backups/org-1/backup-2.tar.zst",
+		"size_bytes":12345
+	}`))
+	createSnapshotRequest.Header.Set("Authorization", "Bearer admin-token")
+	createSnapshotRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createSnapshotRecorder, createSnapshotRequest)
+	if createSnapshotRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for backup snapshot create, got %d", createSnapshotRecorder.Code)
+	}
+
+	listDrillRecorder := httptest.NewRecorder()
+	listDrillRequest := httptest.NewRequest(http.MethodGet, "/v1/backups/recovery-drills?limit=10", nil)
+	listDrillRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listDrillRecorder, listDrillRequest)
+	if listDrillRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for recovery drill list, got %d", listDrillRecorder.Code)
+	}
+
+	createDrillRecorder := httptest.NewRecorder()
+	createDrillRequest := httptest.NewRequest(http.MethodPost, "/v1/backups/recovery-drills", strings.NewReader(`{
+		"snapshot_id":"backup-1",
+		"status":"completed",
+		"rto_seconds":480
+	}`))
+	createDrillRequest.Header.Set("Authorization", "Bearer admin-token")
+	createDrillRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createDrillRecorder, createDrillRequest)
+	if createDrillRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for recovery drill create, got %d", createDrillRecorder.Code)
 	}
 }
 

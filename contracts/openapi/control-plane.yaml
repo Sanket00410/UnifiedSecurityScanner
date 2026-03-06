@@ -938,6 +938,112 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EvidenceRetentionRun"
+  /v1/backups/snapshots:
+    get:
+      operationId: listBackupSnapshots
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Backup snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupSnapshot"
+    post:
+      operationId: createBackupSnapshot
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBackupSnapshotRequest"
+      responses:
+        "201":
+          description: Backup snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "400":
+          description: Invalid backup snapshot payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/backups/recovery-drills:
+    get:
+      operationId: listRecoveryDrills
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Recovery drill history
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RecoveryDrill"
+    post:
+      operationId: createRecoveryDrill
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRecoveryDrillRequest"
+      responses:
+        "201":
+          description: Recovery drill created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecoveryDrill"
+        "400":
+          description: Invalid recovery drill payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/findings/{findingId}/waivers:
     get:
       operationId: listFindingWaivers
@@ -4086,6 +4192,112 @@ components:
         completed_at:
           type: string
           format: date-time
+    BackupSnapshot:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - scope
+        - storage_ref
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        scope:
+          type: string
+        storage_ref:
+          type: string
+        checksum_sha256:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+        created_by:
+          type: string
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateBackupSnapshotRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - storage_ref
+      properties:
+        scope:
+          type: string
+        storage_ref:
+          type: string
+        checksum_sha256:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        status:
+          type: string
+        notes:
+          type: string
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+    RecoveryDrill:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - status
+        - started_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        snapshot_id:
+          type: string
+        status:
+          type: string
+        started_by:
+          type: string
+        notes:
+          type: string
+        rto_seconds:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateRecoveryDrillRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        snapshot_id:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+        rto_seconds:
+          type: integer
+          format: int64
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
     ApiError:
       type: object
       additionalProperties: false
