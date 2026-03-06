@@ -51,6 +51,8 @@ type apiStore interface {
 	CreateForTenant(ctx context.Context, tenantID string, request models.CreateScanJobRequest) (models.ScanJob, error)
 	GetForTenant(ctx context.Context, tenantID string, id string) (models.ScanJob, bool, error)
 	ListScanPresetsForTenant(ctx context.Context, tenantID string) ([]models.ScanPreset, error)
+	ListScanEngineControlsForTenant(ctx context.Context, tenantID string, targetKind string, limit int) ([]models.ScanEngineControl, error)
+	UpsertScanEngineControlForTenant(ctx context.Context, tenantID string, adapterID string, actor string, request models.UpsertScanEngineControlRequest) (models.ScanEngineControl, error)
 	ListScanTargetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.ScanTarget, error)
 	GetScanTargetForTenant(ctx context.Context, tenantID string, targetID string) (models.ScanTarget, bool, error)
 	CreateScanTargetForTenant(ctx context.Context, tenantID string, actor string, request models.CreateScanTargetRequest) (models.ScanTarget, error)
@@ -195,6 +197,12 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "scan_jobs", "scan_job", server.handleScanJobs))
 	mux.HandleFunc("/v1/scan-jobs/", server.withUserAuth(auth.PermissionScanJobsRead, "scan_job.read", "scan_job", server.handleScanJobByID))
 	mux.HandleFunc("/v1/scan-presets", server.withUserAuth(auth.PermissionScanJobsRead, "scan_presets.list", "scan_preset", server.handleScanPresets))
+	mux.HandleFunc("/v1/scan-engine-controls", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionPoliciesRead,
+	}, "scan_engine_controls", "scan_engine_control", server.handleScanEngineControls))
+	mux.HandleFunc("/v1/scan-engine-controls/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodPut: auth.PermissionPoliciesWrite,
+	}, "scan_engine_control", "scan_engine_control", server.handleScanEngineControlRoute))
 	mux.HandleFunc("/v1/scan-targets", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionScanJobsRead,
 		http.MethodPost: auth.PermissionScanJobsWrite,
@@ -670,6 +678,80 @@ func (s *Server) handleScanPresets(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleScanEngineControls(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	limit := 200
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	targetKind := strings.TrimSpace(r.URL.Query().Get("target_kind"))
+	items, err := s.store.ListScanEngineControlsForTenant(r.Context(), principal.OrganizationID, targetKind, limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_scan_engine_controls_failed", "scan engine controls could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+	})
+}
+
+func (s *Server) handleScanEngineControlRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	adapterID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-engine-controls/"))
+	if adapterID == "" || strings.Contains(adapterID, "/") {
+		s.writeError(w, http.StatusNotFound, "scan_engine_control_not_found", "the requested scan engine control route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.UpsertScanEngineControlRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, err := s.store.UpsertScanEngineControlForTenant(r.Context(), principal.OrganizationID, adapterID, principal.Email, request)
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "required") || strings.Contains(lower, "must be greater than or equal to zero") {
+			s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "upsert_scan_engine_control_failed", "scan engine control could not be saved")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) handleScanTargets(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
@@ -823,6 +905,16 @@ func (s *Server) handleScanTargetRoute(w http.ResponseWriter, r *http.Request) {
 					"message":   denied.Error(),
 					"policy_id": denied.PolicyID,
 					"rule_hits": denied.RuleHits,
+				})
+				return
+			}
+			var engineDenied *jobs.EngineControlDeniedError
+			if errors.As(err, &engineDenied) {
+				s.writeJSON(w, http.StatusForbidden, map[string]any{
+					"code":        "engine_control_denied",
+					"message":     engineDenied.Error(),
+					"adapter_id":  strings.TrimSpace(engineDenied.AdapterID),
+					"target_kind": strings.TrimSpace(engineDenied.TargetKind),
 				})
 				return
 			}
@@ -4105,6 +4197,16 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal
 			})
 			return
 		}
+		var engineDenied *jobs.EngineControlDeniedError
+		if errors.As(err, &engineDenied) {
+			s.writeJSON(w, http.StatusForbidden, map[string]any{
+				"code":        "engine_control_denied",
+				"message":     engineDenied.Error(),
+				"adapter_id":  strings.TrimSpace(engineDenied.AdapterID),
+				"target_kind": strings.TrimSpace(engineDenied.TargetKind),
+			})
+			return
+		}
 		var limitExceeded *jobs.TenantLimitExceededError
 		if errors.As(err, &limitExceeded) {
 			s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
@@ -4339,6 +4441,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-jobs/"))
 	case strings.HasPrefix(r.URL.Path, "/v1/scan-targets/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-targets/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/scan-engine-controls/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/scan-engine-controls/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

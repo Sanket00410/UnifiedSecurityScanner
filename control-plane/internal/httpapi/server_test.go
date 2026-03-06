@@ -34,6 +34,7 @@ type stubAPIStore struct {
 	issueWorkerCertErr       error
 	caBundleErr              error
 	scanPresets              []models.ScanPreset
+	scanEngineControls       []models.ScanEngineControl
 	scanTargets              []models.ScanTarget
 	kmsKeys                  []models.KMSKey
 	ingestionSources         []models.IngestionSource
@@ -169,6 +170,64 @@ func (s *stubAPIStore) ListScanPresetsForTenant(context.Context, string) ([]mode
 	return s.scanPresets, nil
 }
 
+func (s *stubAPIStore) ListScanEngineControlsForTenant(_ context.Context, _ string, targetKind string, _ int) ([]models.ScanEngineControl, error) {
+	targetKind = strings.ToLower(strings.TrimSpace(targetKind))
+	if targetKind == "" {
+		return s.scanEngineControls, nil
+	}
+	out := make([]models.ScanEngineControl, 0, len(s.scanEngineControls))
+	for _, item := range s.scanEngineControls {
+		if strings.ToLower(strings.TrimSpace(item.TargetKind)) == targetKind {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubAPIStore) UpsertScanEngineControlForTenant(_ context.Context, tenantID string, adapterID string, actor string, request models.UpsertScanEngineControlRequest) (models.ScanEngineControl, error) {
+	item := models.ScanEngineControl{
+		TenantID:          strings.TrimSpace(tenantID),
+		AdapterID:         strings.ToLower(strings.TrimSpace(adapterID)),
+		TargetKind:        strings.ToLower(strings.TrimSpace(request.TargetKind)),
+		Enabled:           true,
+		RulepackVersion:   "",
+		MaxRuntimeSeconds: 0,
+		UpdatedBy:         strings.TrimSpace(actor),
+		UpdatedAt:         time.Now().UTC(),
+	}
+	for idx := range s.scanEngineControls {
+		if s.scanEngineControls[idx].AdapterID == item.AdapterID &&
+			s.scanEngineControls[idx].TargetKind == item.TargetKind {
+			item = s.scanEngineControls[idx]
+			item.UpdatedBy = strings.TrimSpace(actor)
+			item.UpdatedAt = time.Now().UTC()
+			if request.Enabled != nil {
+				item.Enabled = *request.Enabled
+			}
+			if request.RulepackVersion != nil {
+				item.RulepackVersion = strings.TrimSpace(*request.RulepackVersion)
+			}
+			if request.MaxRuntimeSeconds != nil {
+				item.MaxRuntimeSeconds = *request.MaxRuntimeSeconds
+			}
+			s.scanEngineControls[idx] = item
+			return item, nil
+		}
+	}
+
+	if request.Enabled != nil {
+		item.Enabled = *request.Enabled
+	}
+	if request.RulepackVersion != nil {
+		item.RulepackVersion = strings.TrimSpace(*request.RulepackVersion)
+	}
+	if request.MaxRuntimeSeconds != nil {
+		item.MaxRuntimeSeconds = *request.MaxRuntimeSeconds
+	}
+	s.scanEngineControls = append(s.scanEngineControls, item)
+	return item, nil
+}
+
 func (s *stubAPIStore) ListScanTargetsForTenant(context.Context, string, int) ([]models.ScanTarget, error) {
 	return s.scanTargets, nil
 }
@@ -251,6 +310,10 @@ func (s *stubAPIStore) DeleteScanTargetForTenant(_ context.Context, _ string, ta
 }
 
 func (s *stubAPIStore) RunScanTargetForTenant(_ context.Context, _ string, targetID string, _ string, request models.RunScanTargetRequest) (models.ScanTarget, models.ScanJob, bool, error) {
+	if s.createScanJobErr != nil {
+		return models.ScanTarget{}, models.ScanJob{}, false, s.createScanJobErr
+	}
+
 	for idx := range s.scanTargets {
 		if s.scanTargets[idx].ID != targetID {
 			continue
@@ -2129,6 +2192,54 @@ func TestScanJobPolicyDeniedReturnsForbidden(t *testing.T) {
 	}
 }
 
+func TestScanJobEngineControlDeniedReturnsForbidden(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		createScanJobErr: &jobs.EngineControlDeniedError{
+			AdapterID:  "metasploit",
+			TargetKind: "domain",
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/scan-jobs", strings.NewReader(`{
+		"target_kind": "domain",
+		"target": "example.com",
+		"profile": "default",
+		"tools": ["metasploit"]
+	}`))
+	request.Header.Set("Authorization", "Bearer appsec-token")
+	request.Header.Set("Content-Type", "application/json")
+
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", recorder.Code)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response payload: %v", err)
+	}
+	if payload["code"] != "engine_control_denied" {
+		t.Fatalf("expected engine_control_denied code, got %#v", payload["code"])
+	}
+}
+
 func TestScanPresetsEndpointReturnsItems(t *testing.T) {
 	t.Parallel()
 
@@ -2175,6 +2286,62 @@ func TestScanPresetsEndpointReturnsItems(t *testing.T) {
 	}
 	if len(payload.Items) != 1 || payload.Items[0].ID != "repo-balanced" {
 		t.Fatalf("unexpected scan presets payload: %#v", payload.Items)
+	}
+}
+
+func TestScanEngineControlEndpoints(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		scanEngineControls: []models.ScanEngineControl{
+			{
+				TenantID:          "org-1",
+				AdapterID:         "semgrep",
+				TargetKind:        "repo",
+				Enabled:           true,
+				RulepackVersion:   "semgrep-rules-2026.03",
+				MaxRuntimeSeconds: 300,
+				UpdatedBy:         "bootstrap",
+				UpdatedAt:         now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/scan-engine-controls?target_kind=repo", nil)
+	listRequest.Header.Set("Authorization", "Bearer appsec-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for scan engine control list, got %d", listRecorder.Code)
+	}
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/v1/scan-engine-controls/metasploit", strings.NewReader(`{
+		"target_kind": "domain",
+		"enabled": false,
+		"rulepack_version": "metasploit-pack-2026.03",
+		"max_runtime_seconds": 180
+	}`))
+	putRequest.Header.Set("Authorization", "Bearer appsec-token")
+	putRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(putRecorder, putRequest)
+	if putRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for scan engine control upsert, got %d", putRecorder.Code)
 	}
 }
 

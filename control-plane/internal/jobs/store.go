@@ -94,6 +94,30 @@ func (e *PolicyDeniedError) Error() string {
 	return "policy denied the requested operation"
 }
 
+type EngineControlDeniedError struct {
+	AdapterID  string
+	TargetKind string
+	Reason     string
+}
+
+func (e *EngineControlDeniedError) Error() string {
+	if e == nil {
+		return "scan engine control denied the requested operation"
+	}
+	if strings.TrimSpace(e.Reason) != "" {
+		return strings.TrimSpace(e.Reason)
+	}
+	adapterID := strings.TrimSpace(e.AdapterID)
+	targetKind := strings.TrimSpace(e.TargetKind)
+	if adapterID == "" {
+		return "scan engine control denied the requested operation"
+	}
+	if targetKind == "" {
+		return fmt.Sprintf("scan adapter %s is disabled by tenant engine control", adapterID)
+	}
+	return fmt.Sprintf("scan adapter %s is disabled for target_kind %s by tenant engine control", adapterID, targetKind)
+}
+
 type Store struct {
 	pool                        *pgxpool.Pool
 	workerHeartbeatTTL          time.Duration
@@ -211,6 +235,20 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 		return models.ScanJob{}, violation
 	}
 
+	engineControls, err := loadEffectiveScanEngineControlsTx(ctx, tx, job.TenantID, job.TargetKind, tools)
+	if err != nil {
+		return models.ScanJob{}, err
+	}
+	for _, tool := range tools {
+		control, exists := engineControls[tool]
+		if exists && !control.Enabled {
+			return models.ScanJob{}, &EngineControlDeniedError{
+				AdapterID:  tool,
+				TargetKind: job.TargetKind,
+			}
+		}
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO scan_jobs (
 			id, tenant_id, target_kind, target, profile, requested_by,
@@ -227,10 +265,25 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 
 	for _, tool := range tools {
 		taskID := nextTaskID()
-		labelsJSON, err := json.Marshal(map[string]string{
+		labels := map[string]string{
 			"scan_job_id": job.ID,
 			"profile":     job.Profile,
-		})
+		}
+		maxRuntimeSeconds := maxRuntimeForTool(tool)
+		if control, exists := engineControls[tool]; exists {
+			if strings.TrimSpace(control.RulepackVersion) != "" {
+				labels["rulepack_version"] = strings.TrimSpace(control.RulepackVersion)
+				if strings.TrimSpace(control.TargetKind) == "" {
+					labels["rulepack_scope"] = "global"
+				} else {
+					labels["rulepack_scope"] = strings.TrimSpace(control.TargetKind)
+				}
+			}
+			if control.MaxRuntimeSeconds > 0 {
+				maxRuntimeSeconds = control.MaxRuntimeSeconds
+			}
+		}
+		labelsJSON, err := json.Marshal(labels)
 		if err != nil {
 			return models.ScanJob{}, fmt.Errorf("marshal task labels: %w", err)
 		}
@@ -262,7 +315,7 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 				$15, $15
 			)
 		`, taskID, job.ID, job.TenantID, tool, job.TargetKind, job.Target,
-			string(models.TaskStatusQueued), approvedModulesForTool(tool, job.TargetKind), labelsJSON, maxRuntimeForTool(tool),
+			string(models.TaskStatusQueued), approvedModulesForTool(tool, job.TargetKind), labelsJSON, maxRuntimeSeconds,
 			fmt.Sprintf("local://evidence/%s", taskID), policyStatus, policyReason, ruleHitsJSON, now)
 		if err != nil {
 			return models.ScanJob{}, fmt.Errorf("insert scan job task: %w", err)
