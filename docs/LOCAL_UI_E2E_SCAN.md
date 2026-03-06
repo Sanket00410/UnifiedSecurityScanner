@@ -92,6 +92,14 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
     - rotate token anytime with **Rotate Ingestion Token**
     - rotate signing secret anytime with **Rotate Webhook Secret**
     - monitor automation in **Ingestion Events**
+- Go to **Web Runtime** for website/API runtime onboarding and one-click execution:
+  - create or update a **Web Target** (`base_url`, scope patterns, optional API schema)
+  - create or update **Web Auth Profiles** (form/bearer/basic with secret refs)
+  - configure **Crawl Policy** per target (safe mode, limits, auth profile, allow/deny paths)
+  - configure **Coverage Baseline** (expected routes/API/auth states + minimum percentages)
+  - run **Scope Check** on any URL against target rules
+  - start runtime scans with **Run Selected Target** (profile + tools such as `zap,nuclei`)
+  - post run results into **Coverage Runs** and track **Coverage Status**
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
   - `/v1/reports/findings/export?format=json|csv`
@@ -107,6 +115,16 @@ Backend API endpoints used by the guided UI:
 - `POST /v1/ingestion/sources/{id}/rotate-webhook-secret`
 - `GET /v1/ingestion/events`
 - `POST /ingest/webhooks/{sourceId}` with `X-USS-Ingest-Token`
+- `GET/POST /v1/web-targets`
+- `GET/PUT/DELETE /v1/web-targets/{id}`
+- `GET/PUT /v1/web-targets/{id}/crawl-policy`
+- `GET/PUT /v1/web-targets/{id}/coverage-baseline`
+- `GET/POST /v1/web-targets/{id}/coverage-runs`
+- `GET /v1/web-targets/{id}/coverage-status`
+- `GET /v1/web-targets/{id}/scope/evaluate?url=...`
+- `POST /v1/web-targets/{id}/run`
+- `GET/POST /v1/web-auth-profiles`
+- `GET/PUT/DELETE /v1/web-auth-profiles/{id}`
 
 ## Dedicated UI in Docker (standalone)
 

@@ -6,6 +6,7 @@ export type RouteKey =
   | "approvals"
   | "remediations"
   | "operations"
+  | "web-runtime"
   | "reports";
 
 export type ListResponse<T> = {
@@ -230,4 +231,109 @@ export type ReportSummary = {
     layer?: Record<string, number>;
   };
   risk_summary?: RiskSummary;
+};
+
+export type WebTarget = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  target_type: string;
+  base_url: string;
+  api_schema_url?: string;
+  in_scope_patterns?: string[];
+  out_of_scope_patterns?: string[];
+  labels?: Record<string, any>;
+  created_by?: string;
+  updated_by?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WebAuthProfile = {
+  id: string;
+  tenant_id?: string;
+  name: string;
+  auth_type: string;
+  login_url?: string;
+  username_secret_ref?: string;
+  password_secret_ref?: string;
+  bearer_token_secret_ref?: string;
+  csrf_mode?: string;
+  session_bootstrap?: Record<string, any>;
+  test_personas?: Record<string, any>[];
+  token_refresh_strategy?: string;
+  enabled?: boolean;
+  created_by?: string;
+  updated_by?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WebCrawlPolicy = {
+  id: string;
+  tenant_id?: string;
+  web_target_id: string;
+  auth_profile_id?: string;
+  safe_mode: boolean;
+  max_depth: number;
+  max_requests: number;
+  request_budget_per_minute: number;
+  allow_paths?: string[];
+  deny_paths?: string[];
+  seed_urls?: string[];
+  headers?: Record<string, any>;
+  created_by?: string;
+  updated_by?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WebCoverageBaseline = {
+  id: string;
+  tenant_id?: string;
+  web_target_id: string;
+  expected_route_count: number;
+  expected_api_operation_count: number;
+  expected_auth_state_count: number;
+  minimum_route_coverage: number;
+  minimum_api_coverage: number;
+  minimum_auth_coverage: number;
+  notes?: string;
+  created_by?: string;
+  updated_by?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type WebTargetScopeEvaluation = {
+  web_target_id: string;
+  url: string;
+  in_scope: boolean;
+  reason?: string;
+};
+
+export type WebRuntimeCoverageRun = {
+  id: string;
+  tenant_id?: string;
+  web_target_id: string;
+  scan_job_id?: string;
+  route_coverage: number;
+  api_coverage: number;
+  auth_coverage: number;
+  discovered_route_count: number;
+  discovered_api_operation_count: number;
+  discovered_auth_state_count: number;
+  evidence_ref?: string;
+  created_by?: string;
+  created_at?: string;
+};
+
+export type WebCoverageStatus = {
+  web_target_id: string;
+  baseline?: WebCoverageBaseline;
+  latest_run?: WebRuntimeCoverageRun;
+  route_coverage_meets: boolean;
+  api_coverage_meets: boolean;
+  auth_coverage_meets: boolean;
+  overall_meets: boolean;
 };

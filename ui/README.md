@@ -8,6 +8,7 @@ This is the dedicated TypeScript frontend for the enterprise operator console.
 - Policy management and approval queues
 - Remediation workflow operations
 - Notifications, scan job operations, audit trail, report export
+- Web runtime operations: web targets, auth profiles, crawl policy, coverage baseline/status, scope checks, runtime run launch
 - Role/scope-adaptive route and action controls from `/v1/auth/me` session scopes
 
 ## Runtime

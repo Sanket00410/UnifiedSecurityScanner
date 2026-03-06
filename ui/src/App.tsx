@@ -21,7 +21,14 @@ import {
   ScanEngineControl,
   ScanPreset,
   ScanTarget,
-  Session
+  Session,
+  WebAuthProfile,
+  WebCrawlPolicy,
+  WebCoverageBaseline,
+  WebCoverageStatus,
+  WebRuntimeCoverageRun,
+  WebTarget,
+  WebTargetScopeEvaluation
 } from "./types";
 
 type StatusState = {
@@ -43,6 +50,7 @@ const ROUTES: RouteDefinition[] = [
   { key: "approvals", label: "Approvals", anyScope: ["policies:read", "remediations:read"] },
   { key: "remediations", label: "Remediation", anyScope: ["remediations:read"] },
   { key: "operations", label: "Operations", anyScope: ["scan_jobs:read", "remediations:read", "audit:read"] },
+  { key: "web-runtime", label: "Web Runtime", anyScope: ["scan_jobs:read"] },
   { key: "reports", label: "Reports", anyScope: ["findings:read"] }
 ];
 
@@ -54,6 +62,7 @@ const ROUTE_TITLES: Record<RouteKey, string> = {
   approvals: "Approval Queues",
   remediations: "Remediation Workflows",
   operations: "Operations Console",
+  "web-runtime": "Web Runtime Security",
   reports: "Reporting and Export"
 };
 
@@ -92,11 +101,51 @@ function parseNumber(raw: FormDataEntryValue | null, fallback = 0) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function parseOptionalInt(raw: FormDataEntryValue | null, fieldName: string) {
+  const text = String(raw || "").trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${fieldName} must be a number`);
+  }
+  return Math.floor(parsed);
+}
+
+function parseOptionalFloat(raw: FormDataEntryValue | null, fieldName: string) {
+  const text = String(raw || "").trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${fieldName} must be a number`);
+  }
+  return parsed;
+}
+
 function parseRulesJSON(raw: FormDataEntryValue | null) {
   const value = String(raw || "").trim();
   if (!value) return [] as any[];
   const parsed = JSON.parse(value);
   if (!Array.isArray(parsed)) throw new Error("rules_json must be an array");
+  return parsed;
+}
+
+function parseJSONMap(raw: FormDataEntryValue | null, fieldName: string) {
+  const value = String(raw || "").trim();
+  if (!value) return {} as Record<string, any>;
+  const parsed = JSON.parse(value);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error(`${fieldName} must be a JSON object`);
+  }
+  return parsed as Record<string, any>;
+}
+
+function parseJSONArray(raw: FormDataEntryValue | null, fieldName: string) {
+  const value = String(raw || "").trim();
+  if (!value) return [] as any[];
+  const parsed = JSON.parse(value);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${fieldName} must be a JSON array`);
+  }
   return parsed;
 }
 
@@ -150,6 +199,8 @@ export function App() {
   const [scanPresets, setScanPresets] = useState<ScanPreset[]>([]);
   const [scanEngineControls, setScanEngineControls] = useState<ScanEngineControl[]>([]);
   const [scanTargets, setScanTargets] = useState<ScanTarget[]>([]);
+  const [webTargets, setWebTargets] = useState<WebTarget[]>([]);
+  const [webAuthProfiles, setWebAuthProfiles] = useState<WebAuthProfile[]>([]);
   const [ingestionSources, setIngestionSources] = useState<IngestionSource[]>([]);
   const [ingestionEvents, setIngestionEvents] = useState<IngestionEvent[]>([]);
   const [riskSummary, setRiskSummary] = useState<RiskSummary | null>(null);
@@ -160,6 +211,8 @@ export function App() {
   const [selectedRemediationID, setSelectedRemediationID] = useState("");
   const [selectedPresetID, setSelectedPresetID] = useState("");
   const [selectedScanTargetID, setSelectedScanTargetID] = useState("");
+  const [selectedWebTargetID, setSelectedWebTargetID] = useState("");
+  const [selectedWebAuthProfileID, setSelectedWebAuthProfileID] = useState("");
   const [selectedIngestionSourceID, setSelectedIngestionSourceID] = useState("");
 
   const [findingSearch, setFindingSearch] = useState("");
@@ -185,15 +238,23 @@ export function App() {
   const [pendingExceptionRequests, setPendingExceptionRequests] = useState<any[]>([]);
   const [reportPreview, setReportPreview] = useState<ReportSummary | Record<string, any> | null>(null);
   const [scanJobResult, setScanJobResult] = useState("");
+  const [webRuntimeResult, setWebRuntimeResult] = useState("");
   const [latestIngestionToken, setLatestIngestionToken] = useState("");
   const [latestWebhookSecret, setLatestWebhookSecret] = useState("");
   const [reportExportFormat, setReportExportFormat] = useState<"json" | "csv">("json");
+  const [webCrawlPolicy, setWebCrawlPolicy] = useState<WebCrawlPolicy | null>(null);
+  const [webCoverageBaseline, setWebCoverageBaseline] = useState<WebCoverageBaseline | null>(null);
+  const [webCoverageRuns, setWebCoverageRuns] = useState<WebRuntimeCoverageRun[]>([]);
+  const [webCoverageStatus, setWebCoverageStatus] = useState<WebCoverageStatus | null>(null);
+  const [webScopeEvaluation, setWebScopeEvaluation] = useState<WebTargetScopeEvaluation | null>(null);
 
   const selectedFinding = findings.find((item) => item.finding_id === selectedFindingID) || null;
   const selectedPolicy = policies.find((item) => item.id === selectedPolicyID) || null;
   const selectedRemediation = remediations.find((item) => item.id === selectedRemediationID) || null;
   const selectedPreset = scanPresets.find((item) => item.id === selectedPresetID) || null;
   const selectedScanTarget = scanTargets.find((item) => item.id === selectedScanTargetID) || null;
+  const selectedWebTarget = webTargets.find((item) => item.id === selectedWebTargetID) || null;
+  const selectedWebAuthProfile = webAuthProfiles.find((item) => item.id === selectedWebAuthProfileID) || null;
   const selectedIngestionSource = ingestionSources.find((item) => item.id === selectedIngestionSourceID) || null;
   const visibleRoutes = ROUTES.filter((item) => sessionHasAnyScope(session, item.anyScope));
   const visibleRouteKeys = visibleRoutes.map((item) => item.key);
@@ -241,12 +302,31 @@ export function App() {
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanPreset>>("/v1/scan-presets") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanEngineControl>>("/v1/scan-engine-controls?limit=500") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<ScanTarget>>("/v1/scan-targets") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<WebTarget>>("/v1/web-targets") : Promise.resolve({ items: [] }),
+      sessionCanReadScanJobs ? getJSON<ListResponse<WebAuthProfile>>("/v1/web-auth-profiles") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<IngestionSource>>("/v1/ingestion/sources") : Promise.resolve({ items: [] }),
       sessionCanReadScanJobs ? getJSON<ListResponse<IngestionEvent>>("/v1/ingestion/events?limit=100") : Promise.resolve({ items: [] }),
       sessionCanReadFindings ? getJSON<RiskSummary>("/v1/risk/summary") : Promise.resolve(null)
     ]);
 
-    const [findingsRes, assetsRes, policiesRes, approvalsRes, remediationsRes, notificationsRes, auditRes, jobsRes, presetsRes, controlsRes, targetsRes, sourcesRes, eventsRes, riskRes] = tasks;
+    const [
+      findingsRes,
+      assetsRes,
+      policiesRes,
+      approvalsRes,
+      remediationsRes,
+      notificationsRes,
+      auditRes,
+      jobsRes,
+      presetsRes,
+      controlsRes,
+      targetsRes,
+      webTargetsRes,
+      webAuthProfilesRes,
+      sourcesRes,
+      eventsRes,
+      riskRes
+    ] = tasks;
 
     const nextFindings = findingsRes.status === "fulfilled" ? toItems(findingsRes.value) : [];
     const nextAssets = assetsRes.status === "fulfilled" ? toItems(assetsRes.value) : [];
@@ -259,6 +339,8 @@ export function App() {
     const nextPresets = presetsRes.status === "fulfilled" ? toItems(presetsRes.value) : [];
     const nextScanEngineControls = controlsRes.status === "fulfilled" ? toItems(controlsRes.value) : [];
     const nextTargets = targetsRes.status === "fulfilled" ? toItems(targetsRes.value) : [];
+    const nextWebTargets = webTargetsRes.status === "fulfilled" ? toItems(webTargetsRes.value) : [];
+    const nextWebAuthProfiles = webAuthProfilesRes.status === "fulfilled" ? toItems(webAuthProfilesRes.value) : [];
     const nextIngestionSources = sourcesRes.status === "fulfilled" ? toItems(sourcesRes.value) : [];
     const nextIngestionEvents = eventsRes.status === "fulfilled" ? toItems(eventsRes.value) : [];
     const nextRisk = riskRes.status === "fulfilled" ? riskRes.value : null;
@@ -274,6 +356,8 @@ export function App() {
     setScanPresets(nextPresets);
     setScanEngineControls(nextScanEngineControls);
     setScanTargets(nextTargets);
+    setWebTargets(nextWebTargets);
+    setWebAuthProfiles(nextWebAuthProfiles);
     setIngestionSources(nextIngestionSources);
     setIngestionEvents(nextIngestionEvents);
     setRiskSummary(nextRisk);
@@ -294,6 +378,24 @@ export function App() {
     } else {
       setSelectedScanTargetID("");
     }
+    if (nextWebTargets.length > 0) {
+      const hasSelectedWebTarget = nextWebTargets.some((item) => item.id === selectedWebTargetID);
+      if (!hasSelectedWebTarget) setSelectedWebTargetID(nextWebTargets[0].id);
+    } else {
+      setSelectedWebTargetID("");
+      setWebCrawlPolicy(null);
+      setWebCoverageBaseline(null);
+      setWebCoverageRuns([]);
+      setWebCoverageStatus(null);
+      setWebScopeEvaluation(null);
+      setWebRuntimeResult("");
+    }
+    if (nextWebAuthProfiles.length > 0) {
+      const hasSelectedWebAuthProfile = nextWebAuthProfiles.some((item) => item.id === selectedWebAuthProfileID);
+      if (!hasSelectedWebAuthProfile) setSelectedWebAuthProfileID(nextWebAuthProfiles[0].id);
+    } else {
+      setSelectedWebAuthProfileID("");
+    }
     if (nextIngestionSources.length > 0) {
       const hasSelectedSource = nextIngestionSources.some((item) => item.id === selectedIngestionSourceID);
       if (!hasSelectedSource) setSelectedIngestionSourceID(nextIngestionSources[0].id);
@@ -311,6 +413,8 @@ export function App() {
         notifications: nextNotifications.length,
         scan_engine_controls: nextScanEngineControls.length,
         scan_targets: nextTargets.length,
+        web_targets: nextWebTargets.length,
+        web_auth_profiles: nextWebAuthProfiles.length,
         ingestion_sources: nextIngestionSources.length
       },
       risk_summary: nextRisk
@@ -356,6 +460,36 @@ export function App() {
     }
   }
 
+  async function getOptionalJSON<T>(path: string) {
+    try {
+      return await getJSON<T>(path);
+    } catch (error: any) {
+      if (error?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async function loadSelectedWebTargetDetails(targetID: string) {
+    if (!targetID) return;
+    try {
+      const [crawlPolicy, coverageBaseline, coverageStatus, coverageRunsResponse] = await Promise.all([
+        getOptionalJSON<WebCrawlPolicy>(`/v1/web-targets/${encodeURIComponent(targetID)}/crawl-policy`),
+        getOptionalJSON<WebCoverageBaseline>(`/v1/web-targets/${encodeURIComponent(targetID)}/coverage-baseline`),
+        getOptionalJSON<WebCoverageStatus>(`/v1/web-targets/${encodeURIComponent(targetID)}/coverage-status`),
+        getJSON<ListResponse<WebRuntimeCoverageRun>>(`/v1/web-targets/${encodeURIComponent(targetID)}/coverage-runs?limit=50`).catch(() => ({ items: [] }))
+      ]);
+      setWebCrawlPolicy(crawlPolicy);
+      setWebCoverageBaseline(coverageBaseline);
+      setWebCoverageStatus(coverageStatus);
+      setWebCoverageRuns(toItems(coverageRunsResponse));
+      setWebScopeEvaluation(null);
+    } catch (error: any) {
+      setStatus({ message: `Web runtime details load failed: ${error.message}`, error: true });
+    }
+  }
+
   async function loadApprovalQueues() {
     if (!remediations.length) {
       setPendingAssignmentRequests([]);
@@ -391,6 +525,18 @@ export function App() {
   useEffect(() => {
     if (selectedRemediationID) loadSelectedRemediation(selectedRemediationID);
   }, [selectedRemediationID]);
+
+  useEffect(() => {
+    if (selectedWebTargetID) {
+      loadSelectedWebTargetDetails(selectedWebTargetID);
+      return;
+    }
+    setWebCrawlPolicy(null);
+    setWebCoverageBaseline(null);
+    setWebCoverageRuns([]);
+    setWebCoverageStatus(null);
+    setWebScopeEvaluation(null);
+  }, [selectedWebTargetID]);
 
   useEffect(() => {
     if (route === "approvals") loadApprovalQueues();
@@ -889,6 +1035,268 @@ export function App() {
         await putJSON<ScanEngineControl>(`/v1/scan-engine-controls/${encodeURIComponent(adapterID)}`, request);
       },
       "Scan engine control saved."
+    );
+  }
+
+  function handleCreateWebTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        const created = await postJSON<WebTarget>("/v1/web-targets", {
+          name: String(formData.get("name") || "").trim(),
+          target_type: String(formData.get("target_type") || "").trim(),
+          base_url: String(formData.get("base_url") || "").trim(),
+          api_schema_url: String(formData.get("api_schema_url") || "").trim(),
+          in_scope_patterns: splitCSV(formData.get("in_scope_patterns")),
+          out_of_scope_patterns: splitCSV(formData.get("out_of_scope_patterns")),
+          labels: parseJSONMap(formData.get("labels_json"), "labels_json")
+        });
+        setSelectedWebTargetID(created.id);
+      },
+      "Web target created."
+    );
+  }
+
+  function handleUpdateWebTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        await putJSON<WebTarget>(`/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}`, {
+          name: String(formData.get("name") || "").trim(),
+          target_type: String(formData.get("target_type") || "").trim(),
+          base_url: String(formData.get("base_url") || "").trim(),
+          api_schema_url: String(formData.get("api_schema_url") || "").trim(),
+          in_scope_patterns: splitCSV(formData.get("in_scope_patterns")),
+          out_of_scope_patterns: splitCSV(formData.get("out_of_scope_patterns")),
+          labels: parseJSONMap(formData.get("labels_json"), "labels_json")
+        });
+        await loadSelectedWebTargetDetails(selectedWebTargetID);
+      },
+      "Web target updated."
+    );
+  }
+
+  function handleDeleteWebTarget() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    withRefresh(
+      async () => {
+        await deleteJSON<void>(`/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}`);
+        setWebRuntimeResult("");
+      },
+      "Web target deleted."
+    );
+  }
+
+  function handleCreateWebAuthProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        const created = await postJSON<WebAuthProfile>("/v1/web-auth-profiles", {
+          name: String(formData.get("name") || "").trim(),
+          auth_type: String(formData.get("auth_type") || "").trim(),
+          login_url: String(formData.get("login_url") || "").trim(),
+          username_secret_ref: String(formData.get("username_secret_ref") || "").trim(),
+          password_secret_ref: String(formData.get("password_secret_ref") || "").trim(),
+          bearer_token_secret_ref: String(formData.get("bearer_token_secret_ref") || "").trim(),
+          csrf_mode: String(formData.get("csrf_mode") || "").trim(),
+          session_bootstrap: parseJSONMap(formData.get("session_bootstrap_json"), "session_bootstrap_json"),
+          test_personas: parseJSONArray(formData.get("test_personas_json"), "test_personas_json"),
+          token_refresh_strategy: String(formData.get("token_refresh_strategy") || "").trim(),
+          enabled: String(formData.get("enabled") || "true") === "true"
+        });
+        setSelectedWebAuthProfileID(created.id);
+      },
+      "Web auth profile created."
+    );
+  }
+
+  function handleUpdateWebAuthProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebAuthProfileID) {
+      setStatus({ message: "Select an auth profile first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        await putJSON<WebAuthProfile>(`/v1/web-auth-profiles/${encodeURIComponent(selectedWebAuthProfileID)}`, {
+          name: String(formData.get("name") || "").trim(),
+          auth_type: String(formData.get("auth_type") || "").trim(),
+          login_url: String(formData.get("login_url") || "").trim(),
+          username_secret_ref: String(formData.get("username_secret_ref") || "").trim(),
+          password_secret_ref: String(formData.get("password_secret_ref") || "").trim(),
+          bearer_token_secret_ref: String(formData.get("bearer_token_secret_ref") || "").trim(),
+          csrf_mode: String(formData.get("csrf_mode") || "").trim(),
+          session_bootstrap: parseJSONMap(formData.get("session_bootstrap_json"), "session_bootstrap_json"),
+          test_personas: parseJSONArray(formData.get("test_personas_json"), "test_personas_json"),
+          token_refresh_strategy: String(formData.get("token_refresh_strategy") || "").trim(),
+          enabled: String(formData.get("enabled") || "true") === "true"
+        });
+      },
+      "Web auth profile updated."
+    );
+  }
+
+  function handleDeleteWebAuthProfile() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebAuthProfileID) {
+      setStatus({ message: "Select an auth profile first.", error: true });
+      return;
+    }
+    withRefresh(
+      async () => {
+        await deleteJSON<void>(`/v1/web-auth-profiles/${encodeURIComponent(selectedWebAuthProfileID)}`);
+      },
+      "Web auth profile deleted."
+    );
+  }
+
+  function handleUpsertWebCrawlPolicy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        await putJSON<WebCrawlPolicy>(`/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}/crawl-policy`, {
+          auth_profile_id: String(formData.get("auth_profile_id") || "").trim(),
+          safe_mode: String(formData.get("safe_mode") || "true") === "true",
+          max_depth: parseOptionalInt(formData.get("max_depth"), "max_depth"),
+          max_requests: parseOptionalInt(formData.get("max_requests"), "max_requests"),
+          request_budget_per_minute: parseOptionalInt(formData.get("request_budget_per_minute"), "request_budget_per_minute"),
+          allow_paths: splitCSV(formData.get("allow_paths")),
+          deny_paths: splitCSV(formData.get("deny_paths")),
+          seed_urls: splitCSV(formData.get("seed_urls")),
+          headers: parseJSONMap(formData.get("headers_json"), "headers_json")
+        });
+        await loadSelectedWebTargetDetails(selectedWebTargetID);
+      },
+      "Web crawl policy saved."
+    );
+  }
+
+  function handleUpsertWebCoverageBaseline(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        await putJSON<WebCoverageBaseline>(`/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}/coverage-baseline`, {
+          expected_route_count: parseOptionalInt(formData.get("expected_route_count"), "expected_route_count"),
+          expected_api_operation_count: parseOptionalInt(formData.get("expected_api_operation_count"), "expected_api_operation_count"),
+          expected_auth_state_count: parseOptionalInt(formData.get("expected_auth_state_count"), "expected_auth_state_count"),
+          minimum_route_coverage: parseOptionalFloat(formData.get("minimum_route_coverage"), "minimum_route_coverage"),
+          minimum_api_coverage: parseOptionalFloat(formData.get("minimum_api_coverage"), "minimum_api_coverage"),
+          minimum_auth_coverage: parseOptionalFloat(formData.get("minimum_auth_coverage"), "minimum_auth_coverage"),
+          notes: String(formData.get("notes") || "").trim()
+        });
+        await loadSelectedWebTargetDetails(selectedWebTargetID);
+      },
+      "Web coverage baseline saved."
+    );
+  }
+
+  function handleEvaluateWebScope(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canReadScanJobs, "Permission denied: scan_jobs:read scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    const evaluateURL = String(formData.get("url") || "").trim();
+    if (!evaluateURL) {
+      setStatus({ message: "URL is required for scope evaluation.", error: true });
+      return;
+    }
+    withRefresh(
+      async () => {
+        const result = await getJSON<WebTargetScopeEvaluation>(
+          `/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}/scope/evaluate?url=${encodeURIComponent(evaluateURL)}`
+        );
+        setWebScopeEvaluation(result);
+      },
+      "Scope evaluation completed."
+    );
+  }
+
+  function handleRunWebTarget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        const response = await postJSON<{ target: WebTarget; job: ScanJob }>(
+          `/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}/run`,
+          {
+            profile: String(formData.get("profile") || "").trim() || "runtime",
+            tools: splitCSV(formData.get("tools"))
+          }
+        );
+        setWebRuntimeResult(
+          `Created ${response.job.id} (${response.job.status}) for ${response.target.base_url} with ${response.job.approval_mode || "standard"} approval mode.`
+        );
+        setScanJobResult(`Created ${response.job.id} (${response.job.status}) from web target ${response.target.name || response.target.id}.`);
+        await loadSelectedWebTargetDetails(selectedWebTargetID);
+      },
+      "Web runtime scan started."
+    );
+  }
+
+  function handleCreateWebCoverageRun(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedWebTargetID) {
+      setStatus({ message: "Select a web target first.", error: true });
+      return;
+    }
+    const formData = new FormData(event.currentTarget);
+    withRefresh(
+      async () => {
+        const created = await postJSON<WebRuntimeCoverageRun>(
+          `/v1/web-targets/${encodeURIComponent(selectedWebTargetID)}/coverage-runs`,
+          {
+            scan_job_id: String(formData.get("scan_job_id") || "").trim(),
+            route_coverage: parseNumber(formData.get("route_coverage"), 0),
+            api_coverage: parseNumber(formData.get("api_coverage"), 0),
+            auth_coverage: parseNumber(formData.get("auth_coverage"), 0),
+            discovered_route_count: parseOptionalInt(formData.get("discovered_route_count"), "discovered_route_count") ?? 0,
+            discovered_api_operation_count:
+              parseOptionalInt(formData.get("discovered_api_operation_count"), "discovered_api_operation_count") ?? 0,
+            discovered_auth_state_count: parseOptionalInt(formData.get("discovered_auth_state_count"), "discovered_auth_state_count") ?? 0,
+            evidence_ref: String(formData.get("evidence_ref") || "").trim()
+          }
+        );
+        setWebRuntimeResult(`Coverage run ${created.id} recorded.`);
+        await loadSelectedWebTargetDetails(selectedWebTargetID);
+      },
+      "Coverage run recorded."
     );
   }
 
@@ -1395,6 +1803,296 @@ export function App() {
                   <li key={item.id}>{item.action || "action"} | {item.resource_type || "resource"} {item.resource_id || ""} | {item.actor_email || "system"} | {fmtDateTime(item.created_at)}</li>
                 ))}
               </ul>
+            </div>
+          </section>
+        )}
+
+        {route === "web-runtime" && (
+          <section className="panel split">
+            <div className="forms-col">
+              <div className="meta">
+                Web targets: {webTargets.length} | Selected: {selectedWebTarget?.name || "none"}
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Type</th><th>Base URL</th><th>Updated</th></tr></thead>
+                <tbody>
+                  {webTargets.slice(0, 50).map((item) => (
+                    <tr key={item.id} className={selectedWebTargetID === item.id ? "selected" : ""} onClick={() => setSelectedWebTargetID(item.id)}>
+                      <td>{item.name || item.id}</td>
+                      <td>{item.target_type || "webapp"}</td>
+                      <td>{item.base_url || "n/a"}</td>
+                      <td>{fmtDateTime(item.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="actions left">
+                <button className="ghost" disabled={!selectedWebTargetID || !canWriteScanJobs} onClick={handleDeleteWebTarget}>Delete Target</button>
+              </div>
+
+              <form className="form" onSubmit={handleCreateWebTarget}>
+                <h3>Create Web Target</h3>
+                <input name="name" placeholder="name" required />
+                <select name="target_type" defaultValue="webapp">
+                  <option value="webapp">webapp</option>
+                  <option value="api">api</option>
+                </select>
+                <input name="base_url" placeholder="https://app.example.com" required />
+                <input name="api_schema_url" placeholder="https://app.example.com/openapi.json (optional)" />
+                <input name="in_scope_patterns" placeholder="app.example.com/app/*,app.example.com/api/*" />
+                <input name="out_of_scope_patterns" placeholder="app.example.com/logout" />
+                <textarea name="labels_json" rows={2} placeholder='{"service":"customer-portal"}'></textarea>
+                <button type="submit" disabled={!canWriteScanJobs}>Create</button>
+              </form>
+
+              <form className="form" onSubmit={handleUpdateWebTarget} key={`update-web-target-${selectedWebTarget?.id || "none"}`}>
+                <h3>Update Selected Target</h3>
+                <input name="name" placeholder="name" defaultValue={selectedWebTarget?.name || ""} required />
+                <select name="target_type" defaultValue={selectedWebTarget?.target_type || "webapp"}>
+                  <option value="webapp">webapp</option>
+                  <option value="api">api</option>
+                </select>
+                <input name="base_url" placeholder="https://app.example.com" defaultValue={selectedWebTarget?.base_url || ""} required />
+                <input name="api_schema_url" placeholder="api schema url" defaultValue={selectedWebTarget?.api_schema_url || ""} />
+                <input
+                  name="in_scope_patterns"
+                  placeholder="csv include patterns"
+                  defaultValue={(selectedWebTarget?.in_scope_patterns || []).join(",")}
+                />
+                <input
+                  name="out_of_scope_patterns"
+                  placeholder="csv exclude patterns"
+                  defaultValue={(selectedWebTarget?.out_of_scope_patterns || []).join(",")}
+                />
+                <textarea name="labels_json" rows={2} defaultValue={JSON.stringify(selectedWebTarget?.labels || {}, null, 2)}></textarea>
+                <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Update</button>
+              </form>
+
+              <form className="form" onSubmit={handleRunWebTarget} key={`run-web-target-${selectedWebTarget?.id || "none"}`}>
+                <h3>Run Selected Target</h3>
+                <input name="profile" defaultValue="runtime" placeholder="runtime profile" required />
+                <input name="tools" defaultValue="zap,nuclei" placeholder="zap,nuclei" />
+                <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Start Runtime Scan</button>
+              </form>
+
+              <form className="form" onSubmit={handleEvaluateWebScope}>
+                <h3>Scope Check</h3>
+                <input name="url" placeholder="https://app.example.com/path" required />
+                <button type="submit" disabled={!selectedWebTargetID || !canReadScanJobs}>Evaluate URL Scope</button>
+              </form>
+              {webScopeEvaluation && (
+                <div className={`status ${webScopeEvaluation.in_scope ? "" : "error"}`}>
+                  Scope result: {webScopeEvaluation.in_scope ? "in scope" : "out of scope"} {webScopeEvaluation.reason ? `(${webScopeEvaluation.reason})` : ""}
+                </div>
+              )}
+              <div className="meta">{webRuntimeResult || "No web runtime scans created in this session."}</div>
+            </div>
+
+            <div className="forms-col">
+              <div className="meta">
+                Auth profiles: {webAuthProfiles.length} | Selected: {selectedWebAuthProfile?.name || "none"}
+              </div>
+              <table>
+                <thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th>Updated</th></tr></thead>
+                <tbody>
+                  {webAuthProfiles.slice(0, 50).map((item) => (
+                    <tr
+                      key={item.id}
+                      className={selectedWebAuthProfileID === item.id ? "selected" : ""}
+                      onClick={() => setSelectedWebAuthProfileID(item.id)}
+                    >
+                      <td>{item.name || item.id}</td>
+                      <td>{item.auth_type || "form"}</td>
+                      <td>{item.enabled ? "yes" : "no"}</td>
+                      <td>{fmtDateTime(item.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="actions left">
+                <button className="ghost" disabled={!selectedWebAuthProfileID || !canWriteScanJobs} onClick={handleDeleteWebAuthProfile}>Delete Profile</button>
+              </div>
+
+              <form className="form" onSubmit={handleCreateWebAuthProfile}>
+                <h3>Create Auth Profile</h3>
+                <input name="name" placeholder="name" required />
+                <select name="auth_type" defaultValue="form">
+                  <option value="form">form</option>
+                  <option value="bearer">bearer</option>
+                  <option value="basic">basic</option>
+                </select>
+                <select name="enabled" defaultValue="true">
+                  <option value="true">enabled</option>
+                  <option value="false">disabled</option>
+                </select>
+                <input name="login_url" placeholder="https://app.example.com/login (optional)" />
+                <input name="username_secret_ref" placeholder="secret://path/username" />
+                <input name="password_secret_ref" placeholder="secret://path/password" />
+                <input name="bearer_token_secret_ref" placeholder="secret://path/token" />
+                <input name="csrf_mode" placeholder="auto" defaultValue="auto" />
+                <input name="token_refresh_strategy" placeholder="cookie_relogin" defaultValue="cookie_relogin" />
+                <textarea name="session_bootstrap_json" rows={2} placeholder='{"csrf_token_field":"_token"}'></textarea>
+                <textarea name="test_personas_json" rows={2} placeholder='[{"name":"appsec-admin","role":"admin"}]'></textarea>
+                <button type="submit" disabled={!canWriteScanJobs}>Create</button>
+              </form>
+
+              <form className="form" onSubmit={handleUpdateWebAuthProfile} key={`update-web-auth-${selectedWebAuthProfile?.id || "none"}`}>
+                <h3>Update Selected Profile</h3>
+                <input name="name" placeholder="name" defaultValue={selectedWebAuthProfile?.name || ""} required />
+                <select name="auth_type" defaultValue={selectedWebAuthProfile?.auth_type || "form"}>
+                  <option value="form">form</option>
+                  <option value="bearer">bearer</option>
+                  <option value="basic">basic</option>
+                </select>
+                <select name="enabled" defaultValue={selectedWebAuthProfile?.enabled ? "true" : "false"}>
+                  <option value="true">enabled</option>
+                  <option value="false">disabled</option>
+                </select>
+                <input name="login_url" placeholder="login url" defaultValue={selectedWebAuthProfile?.login_url || ""} />
+                <input name="username_secret_ref" placeholder="username secret ref" defaultValue={selectedWebAuthProfile?.username_secret_ref || ""} />
+                <input name="password_secret_ref" placeholder="password secret ref" defaultValue={selectedWebAuthProfile?.password_secret_ref || ""} />
+                <input name="bearer_token_secret_ref" placeholder="token secret ref" defaultValue={selectedWebAuthProfile?.bearer_token_secret_ref || ""} />
+                <input name="csrf_mode" placeholder="csrf mode" defaultValue={selectedWebAuthProfile?.csrf_mode || ""} />
+                <input
+                  name="token_refresh_strategy"
+                  placeholder="token refresh strategy"
+                  defaultValue={selectedWebAuthProfile?.token_refresh_strategy || ""}
+                />
+                <textarea
+                  name="session_bootstrap_json"
+                  rows={2}
+                  defaultValue={JSON.stringify(selectedWebAuthProfile?.session_bootstrap || {}, null, 2)}
+                ></textarea>
+                <textarea name="test_personas_json" rows={2} defaultValue={JSON.stringify(selectedWebAuthProfile?.test_personas || [], null, 2)}></textarea>
+                <button type="submit" disabled={!selectedWebAuthProfileID || !canWriteScanJobs}>Update</button>
+              </form>
+
+              <form className="form" onSubmit={handleUpsertWebCrawlPolicy} key={`crawl-policy-${selectedWebTargetID || "none"}`}>
+                <h3>Crawl Policy</h3>
+                <select name="auth_profile_id" defaultValue={webCrawlPolicy?.auth_profile_id || ""}>
+                  <option value="">No auth profile</option>
+                  {webAuthProfiles.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.auth_type})
+                    </option>
+                  ))}
+                </select>
+                <select name="safe_mode" defaultValue={webCrawlPolicy?.safe_mode ? "true" : "false"}>
+                  <option value="true">safe mode</option>
+                  <option value="false">active mode</option>
+                </select>
+                <input name="max_depth" type="number" min={0} step={1} placeholder="max depth" defaultValue={webCrawlPolicy?.max_depth ?? 4} />
+                <input name="max_requests" type="number" min={0} step={1} placeholder="max requests" defaultValue={webCrawlPolicy?.max_requests ?? 1200} />
+                <input
+                  name="request_budget_per_minute"
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="request budget per minute"
+                  defaultValue={webCrawlPolicy?.request_budget_per_minute ?? 180}
+                />
+                <input name="allow_paths" placeholder="allow paths csv" defaultValue={(webCrawlPolicy?.allow_paths || []).join(",")} />
+                <input name="deny_paths" placeholder="deny paths csv" defaultValue={(webCrawlPolicy?.deny_paths || []).join(",")} />
+                <input name="seed_urls" placeholder="seed urls csv" defaultValue={(webCrawlPolicy?.seed_urls || []).join(",")} />
+                <textarea name="headers_json" rows={2} defaultValue={JSON.stringify(webCrawlPolicy?.headers || {}, null, 2)}></textarea>
+                <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Save Crawl Policy</button>
+              </form>
+
+              <form className="form" onSubmit={handleUpsertWebCoverageBaseline} key={`coverage-baseline-${selectedWebTargetID || "none"}`}>
+                <h3>Coverage Baseline</h3>
+                <input
+                  name="expected_route_count"
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="expected routes"
+                  defaultValue={webCoverageBaseline?.expected_route_count ?? 0}
+                />
+                <input
+                  name="expected_api_operation_count"
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="expected api operations"
+                  defaultValue={webCoverageBaseline?.expected_api_operation_count ?? 0}
+                />
+                <input
+                  name="expected_auth_state_count"
+                  type="number"
+                  min={0}
+                  step={1}
+                  placeholder="expected auth states"
+                  defaultValue={webCoverageBaseline?.expected_auth_state_count ?? 0}
+                />
+                <input
+                  name="minimum_route_coverage"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  placeholder="min route coverage %"
+                  defaultValue={webCoverageBaseline?.minimum_route_coverage ?? 80}
+                />
+                <input
+                  name="minimum_api_coverage"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  placeholder="min api coverage %"
+                  defaultValue={webCoverageBaseline?.minimum_api_coverage ?? 75}
+                />
+                <input
+                  name="minimum_auth_coverage"
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.1}
+                  placeholder="min auth coverage %"
+                  defaultValue={webCoverageBaseline?.minimum_auth_coverage ?? 80}
+                />
+                <textarea name="notes" rows={2} placeholder="baseline notes" defaultValue={webCoverageBaseline?.notes || ""}></textarea>
+                <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Save Baseline</button>
+              </form>
+
+              <form className="form" onSubmit={handleCreateWebCoverageRun} key={`coverage-run-${selectedWebTargetID || "none"}`}>
+                <h3>Record Coverage Run</h3>
+                <input name="scan_job_id" placeholder="scan job id (optional)" />
+                <input name="route_coverage" type="number" min={0} max={100} step={0.1} defaultValue={0} required />
+                <input name="api_coverage" type="number" min={0} max={100} step={0.1} defaultValue={0} required />
+                <input name="auth_coverage" type="number" min={0} max={100} step={0.1} defaultValue={0} required />
+                <input name="discovered_route_count" type="number" min={0} step={1} defaultValue={0} required />
+                <input name="discovered_api_operation_count" type="number" min={0} step={1} defaultValue={0} required />
+                <input name="discovered_auth_state_count" type="number" min={0} step={1} defaultValue={0} required />
+                <input name="evidence_ref" placeholder="evidence://coverage/run-id (optional)" />
+                <button type="submit" disabled={!selectedWebTargetID || !canWriteScanJobs}>Save Coverage Run</button>
+              </form>
+
+              <div className={`status ${webCoverageStatus && !webCoverageStatus.overall_meets ? "error" : ""}`}>
+                Coverage status:{" "}
+                {webCoverageStatus
+                  ? `${webCoverageStatus.overall_meets ? "baseline met" : "baseline failed"} | route ${
+                      webCoverageStatus.route_coverage_meets ? "ok" : "miss"
+                    } | api ${webCoverageStatus.api_coverage_meets ? "ok" : "miss"} | auth ${
+                      webCoverageStatus.auth_coverage_meets ? "ok" : "miss"
+                    }`
+                  : "no baseline/run status yet"}
+              </div>
+              <div className="meta">Coverage runs: {webCoverageRuns.length}</div>
+              <table>
+                <thead><tr><th>Run</th><th>Route%</th><th>API%</th><th>Auth%</th><th>Created</th></tr></thead>
+                <tbody>
+                  {webCoverageRuns.slice(0, 20).map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.scan_job_id || item.id}</td>
+                      <td>{Number(item.route_coverage || 0).toFixed(1)}</td>
+                      <td>{Number(item.api_coverage || 0).toFixed(1)}</td>
+                      <td>{Number(item.auth_coverage || 0).toFixed(1)}</td>
+                      <td>{fmtDateTime(item.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
