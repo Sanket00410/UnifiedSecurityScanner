@@ -109,6 +109,12 @@ func (s *Store) UpdateTenantLimitsForTenant(ctx context.Context, tenantID string
 		}
 		next.MaxActiveScanJobs = *request.MaxActiveScanJobs
 	}
+	if request.MaxScanJobsPerMinute != nil {
+		if *request.MaxScanJobsPerMinute < 0 {
+			return models.TenantOperationsSnapshot{}, fmt.Errorf("max_scan_jobs_per_minute must be greater than or equal to zero")
+		}
+		next.MaxScanJobsPerMinute = *request.MaxScanJobsPerMinute
+	}
 	if request.MaxScanTargets != nil {
 		if *request.MaxScanTargets < 0 {
 			return models.TenantOperationsSnapshot{}, fmt.Errorf("max_scan_targets must be greater than or equal to zero")
@@ -131,19 +137,20 @@ func (s *Store) UpdateTenantLimitsForTenant(ctx context.Context, tenantID string
 
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO tenant_limits (
-			tenant_id, max_total_scan_jobs, max_active_scan_jobs,
+			tenant_id, max_total_scan_jobs, max_active_scan_jobs, max_scan_jobs_per_minute,
 			max_scan_targets, max_ingestion_sources, updated_by, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7
+			$1, $2, $3, $4, $5, $6, $7, $8
 		)
 		ON CONFLICT (tenant_id) DO UPDATE SET
 			max_total_scan_jobs = EXCLUDED.max_total_scan_jobs,
 			max_active_scan_jobs = EXCLUDED.max_active_scan_jobs,
+			max_scan_jobs_per_minute = EXCLUDED.max_scan_jobs_per_minute,
 			max_scan_targets = EXCLUDED.max_scan_targets,
 			max_ingestion_sources = EXCLUDED.max_ingestion_sources,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-	`, next.TenantID, next.MaxTotalScanJobs, next.MaxActiveScanJobs, next.MaxScanTargets, next.MaxIngestionSources, next.UpdatedBy, next.UpdatedAt)
+	`, next.TenantID, next.MaxTotalScanJobs, next.MaxActiveScanJobs, next.MaxScanJobsPerMinute, next.MaxScanTargets, next.MaxIngestionSources, next.UpdatedBy, next.UpdatedAt)
 	if err != nil {
 		return models.TenantOperationsSnapshot{}, fmt.Errorf("upsert tenant limits: %w", err)
 	}
@@ -155,11 +162,12 @@ func (s *Store) UpdateTenantLimitsForTenant(ctx context.Context, tenantID string
 		AggregateType: "tenant",
 		AggregateID:   tenantID,
 		Payload: map[string]any{
-			"max_total_scan_jobs":   next.MaxTotalScanJobs,
-			"max_active_scan_jobs":  next.MaxActiveScanJobs,
-			"max_scan_targets":      next.MaxScanTargets,
-			"max_ingestion_sources": next.MaxIngestionSources,
-			"updated_by":            next.UpdatedBy,
+			"max_total_scan_jobs":      next.MaxTotalScanJobs,
+			"max_active_scan_jobs":     next.MaxActiveScanJobs,
+			"max_scan_jobs_per_minute": next.MaxScanJobsPerMinute,
+			"max_scan_targets":         next.MaxScanTargets,
+			"max_ingestion_sources":    next.MaxIngestionSources,
+			"updated_by":               next.UpdatedBy,
 		},
 		CreatedAt: now,
 	})
@@ -241,6 +249,27 @@ func (s *Store) enforceScanJobTenantLimitsTx(ctx context.Context, tx pgx.Tx, ten
 			Current:  active,
 		}
 	}
+	if limits.MaxScanJobsPerMinute > 0 {
+		cutoff := time.Now().UTC().Add(-1 * time.Minute)
+		var recent int64
+		err := tx.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM scan_jobs
+			WHERE tenant_id = $1
+			  AND requested_at >= $2
+		`, tenantID, cutoff).Scan(&recent)
+		if err != nil {
+			return fmt.Errorf("load tenant scan job rate usage: %w", err)
+		}
+		if recent >= limits.MaxScanJobsPerMinute {
+			return &TenantLimitExceededError{
+				TenantID: tenantID,
+				Metric:   "max_scan_jobs_per_minute",
+				Limit:    limits.MaxScanJobsPerMinute,
+				Current:  recent,
+			}
+		}
+	}
 
 	return nil
 }
@@ -317,7 +346,7 @@ func (s *Store) enforceIngestionSourceLimit(ctx context.Context, tenantID string
 
 func (s *Store) loadTenantLimits(ctx context.Context, tenantID string) (models.TenantLimits, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT tenant_id, max_total_scan_jobs, max_active_scan_jobs, max_scan_targets, max_ingestion_sources, updated_by, updated_at
+		SELECT tenant_id, max_total_scan_jobs, max_active_scan_jobs, max_scan_jobs_per_minute, max_scan_targets, max_ingestion_sources, updated_by, updated_at
 		FROM tenant_limits
 		WHERE tenant_id = $1
 	`, strings.TrimSpace(tenantID))
@@ -337,7 +366,7 @@ func (s *Store) loadTenantLimits(ctx context.Context, tenantID string) (models.T
 
 func loadTenantLimitsTx(ctx context.Context, tx pgx.Tx, tenantID string) (models.TenantLimits, error) {
 	row := tx.QueryRow(ctx, `
-		SELECT tenant_id, max_total_scan_jobs, max_active_scan_jobs, max_scan_targets, max_ingestion_sources, updated_by, updated_at
+		SELECT tenant_id, max_total_scan_jobs, max_active_scan_jobs, max_scan_jobs_per_minute, max_scan_targets, max_ingestion_sources, updated_by, updated_at
 		FROM tenant_limits
 		WHERE tenant_id = $1
 	`, strings.TrimSpace(tenantID))
@@ -361,6 +390,7 @@ func scanTenantLimits(row interface{ Scan(dest ...any) error }) (models.TenantLi
 		&limits.TenantID,
 		&limits.MaxTotalScanJobs,
 		&limits.MaxActiveScanJobs,
+		&limits.MaxScanJobsPerMinute,
 		&limits.MaxScanTargets,
 		&limits.MaxIngestionSources,
 		&limits.UpdatedBy,

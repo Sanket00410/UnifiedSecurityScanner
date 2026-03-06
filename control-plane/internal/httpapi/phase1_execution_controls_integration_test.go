@@ -119,6 +119,37 @@ func TestPhase1ExecutionControlsAndTargetApprovalFlow(t *testing.T) {
 	}, http.StatusOK)
 	defer disableEmergencyResponse.Body.Close()
 
+	enableRateLimitResponse, _ := mustJSONRequest(t, client, http.MethodPut, testServer.URL+"/v1/tenant/operations", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"max_scan_jobs_per_minute": 2,
+	}, http.StatusOK)
+	defer enableRateLimitResponse.Body.Close()
+
+	_ = mustCreateScanJob(t, client, testServer.URL, cfg.BootstrapAdminToken, "rate-limit-first.example.com", "metasploit", http.StatusCreated)
+
+	rateLimitedResponse, rateLimitedBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/scan-jobs", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"target_kind": "domain",
+		"target":      "rate-limit-second.example.com",
+		"profile":     "default",
+		"tools":       []string{"metasploit"},
+	}, http.StatusTooManyRequests)
+	defer rateLimitedResponse.Body.Close()
+
+	var rateLimitedPayload map[string]any
+	decodeJSONResponse(t, rateLimitedBody, &rateLimitedPayload)
+	if rateLimitedPayload["code"] != "tenant_limit_exceeded" {
+		t.Fatalf("expected tenant_limit_exceeded for rate limit, got %#v", rateLimitedPayload["code"])
+	}
+	if rateLimitedPayload["metric"] != "max_scan_jobs_per_minute" {
+		t.Fatalf("expected metric max_scan_jobs_per_minute, got %#v", rateLimitedPayload["metric"])
+	}
+
+	disableRateLimitResponse, _ := mustJSONRequest(t, client, http.MethodPut, testServer.URL+"/v1/tenant/operations", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"max_scan_jobs_per_minute": 0,
+	}, http.StatusOK)
+	defer disableRateLimitResponse.Body.Close()
+
+	_ = mustHeartbeat(t, client, testServer.URL, cfg.WorkerSharedSecret, worker.WorkerID, worker.LeaseID)
+
 	targetApprovalPolicyResponse, targetApprovalPolicyBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/policies", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
 		"name":    "Target Approval Guardrail",
 		"scope":   "global",

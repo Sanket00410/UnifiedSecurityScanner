@@ -14,20 +14,22 @@ type PlatformEvent struct {
 }
 
 type TenantLimits struct {
-	TenantID            string    `json:"tenant_id"`
-	MaxTotalScanJobs    int64     `json:"max_total_scan_jobs"`
-	MaxActiveScanJobs   int64     `json:"max_active_scan_jobs"`
-	MaxScanTargets      int64     `json:"max_scan_targets"`
-	MaxIngestionSources int64     `json:"max_ingestion_sources"`
-	UpdatedBy           string    `json:"updated_by,omitempty"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	TenantID             string    `json:"tenant_id"`
+	MaxTotalScanJobs     int64     `json:"max_total_scan_jobs"`
+	MaxActiveScanJobs    int64     `json:"max_active_scan_jobs"`
+	MaxScanJobsPerMinute int64     `json:"max_scan_jobs_per_minute"`
+	MaxScanTargets       int64     `json:"max_scan_targets"`
+	MaxIngestionSources  int64     `json:"max_ingestion_sources"`
+	UpdatedBy            string    `json:"updated_by,omitempty"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 type UpdateTenantLimitsRequest struct {
-	MaxTotalScanJobs    *int64 `json:"max_total_scan_jobs"`
-	MaxActiveScanJobs   *int64 `json:"max_active_scan_jobs"`
-	MaxScanTargets      *int64 `json:"max_scan_targets"`
-	MaxIngestionSources *int64 `json:"max_ingestion_sources"`
+	MaxTotalScanJobs     *int64 `json:"max_total_scan_jobs"`
+	MaxActiveScanJobs    *int64 `json:"max_active_scan_jobs"`
+	MaxScanJobsPerMinute *int64 `json:"max_scan_jobs_per_minute"`
+	MaxScanTargets       *int64 `json:"max_scan_targets"`
+	MaxIngestionSources  *int64 `json:"max_ingestion_sources"`
 }
 
 type TenantUsage struct {

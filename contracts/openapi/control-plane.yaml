@@ -2057,6 +2057,89 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/APIEndpoint"
+  /v1/assets/external:
+    get:
+      operationId: listExternalAssets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: asset_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 500
+      responses:
+        "200":
+          description: External attack-surface asset inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ExternalAsset"
+    post:
+      operationId: upsertExternalAsset
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertExternalAssetRequest"
+      responses:
+        "201":
+          description: External asset upserted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExternalAsset"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/assets/external/sync:
+    post:
+      operationId: syncExternalAssets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncExternalAssetsRequest"
+      responses:
+        "200":
+          description: External assets synchronized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncExternalAssetsResult"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/assets/sync:
     post:
       operationId: syncAssets
@@ -3651,6 +3734,7 @@ components:
         - tenant_id
         - max_total_scan_jobs
         - max_active_scan_jobs
+        - max_scan_jobs_per_minute
         - max_scan_targets
         - max_ingestion_sources
       properties:
@@ -3660,6 +3744,9 @@ components:
           type: integer
           format: int64
         max_active_scan_jobs:
+          type: integer
+          format: int64
+        max_scan_jobs_per_minute:
           type: integer
           format: int64
         max_scan_targets:
@@ -3681,6 +3768,9 @@ components:
           type: integer
           format: int64
         max_active_scan_jobs:
+          type: integer
+          format: int64
+        max_scan_jobs_per_minute:
           type: integer
           format: int64
         max_scan_targets:
@@ -3998,6 +4088,86 @@ components:
         endpoint_count:
           type: integer
           format: int64
+    ExternalAsset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - asset_type
+        - value
+        - source
+        - first_seen_at
+        - last_seen_at
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        asset_type:
+          type: string
+        value:
+          type: string
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpsertExternalAssetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - asset_type
+        - value
+      properties:
+        asset_type:
+          type: string
+        value:
+          type: string
+        source:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    SyncExternalAssetsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - assets
+      properties:
+        source:
+          type: string
+        assets:
+          type: array
+          items:
+            $ref: "#/components/schemas/UpsertExternalAssetRequest"
+    SyncExternalAssetsResult:
+      type: object
+      additionalProperties: false
+      required:
+        - imported_count
+        - items
+      properties:
+        imported_count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExternalAsset"
     AssetProfile:
       type: object
       additionalProperties: false

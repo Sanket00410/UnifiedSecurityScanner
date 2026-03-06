@@ -79,6 +79,8 @@ type stubAPIStore struct {
 	apiAssets                []models.APIAsset
 	apiEndpointsByAsset      map[string][]models.APIEndpoint
 	importOpenAPIErr         error
+	externalAssets           []models.ExternalAsset
+	externalAssetErr         error
 	assetControls            []models.CompensatingControl
 	syncedAssets             models.SyncAssetProfilesResult
 	findingWaivers           []models.FindingWaiver
@@ -448,6 +450,9 @@ func (s *stubAPIStore) UpdateTenantLimitsForTenant(_ context.Context, tenantID s
 	}
 	if request.MaxActiveScanJobs != nil {
 		snapshot.Limits.MaxActiveScanJobs = *request.MaxActiveScanJobs
+	}
+	if request.MaxScanJobsPerMinute != nil {
+		snapshot.Limits.MaxScanJobsPerMinute = *request.MaxScanJobsPerMinute
 	}
 	if request.MaxScanTargets != nil {
 		snapshot.Limits.MaxScanTargets = *request.MaxScanTargets
@@ -1048,6 +1053,70 @@ func (s *stubAPIStore) ImportOpenAPIForTenant(_ context.Context, tenantID string
 	return models.ImportedAPIAsset{
 		Asset:         asset,
 		EndpointCount: 0,
+	}, nil
+}
+
+func (s *stubAPIStore) ListExternalAssetsForTenant(_ context.Context, _ string, assetType string, _ int) ([]models.ExternalAsset, error) {
+	if s.externalAssetErr != nil {
+		return nil, s.externalAssetErr
+	}
+	assetType = strings.ToLower(strings.TrimSpace(assetType))
+	if assetType == "" {
+		return s.externalAssets, nil
+	}
+	out := make([]models.ExternalAsset, 0, len(s.externalAssets))
+	for _, item := range s.externalAssets {
+		if strings.ToLower(strings.TrimSpace(item.AssetType)) == assetType {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubAPIStore) UpsertExternalAssetForTenant(_ context.Context, tenantID string, _ string, request models.UpsertExternalAssetRequest) (models.ExternalAsset, error) {
+	if s.externalAssetErr != nil {
+		return models.ExternalAsset{}, s.externalAssetErr
+	}
+
+	item := models.ExternalAsset{
+		ID:          fmt.Sprintf("external-asset-%d", len(s.externalAssets)+1),
+		TenantID:    strings.TrimSpace(tenantID),
+		AssetType:   strings.ToLower(strings.TrimSpace(request.AssetType)),
+		Value:       strings.ToLower(strings.TrimSpace(request.Value)),
+		Source:      strings.TrimSpace(request.Source),
+		Metadata:    request.Metadata,
+		FirstSeenAt: time.Now().UTC(),
+		LastSeenAt:  time.Now().UTC(),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	if item.Source == "" {
+		item.Source = "manual"
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	s.externalAssets = append(s.externalAssets, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) SyncExternalAssetsForTenant(_ context.Context, tenantID string, actor string, request models.SyncExternalAssetsRequest) (models.SyncExternalAssetsResult, error) {
+	if s.externalAssetErr != nil {
+		return models.SyncExternalAssetsResult{}, s.externalAssetErr
+	}
+
+	items := make([]models.ExternalAsset, 0, len(request.Assets))
+	for _, incoming := range request.Assets {
+		item, err := s.UpsertExternalAssetForTenant(context.Background(), tenantID, actor, incoming)
+		if err != nil {
+			return models.SyncExternalAssetsResult{}, err
+		}
+		items = append(items, item)
+	}
+
+	return models.SyncExternalAssetsResult{
+		ImportedCount: len(items),
+		Items:         items,
 	}, nil
 }
 
@@ -2286,6 +2355,7 @@ func TestPlatformEventsAndTenantOperationsRoutes(t *testing.T) {
 
 	maxTotal := int64(25)
 	maxActive := int64(10)
+	maxPerMinute := int64(8)
 	maxTargets := int64(100)
 	maxIngestion := int64(20)
 
@@ -2313,13 +2383,14 @@ func TestPlatformEventsAndTenantOperationsRoutes(t *testing.T) {
 		tenantOpsSnapshot: models.TenantOperationsSnapshot{
 			TenantID: "org-1",
 			Limits: models.TenantLimits{
-				TenantID:            "org-1",
-				MaxTotalScanJobs:    10,
-				MaxActiveScanJobs:   5,
-				MaxScanTargets:      50,
-				MaxIngestionSources: 10,
-				UpdatedBy:           "seed",
-				UpdatedAt:           time.Now().UTC(),
+				TenantID:             "org-1",
+				MaxTotalScanJobs:     10,
+				MaxActiveScanJobs:    5,
+				MaxScanJobsPerMinute: 3,
+				MaxScanTargets:       50,
+				MaxIngestionSources:  10,
+				UpdatedBy:            "seed",
+				UpdatedAt:            time.Now().UTC(),
 			},
 			Usage: models.TenantUsage{
 				TotalScanJobs:    3,
@@ -2352,9 +2423,10 @@ func TestPlatformEventsAndTenantOperationsRoutes(t *testing.T) {
 	opsPutRequest := httptest.NewRequest(http.MethodPut, "/v1/tenant/operations", strings.NewReader(fmt.Sprintf(`{
 		"max_total_scan_jobs": %d,
 		"max_active_scan_jobs": %d,
+		"max_scan_jobs_per_minute": %d,
 		"max_scan_targets": %d,
 		"max_ingestion_sources": %d
-	}`, maxTotal, maxActive, maxTargets, maxIngestion)))
+	}`, maxTotal, maxActive, maxPerMinute, maxTargets, maxIngestion)))
 	opsPutRequest.Header.Set("Authorization", "Bearer operator-token")
 	opsPutRequest.Header.Set("Content-Type", "application/json")
 	server.httpServer.Handler.ServeHTTP(opsPutRecorder, opsPutRequest)
@@ -2366,7 +2438,7 @@ func TestPlatformEventsAndTenantOperationsRoutes(t *testing.T) {
 	if err := json.NewDecoder(opsPutRecorder.Body).Decode(&updated); err != nil {
 		t.Fatalf("decode tenant operations snapshot: %v", err)
 	}
-	if updated.Limits.MaxTotalScanJobs != maxTotal || updated.Limits.MaxActiveScanJobs != maxActive {
+	if updated.Limits.MaxTotalScanJobs != maxTotal || updated.Limits.MaxActiveScanJobs != maxActive || updated.Limits.MaxScanJobsPerMinute != maxPerMinute {
 		t.Fatalf("unexpected updated tenant limits: %#v", updated.Limits)
 	}
 }
@@ -3177,6 +3249,79 @@ func TestAPIAssetDiscoveryEndpoints(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(endpointsRecorder, endpointsRequest)
 	if endpointsRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for api endpoint list, got %d", endpointsRecorder.Code)
+	}
+}
+
+func TestExternalAssetDiscoveryEndpoints(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		externalAssets: []models.ExternalAsset{
+			{
+				ID:          "external-asset-1",
+				TenantID:    "org-1",
+				AssetType:   "domain",
+				Value:       "example.com",
+				Source:      "manual",
+				Metadata:    map[string]any{"environment": "production"},
+				FirstSeenAt: now,
+				LastSeenAt:  now,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/external?asset_type=domain", nil)
+	listRequest.Header.Set("Authorization", "Bearer appsec-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for external asset list, got %d", listRecorder.Code)
+	}
+
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/assets/external", strings.NewReader(`{
+		"asset_type": "subdomain",
+		"value": "api.example.com",
+		"source": "manual",
+		"metadata": {"environment":"production"}
+	}`))
+	createRequest.Header.Set("Authorization", "Bearer appsec-token")
+	createRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for external asset create, got %d", createRecorder.Code)
+	}
+
+	syncRecorder := httptest.NewRecorder()
+	syncRequest := httptest.NewRequest(http.MethodPost, "/v1/assets/external/sync", strings.NewReader(`{
+		"source": "dns-discovery",
+		"assets": [
+			{"asset_type":"domain","value":"corp.example.com"},
+			{"asset_type":"ip","value":"203.0.113.10"}
+		]
+	}`))
+	syncRequest.Header.Set("Authorization", "Bearer appsec-token")
+	syncRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(syncRecorder, syncRequest)
+	if syncRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for external asset sync, got %d", syncRecorder.Code)
 	}
 }
 

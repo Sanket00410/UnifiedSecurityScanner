@@ -113,6 +113,9 @@ type apiStore interface {
 	ListAPIAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.APIAsset, error)
 	ListAPIEndpointsForTenant(ctx context.Context, tenantID string, apiAssetID string, limit int) ([]models.APIEndpoint, error)
 	ImportOpenAPIForTenant(ctx context.Context, tenantID string, actor string, request models.ImportOpenAPIRequest) (models.ImportedAPIAsset, error)
+	ListExternalAssetsForTenant(ctx context.Context, tenantID string, assetType string, limit int) ([]models.ExternalAsset, error)
+	UpsertExternalAssetForTenant(ctx context.Context, tenantID string, actor string, request models.UpsertExternalAssetRequest) (models.ExternalAsset, error)
+	SyncExternalAssetsForTenant(ctx context.Context, tenantID string, actor string, request models.SyncExternalAssetsRequest) (models.SyncExternalAssetsResult, error)
 	GetAssetProfileForTenant(ctx context.Context, tenantID string, assetID string) (models.AssetProfile, bool, error)
 	UpsertAssetProfileForTenant(ctx context.Context, tenantID string, assetID string, request models.UpsertAssetProfileRequest) (models.AssetProfile, error)
 	SyncAssetProfilesForTenant(ctx context.Context, tenantID string, request models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error)
@@ -279,6 +282,11 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost: auth.PermissionAssetsWrite,
 	}, "api_assets", "api_asset", server.handleAPIAssets))
 	mux.HandleFunc("/v1/assets/apis/", server.withUserAuth(auth.PermissionAssetsRead, "api_asset.endpoints", "api_asset", server.handleAPIAssetRoute))
+	mux.HandleFunc("/v1/assets/external", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "external_assets", "external_asset", server.handleExternalAssets))
+	mux.HandleFunc("/v1/assets/external/sync", server.withUserAuth(auth.PermissionAssetsWrite, "external_assets.sync", "external_asset", server.handleExternalAssetSync))
 	mux.HandleFunc("/v1/assets/sync", server.withUserAuth(auth.PermissionAssetsWrite, "assets.sync", "asset", server.handleAssetSync))
 	mux.HandleFunc("/v1/assets/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionAssetsRead,
@@ -2766,6 +2774,106 @@ func (s *Server) handleAPIAssetRoute(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items": items,
 	})
+}
+
+func (s *Server) handleExternalAssets(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 500
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		assetType := strings.TrimSpace(r.URL.Query().Get("asset_type"))
+		items, err := s.store.ListExternalAssetsForTenant(r.Context(), principal.OrganizationID, assetType, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_external_assets_failed", "external assets could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.UpsertExternalAssetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+		item, err := s.store.UpsertExternalAssetForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "required") || strings.Contains(lower, "supported") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "upsert_external_asset_failed", "external asset could not be saved")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleExternalAssetSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.SyncExternalAssetsRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+	if len(request.Assets) == 0 {
+		s.writeError(w, http.StatusBadRequest, "validation_error", "assets must contain at least one item")
+		return
+	}
+
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.UserID)
+	}
+
+	result, err := s.store.SyncExternalAssetsForTenant(r.Context(), principal.OrganizationID, actor, request)
+	if err != nil {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "required") || strings.Contains(lower, "supported") || strings.Contains(lower, "must contain at least one item") {
+			s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "sync_external_assets_failed", "external assets could not be synchronized")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleAssetSync(w http.ResponseWriter, r *http.Request) {

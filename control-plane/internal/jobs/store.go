@@ -39,6 +39,7 @@ var (
 	scanTargetSequence              uint64
 	apiAssetSequence                uint64
 	apiEndpointSequence             uint64
+	externalAssetSequence           uint64
 	ingestionSourceSequence         uint64
 	ingestionEventSequence          uint64
 	platformEventSequence           uint64
