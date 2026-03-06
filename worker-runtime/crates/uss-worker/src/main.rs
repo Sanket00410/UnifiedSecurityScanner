@@ -192,8 +192,8 @@ fn configure_grpc_endpoint(cfg: &Config) -> Result<Endpoint, String> {
     } else {
         format!("http://{raw_endpoint}")
     };
-    let mut endpoint =
-        Endpoint::from_shared(endpoint_url.clone()).map_err(|err| format!("parse grpc endpoint: {err}"))?;
+    let mut endpoint = Endpoint::from_shared(endpoint_url.clone())
+        .map_err(|err| format!("parse grpc endpoint: {err}"))?;
 
     let use_tls = endpoint_url.starts_with("https://") || tls_hint;
 

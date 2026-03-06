@@ -107,6 +107,7 @@ impl ScannerAdapter for ZapAdapter {
         self.validate(request)?;
 
         let report_path = ensure_evidence_path(&request.evidence_dir, "zap-output.log")?;
+        let policy_snapshot = write_web_runtime_policy_snapshot(request)?;
         let binary = env::var("USS_ZAP_CMD").unwrap_or_else(|_| default_zap_binary().to_string());
 
         let mut args = vec![
@@ -117,9 +118,15 @@ impl ScannerAdapter for ZapAdapter {
             report_path.to_string_lossy().to_string(),
             "-quickprogress".to_string(),
         ];
+        append_zap_policy_args(request, &mut args);
 
         if matches!(request.execution_mode, ExecutionMode::Passive) {
             args.push("-silent".to_string());
+        }
+
+        let mut evidence_paths = vec![report_path.clone()];
+        if let Some(snapshot_path) = policy_snapshot {
+            evidence_paths.push(snapshot_path);
         }
 
         run_process(
@@ -128,7 +135,7 @@ impl ScannerAdapter for ZapAdapter {
             &args,
             &report_path,
             request.max_runtime_seconds,
-            vec![report_path.clone()],
+            evidence_paths,
             None,
         )
     }
@@ -155,6 +162,7 @@ impl ScannerAdapter for ZapAPIAdapter {
 
         let report_path = ensure_evidence_path(&request.evidence_dir, "zap-api-output.log")?;
         let log_path = ensure_evidence_path(&request.evidence_dir, "zap-api-exec.log")?;
+        let policy_snapshot = write_web_runtime_policy_snapshot(request)?;
         let binary =
             env::var("USS_ZAP_API_CMD").unwrap_or_else(|_| default_zap_binary().to_string());
 
@@ -166,9 +174,15 @@ impl ScannerAdapter for ZapAPIAdapter {
             report_path.to_string_lossy().to_string(),
             "-quickprogress".to_string(),
         ];
+        append_zap_policy_args(request, &mut args);
 
         if matches!(request.execution_mode, ExecutionMode::Passive) {
             args.push("-silent".to_string());
+        }
+
+        let mut evidence_paths = vec![report_path.clone()];
+        if let Some(snapshot_path) = policy_snapshot {
+            evidence_paths.push(snapshot_path);
         }
 
         run_process(
@@ -177,7 +191,7 @@ impl ScannerAdapter for ZapAPIAdapter {
             &args,
             &log_path,
             request.max_runtime_seconds,
-            vec![report_path.clone()],
+            evidence_paths,
             None,
         )
     }
@@ -241,14 +255,21 @@ impl ScannerAdapter for NucleiAdapter {
 
         let report_path = ensure_evidence_path(&request.evidence_dir, "nuclei-results.jsonl")?;
         let log_path = ensure_evidence_path(&request.evidence_dir, "nuclei-exec.log")?;
+        let policy_snapshot = write_web_runtime_policy_snapshot(request)?;
         let binary = env::var("USS_NUCLEI_CMD").unwrap_or_else(|_| "nuclei".to_string());
-        let args = vec![
+        let mut args = vec![
             "-u".to_string(),
             request.target.clone(),
             "-jsonl".to_string(),
             "-o".to_string(),
             report_path.to_string_lossy().to_string(),
         ];
+        append_nuclei_policy_args(request, &mut args);
+
+        let mut evidence_paths = vec![report_path.clone()];
+        if let Some(snapshot_path) = policy_snapshot {
+            evidence_paths.push(snapshot_path);
+        }
 
         run_process(
             self.id(),
@@ -256,7 +277,7 @@ impl ScannerAdapter for NucleiAdapter {
             &args,
             &log_path,
             request.max_runtime_seconds,
-            vec![report_path],
+            evidence_paths,
             None,
         )
     }
@@ -1887,10 +1908,154 @@ fn run_process_with_stdout_report_allow_exit_codes(
     }
 }
 
+fn append_zap_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
+    if let Some(max_depth) = request_label_u64(request, "web_max_depth") {
+        args.push("-config".to_string());
+        args.push(format!("spider.maxDepth={max_depth}"));
+    }
+    if let Some(max_requests) = request_label_u64(request, "web_max_requests") {
+        args.push("-config".to_string());
+        args.push(format!("spider.maxChildren={max_requests}"));
+    }
+}
+
+fn append_nuclei_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
+    if let Some(rate_limit) = request_label_u64(request, "web_request_budget_per_minute") {
+        args.push("-rate-limit".to_string());
+        args.push(rate_limit.to_string());
+    }
+}
+
+fn write_web_runtime_policy_snapshot(request: &AdapterRequest) -> Result<Option<PathBuf>, String> {
+    const POLICY_KEYS: [&str; 13] = [
+        "web_target_id",
+        "web_target_type",
+        "web_safe_mode",
+        "web_auth_profile_id",
+        "web_max_depth",
+        "web_max_requests",
+        "web_request_budget_per_minute",
+        "web_allow_paths",
+        "web_deny_paths",
+        "web_seed_urls",
+        "web_min_route_coverage",
+        "web_min_api_coverage",
+        "web_min_auth_coverage",
+    ];
+
+    let mut lines = Vec::new();
+    for key in POLICY_KEYS {
+        if let Some(value) = request.labels.get(key) {
+            let normalized = value.trim();
+            if normalized.is_empty() {
+                continue;
+            }
+            lines.push(format!("{key}={normalized}"));
+        }
+    }
+
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    let snapshot_path = ensure_evidence_path(&request.evidence_dir, "web-runtime-policy.txt")?;
+    fs::write(&snapshot_path, lines.join("\n"))
+        .map_err(|err| format!("write web runtime policy snapshot: {err}"))?;
+    Ok(Some(snapshot_path))
+}
+
+fn request_label_u64(request: &AdapterRequest, key: &str) -> Option<u64> {
+    request
+        .labels
+        .get(key)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+}
+
 fn default_zap_binary() -> &'static str {
     if cfg!(windows) {
         "zap.bat"
     } else {
         "zap.sh"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    fn base_request() -> AdapterRequest {
+        AdapterRequest {
+            job_id: "task-1".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            adapter_id: "zap".to_string(),
+            target_kind: "url".to_string(),
+            target: "https://app.example.com".to_string(),
+            execution_mode: ExecutionMode::ActiveValidation,
+            approved_profile: "runtime".to_string(),
+            approved_modules: vec![],
+            labels: BTreeMap::new(),
+            evidence_dir: std::env::temp_dir()
+                .join(format!("uss-worker-policy-test-{}", std::process::id()))
+                .to_string_lossy()
+                .to_string(),
+            max_runtime_seconds: 60,
+        }
+    }
+
+    #[test]
+    fn append_zap_policy_args_uses_limits() {
+        let mut request = base_request();
+        request
+            .labels
+            .insert("web_max_depth".to_string(), "4".to_string());
+        request
+            .labels
+            .insert("web_max_requests".to_string(), "900".to_string());
+
+        let mut args = vec!["-cmd".to_string()];
+        append_zap_policy_args(&request, &mut args);
+
+        let joined = args.join(" ");
+        assert!(joined.contains("spider.maxDepth=4"));
+        assert!(joined.contains("spider.maxChildren=900"));
+    }
+
+    #[test]
+    fn append_nuclei_policy_args_uses_rate_limit() {
+        let mut request = base_request();
+        request.labels.insert(
+            "web_request_budget_per_minute".to_string(),
+            "180".to_string(),
+        );
+
+        let mut args = vec!["-u".to_string(), request.target.clone()];
+        append_nuclei_policy_args(&request, &mut args);
+
+        let joined = args.join(" ");
+        assert!(joined.contains("-rate-limit 180"));
+    }
+
+    #[test]
+    fn write_web_runtime_policy_snapshot_writes_file() {
+        let mut request = base_request();
+        request
+            .labels
+            .insert("web_target_id".to_string(), "web-target-123".to_string());
+        request
+            .labels
+            .insert("web_safe_mode".to_string(), "true".to_string());
+
+        let path = write_web_runtime_policy_snapshot(&request)
+            .expect("write policy snapshot")
+            .expect("policy snapshot path");
+        let content = fs::read_to_string(&path).expect("read policy snapshot");
+
+        assert!(content.contains("web_target_id=web-target-123"));
+        assert!(content.contains("web_safe_mode=true"));
+
+        let _ = fs::remove_dir_all(&request.evidence_dir);
     }
 }
