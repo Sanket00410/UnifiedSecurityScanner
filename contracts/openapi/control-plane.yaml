@@ -856,6 +856,120 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /v1/workload-identities/workers/certificates:
+    get:
+      operationId: listWorkloadCertificates
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: subject_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        "200":
+          description: Issued workload certificates
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkloadCertificate"
+    post:
+      operationId: issueWorkerCertificate
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueWorkerCertificateRequest"
+      responses:
+        "201":
+          description: Worker certificate issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuedWorkerCertificate"
+        "400":
+          description: Invalid worker certificate issue payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "503":
+          description: Certificate authority is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/workload-identities/workers/certificates/{certificateId}/revoke:
+    post:
+      operationId: revokeWorkloadCertificate
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: certificateId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeWorkloadCertificateRequest"
+      responses:
+        "200":
+          description: Workload certificate revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkloadCertificate"
+        "404":
+          description: Workload certificate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/trust/ca-bundle:
+    get:
+      operationId: getCertificateAuthorityBundle
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Active certificate authority bundle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateAuthorityBundle"
+        "503":
+          description: Certificate authority is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /v1/kms/keys:
     get:
       operationId: listKmsKeys
@@ -1545,6 +1659,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EvidenceObject"
+        "404":
+          description: Evidence object not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/evidence/{evidenceId}/verify-integrity:
+    post:
+      operationId: verifyEvidenceIntegrity
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: evidenceId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Evidence integrity verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidenceIntegrityVerification"
         "404":
           description: Evidence object not found
           content:
@@ -4930,6 +5069,48 @@ components:
         updated_at:
           type: string
           format: date-time
+    EvidenceIntegrityVerification:
+      type: object
+      additionalProperties: false
+      required:
+        - evidence_id
+        - object_ref
+        - verified
+        - object_exists
+        - hash_available
+        - hash_matches
+        - signature_present
+        - signature_valid
+        - verified_at
+        - message
+      properties:
+        evidence_id:
+          type: string
+        tenant_id:
+          type: string
+        object_ref:
+          type: string
+        verified:
+          type: boolean
+        object_exists:
+          type: boolean
+        hash_available:
+          type: boolean
+        hash_matches:
+          type: boolean
+        signature_present:
+          type: boolean
+        signature_valid:
+          type: boolean
+        algorithm:
+          type: string
+        key_id:
+          type: string
+        verified_at:
+          type: string
+          format: date-time
+        message:
+          type: string
     EvidenceListResult:
       type: object
       additionalProperties: false
@@ -5187,6 +5368,100 @@ components:
           type: integer
           format: int64
         audience:
+          type: string
+    CertificateAuthorityBundle:
+      type: object
+      additionalProperties: false
+      required:
+        - certificate_pem
+      properties:
+        certificate_pem:
+          type: string
+    WorkloadCertificate:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subject_type
+        - subject_id
+        - serial_number
+        - fingerprint_sha256
+        - certificate_pem
+        - status
+        - issued_at
+        - expires_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        subject_type:
+          type: string
+        subject_id:
+          type: string
+        serial_number:
+          type: string
+        fingerprint_sha256:
+          type: string
+        certificate_pem:
+          type: string
+        status:
+          type: string
+        issued_by:
+          type: string
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_reason:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    IssueWorkerCertificateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - worker_id
+      properties:
+        worker_id:
+          type: string
+        ttl_seconds:
+          type: integer
+          format: int64
+        dns_names:
+          type: array
+          items:
+            type: string
+        uri_sans:
+          type: array
+          items:
+            type: string
+    IssuedWorkerCertificate:
+      type: object
+      additionalProperties: false
+      required:
+        - certificate
+        - private_key_pem
+        - ca_bundle_pem
+      properties:
+        certificate:
+          $ref: "#/components/schemas/WorkloadCertificate"
+        private_key_pem:
+          type: string
+        ca_bundle_pem:
+          type: string
+    RevokeWorkloadCertificateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason:
           type: string
     KMSKey:
       type: object

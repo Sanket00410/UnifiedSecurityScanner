@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.48.0", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
-tonic = { version = "0.12.3", features = ["transport"] }
+tonic = { version = "0.12.3", features = ["transport", "tls", "tls-native-roots"] }
 prost = "0.13.5"
 
 [build-dependencies]

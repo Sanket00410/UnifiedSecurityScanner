@@ -30,7 +30,19 @@ func main() {
 	defer store.Close()
 
 	httpServer := httpapi.New(cfg, store)
-	grpcServer := grpcapi.New(cfg.GRPCBindAddress, store, logger, cfg.WorkerSharedSecret, cfg.WorkloadIdentitySigningKey)
+	grpcServer := grpcapi.New(
+		cfg.GRPCBindAddress,
+		store,
+		logger,
+		cfg.WorkerSharedSecret,
+		cfg.WorkloadIdentitySigningKey,
+		grpcapi.TransportSecurityConfig{
+			ServerCertFile:    cfg.GRPCTLSCertFile,
+			ServerKeyFile:     cfg.GRPCTLSKeyFile,
+			ClientCAFile:      cfg.GRPCTLSClientCAFile,
+			RequireClientCert: cfg.GRPCTLSRequireClientCert,
+		},
+	)
 	errCh := make(chan error, 2)
 
 	go func() {

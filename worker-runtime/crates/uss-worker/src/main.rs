@@ -1,14 +1,18 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Builder;
 use tokio::time::sleep;
 use tokio_stream::iter;
 use tonic::metadata::MetadataValue;
+use tonic::transport::Certificate;
 use tonic::transport::Channel;
+use tonic::transport::ClientTlsConfig;
 use tonic::transport::Endpoint;
+use tonic::transport::Identity;
 use tonic::Request;
 use uss_worker::adapter::{AdapterRequest, AdapterResult, ExecutionMode};
 use uss_worker::executors;
@@ -34,6 +38,11 @@ struct Config {
     evidence_root: String,
     worker_shared_secret: String,
     workload_identity_token: String,
+    grpc_tls_ca_file: String,
+    grpc_tls_cert_file: String,
+    grpc_tls_key_file: String,
+    grpc_tls_server_name: String,
+    grpc_tls_insecure_skip_verify: bool,
 }
 
 fn main() {
@@ -77,6 +86,14 @@ impl Config {
                 .unwrap_or_else(|_| "./evidence".to_string()),
             worker_shared_secret: env::var("USS_WORKER_SHARED_SECRET").unwrap_or_default(),
             workload_identity_token: env::var("USS_WORKLOAD_IDENTITY_TOKEN").unwrap_or_default(),
+            grpc_tls_ca_file: env::var("USS_WORKER_GRPC_TLS_CA_FILE").unwrap_or_default(),
+            grpc_tls_cert_file: env::var("USS_WORKER_GRPC_TLS_CERT_FILE").unwrap_or_default(),
+            grpc_tls_key_file: env::var("USS_WORKER_GRPC_TLS_KEY_FILE").unwrap_or_default(),
+            grpc_tls_server_name: env::var("USS_WORKER_GRPC_TLS_SERVER_NAME").unwrap_or_default(),
+            grpc_tls_insecure_skip_verify: parse_bool(
+                "USS_WORKER_GRPC_TLS_INSECURE_SKIP_VERIFY",
+                false,
+            ),
         }
     }
 }
@@ -88,8 +105,7 @@ async fn run_worker() -> Result<(), String> {
         cfg.worker_id, cfg.grpc_endpoint, cfg.daemon_mode
     );
 
-    let endpoint = Endpoint::from_shared(normalize_grpc_endpoint(&cfg.grpc_endpoint))
-        .map_err(|err| format!("parse grpc endpoint: {err}"))?;
+    let endpoint = configure_grpc_endpoint(&cfg)?;
     let channel = endpoint
         .connect()
         .await
@@ -159,6 +175,67 @@ async fn run_worker() -> Result<(), String> {
 
         sleep(heartbeat_interval).await;
     }
+}
+
+fn configure_grpc_endpoint(cfg: &Config) -> Result<Endpoint, String> {
+    let ca_file = cfg.grpc_tls_ca_file.trim();
+    let cert_file = cfg.grpc_tls_cert_file.trim();
+    let key_file = cfg.grpc_tls_key_file.trim();
+    let server_name = cfg.grpc_tls_server_name.trim();
+    let tls_hint = !ca_file.is_empty() || (!cert_file.is_empty() && !key_file.is_empty());
+
+    let raw_endpoint = cfg.grpc_endpoint.trim();
+    let endpoint_url = if raw_endpoint.contains("://") {
+        raw_endpoint.to_string()
+    } else if tls_hint {
+        format!("https://{raw_endpoint}")
+    } else {
+        format!("http://{raw_endpoint}")
+    };
+    let mut endpoint =
+        Endpoint::from_shared(endpoint_url.clone()).map_err(|err| format!("parse grpc endpoint: {err}"))?;
+
+    let use_tls = endpoint_url.starts_with("https://") || tls_hint;
+
+    if cfg.grpc_tls_insecure_skip_verify {
+        return Err(
+            "USS_WORKER_GRPC_TLS_INSECURE_SKIP_VERIFY is not supported; provide a CA bundle instead"
+                .to_string(),
+        );
+    }
+
+    if use_tls {
+        let mut tls_config = ClientTlsConfig::new();
+        if !server_name.is_empty() {
+            tls_config = tls_config.domain_name(server_name.to_string());
+        }
+
+        if !ca_file.is_empty() {
+            let ca_pem = fs::read(ca_file)
+                .map_err(|err| format!("read worker grpc tls ca file {ca_file}: {err}"))?;
+            tls_config = tls_config.ca_certificate(Certificate::from_pem(ca_pem));
+        }
+
+        if !cert_file.is_empty() || !key_file.is_empty() {
+            if cert_file.is_empty() || key_file.is_empty() {
+                return Err(
+                    "USS_WORKER_GRPC_TLS_CERT_FILE and USS_WORKER_GRPC_TLS_KEY_FILE must both be set"
+                        .to_string(),
+                );
+            }
+            let cert_pem = fs::read(cert_file)
+                .map_err(|err| format!("read worker grpc tls cert file {cert_file}: {err}"))?;
+            let key_pem = fs::read(key_file)
+                .map_err(|err| format!("read worker grpc tls key file {key_file}: {err}"))?;
+            tls_config = tls_config.identity(Identity::from_pem(cert_pem, key_pem));
+        }
+
+        endpoint = endpoint
+            .tls_config(tls_config)
+            .map_err(|err| format!("configure grpc tls: {err}"))?;
+    }
+
+    Ok(endpoint)
 }
 
 fn run_adapter_mode() {
@@ -315,15 +392,6 @@ fn map_execution_mode(value: i32) -> ExecutionMode {
         ProtoExecutionMode::Passive => ExecutionMode::Passive,
         ProtoExecutionMode::RestrictedExploit => ExecutionMode::RestrictedExploit,
         _ => ExecutionMode::ActiveValidation,
-    }
-}
-
-fn normalize_grpc_endpoint(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.contains("://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
     }
 }
 

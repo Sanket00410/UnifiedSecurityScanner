@@ -59,3 +59,19 @@ type EvidenceRetentionRun struct {
 	StartedAt            time.Time  `json:"started_at"`
 	CompletedAt          time.Time  `json:"completed_at"`
 }
+
+type EvidenceIntegrityVerification struct {
+	EvidenceID       string    `json:"evidence_id"`
+	TenantID         string    `json:"tenant_id,omitempty"`
+	ObjectRef        string    `json:"object_ref"`
+	Verified         bool      `json:"verified"`
+	ObjectExists     bool      `json:"object_exists"`
+	HashAvailable    bool      `json:"hash_available"`
+	HashMatches      bool      `json:"hash_matches"`
+	SignaturePresent bool      `json:"signature_present"`
+	SignatureValid   bool      `json:"signature_valid"`
+	Algorithm        string    `json:"algorithm,omitempty"`
+	KeyID            string    `json:"key_id,omitempty"`
+	VerifiedAt       time.Time `json:"verified_at"`
+	Message          string    `json:"message"`
+}

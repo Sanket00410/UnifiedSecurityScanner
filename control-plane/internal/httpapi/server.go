@@ -60,6 +60,7 @@ type apiStore interface {
 	SearchFindingsForTenant(ctx context.Context, tenantID string, query models.FindingSearchQuery) (models.FindingSearchResult, error)
 	ListEvidenceObjectsForTenant(ctx context.Context, tenantID string, query models.EvidenceListQuery) (models.EvidenceListResult, error)
 	GetEvidenceObjectForTenant(ctx context.Context, tenantID string, evidenceID string) (models.EvidenceObject, bool, error)
+	VerifyEvidenceObjectIntegrityForTenant(ctx context.Context, tenantID string, evidenceID string) (models.EvidenceIntegrityVerification, bool, error)
 	ListEvidenceRetentionRunsForTenant(ctx context.Context, tenantID string, limit int) ([]models.EvidenceRetentionRun, error)
 	RunEvidenceRetentionForTenant(ctx context.Context, tenantID string, actor string, request models.RunEvidenceRetentionRequest) (models.EvidenceRetentionRun, error)
 	ListBackupSnapshotsForTenant(ctx context.Context, tenantID string, limit int) ([]models.BackupSnapshot, error)
@@ -80,6 +81,10 @@ type apiStore interface {
 	ListSecretLeasesForTenant(ctx context.Context, tenantID string, referenceID string, limit int) ([]models.SecretLease, error)
 	IssueSecretLeaseForTenant(ctx context.Context, tenantID string, actor string, request models.IssueSecretLeaseRequest) (models.IssuedSecretLease, error)
 	RevokeSecretLeaseForTenant(ctx context.Context, tenantID string, leaseID string, actor string) (models.SecretLease, bool, error)
+	ListWorkloadCertificatesForTenant(ctx context.Context, tenantID string, subjectID string, limit int) ([]models.WorkloadCertificate, error)
+	IssueWorkerCertificateForTenant(ctx context.Context, tenantID string, actor string, request models.IssueWorkerCertificateRequest) (models.IssuedWorkerCertificate, error)
+	RevokeWorkloadCertificateForTenant(ctx context.Context, tenantID string, certificateID string, actor string, reason string) (models.WorkloadCertificate, bool, error)
+	GetCertificateAuthorityBundle() (models.CertificateAuthorityBundle, error)
 	ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error)
 	GetIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (models.IngestionSource, bool, error)
 	CreateIngestionSourceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateIngestionSourceRequest) (models.CreatedIngestionSource, error)
@@ -211,6 +216,12 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodDelete: auth.PermissionPoliciesWrite,
 	}, "tenant_config", "tenant_config", server.handleTenantConfigRoute))
 	mux.HandleFunc("/v1/workload-identities/workers/issue", server.withUserAuth(auth.PermissionPoliciesWrite, "workload_identity.issue", "workload_identity", server.handleIssueWorkerIdentity))
+	mux.HandleFunc("/v1/workload-identities/workers/certificates", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "workload_certificates", "workload_certificate", server.handleWorkerCertificates))
+	mux.HandleFunc("/v1/workload-identities/workers/certificates/", server.withUserAuth(auth.PermissionPoliciesWrite, "workload_certificate.revoke", "workload_certificate", server.handleWorkerCertificateRoute))
+	mux.HandleFunc("/v1/trust/ca-bundle", server.withUserAuth(auth.PermissionPoliciesRead, "trust.ca_bundle", "trust", server.handleCABundle))
 	mux.HandleFunc("/v1/kms/keys", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -1301,6 +1312,122 @@ func (s *Server) handleIssueWorkerIdentity(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (s *Server) handleWorkerCertificates(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		subjectID := strings.TrimSpace(r.URL.Query().Get("subject_id"))
+		items, err := s.store.ListWorkloadCertificatesForTenant(r.Context(), principal.OrganizationID, subjectID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_workload_certificates_failed", "workload certificates could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.IssueWorkerCertificateRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+		issued, err := s.store.IssueWorkerCertificateForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			if errors.Is(err, jobs.ErrCertificateAuthorityDisabled) {
+				s.writeError(w, http.StatusServiceUnavailable, "certificate_authority_unavailable", "certificate authority is not configured")
+				return
+			}
+			s.writeError(w, http.StatusBadRequest, "issue_workload_certificate_failed", err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, issued)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleWorkerCertificateRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	route := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/workload-identities/workers/certificates/"))
+	parts := strings.Split(route, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "revoke" {
+		s.writeError(w, http.StatusNotFound, "workload_certificate_not_found", "workload certificate was not found")
+		return
+	}
+
+	var request models.RevokeWorkloadCertificateRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+	}
+
+	actor := strings.TrimSpace(principal.Email)
+	if actor == "" {
+		actor = strings.TrimSpace(principal.UserID)
+	}
+	item, found, err := s.store.RevokeWorkloadCertificateForTenant(r.Context(), principal.OrganizationID, parts[0], actor, request.Reason)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "revoke_workload_certificate_failed", "workload certificate could not be revoked")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "workload_certificate_not_found", "workload certificate was not found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) handleCABundle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	bundle, err := s.store.GetCertificateAuthorityBundle()
+	if err != nil {
+		if errors.Is(err, jobs.ErrCertificateAuthorityDisabled) {
+			s.writeError(w, http.StatusServiceUnavailable, "certificate_authority_unavailable", "certificate authority is not configured")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "ca_bundle_unavailable", "certificate authority bundle could not be loaded")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, bundle)
+}
+
 func (s *Server) handleKMSKeys(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
@@ -1908,34 +2035,59 @@ func (s *Server) handleEvidence(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleEvidenceRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		s.writeMethodNotAllowed(w)
-		return
-	}
-
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
 		return
 	}
 
-	evidenceID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/evidence/"))
-	if evidenceID == "" || strings.Contains(evidenceID, "/") {
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/evidence/"))
+	if path == "" {
 		s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
 		return
 	}
 
-	item, found, err := s.store.GetEvidenceObjectForTenant(r.Context(), principal.OrganizationID, evidenceID)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "get_evidence_failed", "evidence object could not be loaded")
-		return
-	}
-	if !found {
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
 		return
 	}
+	evidenceID := strings.TrimSpace(parts[0])
 
-	s.writeJSON(w, http.StatusOK, item)
+	switch r.Method {
+	case http.MethodGet:
+		if len(parts) != 1 {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
+			return
+		}
+		item, found, err := s.store.GetEvidenceObjectForTenant(r.Context(), principal.OrganizationID, evidenceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_evidence_failed", "evidence object could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodPost:
+		if len(parts) != 2 || parts[1] != "verify-integrity" {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested evidence route was not found")
+			return
+		}
+		result, found, err := s.store.VerifyEvidenceObjectIntegrityForTenant(r.Context(), principal.OrganizationID, evidenceID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "verify_evidence_integrity_failed", "evidence integrity could not be verified")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "not_found", "requested evidence object was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleEvidenceRetentionRuns(w http.ResponseWriter, r *http.Request) {

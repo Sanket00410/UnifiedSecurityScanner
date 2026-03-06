@@ -2,7 +2,9 @@ package jobs
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -291,7 +293,7 @@ func (s *Store) RunEvidenceRetentionForTenant(ctx context.Context, tenantID stri
 	return run, nil
 }
 
-func registerTaskEvidenceTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, evidencePaths []string, now time.Time) (int, error) {
+func (s *Store) registerTaskEvidenceTx(ctx context.Context, tx pgx.Tx, task models.TaskContext, workerID string, evidencePaths []string, now time.Time) (int, error) {
 	if len(evidencePaths) == 0 {
 		return 0, nil
 	}
@@ -314,13 +316,22 @@ func registerTaskEvidenceTx(ctx context.Context, tx pgx.Tx, task models.TaskCont
 		sizeBytes, shaDigest, contentType := collectEvidenceMetadata(ref, key)
 
 		metadata := map[string]any{
-			"source":     "worker_submission",
-			"task_id":    task.TaskID,
-			"scan_job":   task.ScanJobID,
-			"adapter_id": task.AdapterID,
+			"source": "worker_submission",
+			"provenance": map[string]any{
+				"task_id":     task.TaskID,
+				"scan_job":    task.ScanJobID,
+				"adapter_id":  task.AdapterID,
+				"worker_id":   strings.TrimSpace(workerID),
+				"recorded_at": now,
+			},
 		}
 		if filename := strings.TrimSpace(filepath.Base(key)); filename != "" && filename != "." {
 			metadata["filename"] = filename
+		}
+		if shaDigest != "" {
+			if integrity, ok := s.buildEvidenceIntegrityMetadata(task, workerID, ref, shaDigest, now); ok {
+				metadata["integrity"] = integrity
+			}
 		}
 
 		payload, err := json.Marshal(metadata)
@@ -356,6 +367,70 @@ func registerTaskEvidenceTx(ctx context.Context, tx pgx.Tx, task models.TaskCont
 	}
 
 	return registeredCount, nil
+}
+
+func (s *Store) VerifyEvidenceObjectIntegrityForTenant(ctx context.Context, tenantID string, evidenceID string) (models.EvidenceIntegrityVerification, bool, error) {
+	item, found, err := s.GetEvidenceObjectForTenant(ctx, tenantID, evidenceID)
+	if err != nil || !found {
+		return models.EvidenceIntegrityVerification{}, found, err
+	}
+
+	result := models.EvidenceIntegrityVerification{
+		EvidenceID: evidenceID,
+		TenantID:   item.TenantID,
+		ObjectRef:  item.ObjectRef,
+		VerifiedAt: time.Now().UTC(),
+	}
+
+	result.HashAvailable = strings.TrimSpace(item.SHA256) != ""
+	computedSHA := ""
+	if result.HashAvailable {
+		localPath := localPathForEvidenceRef(item.ObjectRef)
+		if localPath != "" {
+			fileInfo, statErr := os.Stat(localPath)
+			if statErr == nil && !fileInfo.IsDir() {
+				result.ObjectExists = true
+				if fileInfo.Size() > 0 && fileInfo.Size() <= maxEvidenceHashSizeBytes {
+					file, openErr := os.Open(localPath)
+					if openErr == nil {
+						hash := sha256.New()
+						_, _ = io.Copy(hash, file)
+						_ = file.Close()
+						computedSHA = hex.EncodeToString(hash.Sum(nil))
+					}
+				}
+			}
+		}
+	}
+	if result.HashAvailable {
+		if computedSHA == "" {
+			result.HashMatches = true
+		} else {
+			result.HashMatches = strings.EqualFold(strings.TrimSpace(item.SHA256), computedSHA)
+		}
+	}
+
+	algorithm, keyID, signatureValid := s.verifyEvidenceSignature(item)
+	result.Algorithm = algorithm
+	result.KeyID = keyID
+	result.SignaturePresent = algorithm != ""
+	result.SignatureValid = signatureValid
+
+	result.Verified = result.HashAvailable && result.HashMatches && result.SignaturePresent && result.SignatureValid
+	switch {
+	case result.Verified:
+		result.Message = "evidence hash and signature verified"
+	case !result.HashAvailable:
+		result.Message = "evidence hash is not available"
+	case !result.HashMatches:
+		result.Message = "evidence hash mismatch"
+	case !result.SignaturePresent:
+		result.Message = "evidence signature is missing"
+	default:
+		result.Message = "evidence signature validation failed"
+	}
+
+	return result, true, nil
 }
 
 func normalizeEvidenceListQuery(query models.EvidenceListQuery) models.EvidenceListQuery {
@@ -492,6 +567,111 @@ func collectEvidenceMetadata(ref string, key string) (int64, string, string) {
 	}
 
 	return sizeBytes, hex.EncodeToString(hash.Sum(nil)), contentType
+}
+
+func (s *Store) buildEvidenceIntegrityMetadata(task models.TaskContext, workerID string, objectRef string, shaDigest string, now time.Time) (map[string]any, bool) {
+	signingKey := strings.TrimSpace(s.evidenceSigningKey)
+	if signingKey == "" {
+		return nil, false
+	}
+
+	payload := evidenceSignaturePayload(task, workerID, objectRef, shaDigest)
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	_, _ = mac.Write([]byte(payload))
+	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+
+	keyID := strings.TrimSpace(s.evidenceSigningKeyID)
+	if keyID == "" {
+		keyID = "local-hmac-sha256"
+	}
+
+	return map[string]any{
+		"algorithm":      "hmac-sha256",
+		"key_id":         keyID,
+		"signature_b64":  signature,
+		"signed_sha256":  shaDigest,
+		"signature_data": payload,
+		"signed_at":      now,
+	}, true
+}
+
+func (s *Store) verifyEvidenceSignature(item models.EvidenceObject) (algorithm string, keyID string, valid bool) {
+	if item.Metadata == nil {
+		return "", "", false
+	}
+	integrityRaw, ok := item.Metadata["integrity"]
+	if !ok {
+		return "", "", false
+	}
+
+	integrity, ok := integrityRaw.(map[string]any)
+	if !ok {
+		return "", "", false
+	}
+
+	algorithm = strings.TrimSpace(asString(integrity["algorithm"]))
+	keyID = strings.TrimSpace(asString(integrity["key_id"]))
+	signatureB64 := strings.TrimSpace(asString(integrity["signature_b64"]))
+	storedDigest := strings.TrimSpace(asString(integrity["signed_sha256"]))
+	signatureData := strings.TrimSpace(asString(integrity["signature_data"]))
+	if signatureData == "" {
+		workerID := ""
+		if provenanceRaw, ok := item.Metadata["provenance"]; ok {
+			if provenance, ok := provenanceRaw.(map[string]any); ok {
+				workerID = asString(provenance["worker_id"])
+			}
+		}
+		signatureData = evidenceSignaturePayload(models.TaskContext{
+			TaskID:    item.TaskID,
+			ScanJobID: item.ScanJobID,
+			TenantID:  item.TenantID,
+		}, workerID, item.ObjectRef, item.SHA256)
+	}
+
+	if algorithm != "hmac-sha256" || signatureB64 == "" || storedDigest == "" || signatureData == "" {
+		return algorithm, keyID, false
+	}
+	if !strings.EqualFold(storedDigest, strings.TrimSpace(item.SHA256)) {
+		return algorithm, keyID, false
+	}
+
+	signingKey := strings.TrimSpace(s.evidenceSigningKey)
+	if signingKey == "" {
+		return algorithm, keyID, false
+	}
+
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return algorithm, keyID, false
+	}
+
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	_, _ = mac.Write([]byte(signatureData))
+	expected := mac.Sum(nil)
+	return algorithm, keyID, hmac.Equal(signature, expected)
+}
+
+func evidenceSignaturePayload(task models.TaskContext, workerID string, objectRef string, shaDigest string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(task.TenantID),
+		strings.TrimSpace(task.ScanJobID),
+		strings.TrimSpace(task.TaskID),
+		strings.TrimSpace(workerID),
+		strings.TrimSpace(objectRef),
+		strings.TrimSpace(shaDigest),
+	}, "|")
+}
+
+func asString(value any) string {
+	if value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return fmt.Sprintf("%v", value)
+	}
 }
 
 func localPathForEvidenceRef(ref string) string {

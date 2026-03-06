@@ -31,6 +31,8 @@ type stubAPIStore struct {
 	kmsVerifyErr             error
 	createSecretReferenceErr error
 	issueSecretLeaseErr      error
+	issueWorkerCertErr       error
+	caBundleErr              error
 	scanPresets              []models.ScanPreset
 	scanTargets              []models.ScanTarget
 	kmsKeys                  []models.KMSKey
@@ -47,6 +49,8 @@ type stubAPIStore struct {
 	evidenceListErr          error
 	evidenceObject           models.EvidenceObject
 	evidenceObjectFound      bool
+	evidenceIntegrity        models.EvidenceIntegrityVerification
+	evidenceIntegrityFound   bool
 	evidenceRetentionRuns    []models.EvidenceRetentionRun
 	evidenceRetentionRun     models.EvidenceRetentionRun
 	evidenceRetentionErr     error
@@ -60,6 +64,9 @@ type stubAPIStore struct {
 	kmsSignResponse          models.KMSSignResponse
 	kmsVerifyResponse        models.KMSVerifyResponse
 	issuedSecretLease        models.IssuedSecretLease
+	workloadCertificates     []models.WorkloadCertificate
+	issuedWorkerCertificate  models.IssuedWorkerCertificate
+	caBundle                 models.CertificateAuthorityBundle
 	tenantConfigEntries      []models.TenantConfigEntry
 	tenantConfigErr          error
 	findings                 []models.CanonicalFinding
@@ -572,6 +579,13 @@ func (s *stubAPIStore) GetEvidenceObjectForTenant(_ context.Context, _ string, _
 	return s.evidenceObject, true, nil
 }
 
+func (s *stubAPIStore) VerifyEvidenceObjectIntegrityForTenant(_ context.Context, _ string, _ string) (models.EvidenceIntegrityVerification, bool, error) {
+	if !s.evidenceIntegrityFound {
+		return models.EvidenceIntegrityVerification{}, false, nil
+	}
+	return s.evidenceIntegrity, true, nil
+}
+
 func (s *stubAPIStore) ListEvidenceRetentionRunsForTenant(_ context.Context, _ string, _ int) ([]models.EvidenceRetentionRun, error) {
 	if s.evidenceRetentionErr != nil {
 		return nil, s.evidenceRetentionErr
@@ -858,6 +872,77 @@ func (s *stubAPIStore) RevokeSecretLeaseForTenant(_ context.Context, _ string, l
 		return s.secretLeases[idx], true, nil
 	}
 	return models.SecretLease{}, false, nil
+}
+
+func (s *stubAPIStore) ListWorkloadCertificatesForTenant(_ context.Context, _ string, subjectID string, _ int) ([]models.WorkloadCertificate, error) {
+	if strings.TrimSpace(subjectID) == "" {
+		return s.workloadCertificates, nil
+	}
+	filtered := make([]models.WorkloadCertificate, 0, len(s.workloadCertificates))
+	for _, item := range s.workloadCertificates {
+		if item.SubjectID == subjectID {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) IssueWorkerCertificateForTenant(_ context.Context, tenantID string, actor string, request models.IssueWorkerCertificateRequest) (models.IssuedWorkerCertificate, error) {
+	if s.issueWorkerCertErr != nil {
+		return models.IssuedWorkerCertificate{}, s.issueWorkerCertErr
+	}
+	if strings.TrimSpace(s.issuedWorkerCertificate.Certificate.ID) != "" {
+		return s.issuedWorkerCertificate, nil
+	}
+
+	now := time.Now().UTC()
+	item := models.WorkloadCertificate{
+		ID:                "workload-cert-created",
+		TenantID:          strings.TrimSpace(tenantID),
+		SubjectType:       "worker",
+		SubjectID:         strings.TrimSpace(request.WorkerID),
+		SerialNumber:      "stub-serial",
+		FingerprintSHA256: "stub-fingerprint",
+		CertificatePEM:    "-----BEGIN CERTIFICATE-----\nstub\n-----END CERTIFICATE-----",
+		Status:            "active",
+		IssuedBy:          strings.TrimSpace(actor),
+		IssuedAt:          now,
+		ExpiresAt:         now.Add(24 * time.Hour),
+		Metadata:          map[string]any{},
+	}
+	s.workloadCertificates = append(s.workloadCertificates, item)
+
+	return models.IssuedWorkerCertificate{
+		Certificate:   item,
+		PrivateKeyPEM: "-----BEGIN PRIVATE KEY-----\nstub\n-----END PRIVATE KEY-----",
+		CABundlePEM:   "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+	}, nil
+}
+
+func (s *stubAPIStore) RevokeWorkloadCertificateForTenant(_ context.Context, _ string, certificateID string, _ string, reason string) (models.WorkloadCertificate, bool, error) {
+	now := time.Now().UTC()
+	for idx := range s.workloadCertificates {
+		if s.workloadCertificates[idx].ID != certificateID {
+			continue
+		}
+		s.workloadCertificates[idx].Status = "revoked"
+		s.workloadCertificates[idx].RevokedAt = &now
+		s.workloadCertificates[idx].RevokedReason = strings.TrimSpace(reason)
+		return s.workloadCertificates[idx], true, nil
+	}
+	return models.WorkloadCertificate{}, false, nil
+}
+
+func (s *stubAPIStore) GetCertificateAuthorityBundle() (models.CertificateAuthorityBundle, error) {
+	if s.caBundleErr != nil {
+		return models.CertificateAuthorityBundle{}, s.caBundleErr
+	}
+	if strings.TrimSpace(s.caBundle.CertificatePEM) != "" {
+		return s.caBundle, nil
+	}
+	return models.CertificateAuthorityBundle{
+		CertificatePEM: "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+	}, nil
 }
 
 func (s *stubAPIStore) ListFindingWaiversForTenant(context.Context, string, string, int) ([]models.FindingWaiver, error) {
@@ -1564,6 +1649,124 @@ func TestSecretReferenceAndLeaseEndpoints(t *testing.T) {
 	}
 	if revoked.Status != "revoked" {
 		t.Fatalf("expected revoked status, got %s", revoked.Status)
+	}
+}
+
+func TestWorkerCertificateEndpoints(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	issueRecorder := httptest.NewRecorder()
+	issueRequest := httptest.NewRequest(http.MethodPost, "/v1/workload-identities/workers/certificates", strings.NewReader(`{
+		"worker_id":"worker-1",
+		"ttl_seconds":3600,
+		"dns_names":["worker-1.local"],
+		"uri_sans":["spiffe://uss/tenant/org-1/worker/worker-1"]
+	}`))
+	issueRequest.Header.Set("Authorization", "Bearer admin-token")
+	issueRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(issueRecorder, issueRequest)
+	if issueRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 issue worker certificate, got %d", issueRecorder.Code)
+	}
+
+	var issued models.IssuedWorkerCertificate
+	if err := json.NewDecoder(issueRecorder.Body).Decode(&issued); err != nil {
+		t.Fatalf("decode issued worker certificate response: %v", err)
+	}
+	if issued.Certificate.ID == "" || issued.PrivateKeyPEM == "" {
+		t.Fatalf("expected issued certificate payload, got %+v", issued)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/workload-identities/workers/certificates?subject_id=worker-1&limit=10", nil)
+	listRequest.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 list worker certificates, got %d", listRecorder.Code)
+	}
+
+	var listPayload struct {
+		Items []models.WorkloadCertificate `json:"items"`
+	}
+	if err := json.NewDecoder(listRecorder.Body).Decode(&listPayload); err != nil {
+		t.Fatalf("decode list worker certificates response: %v", err)
+	}
+	if len(listPayload.Items) != 1 {
+		t.Fatalf("expected 1 worker certificate, got %d", len(listPayload.Items))
+	}
+
+	revokeRecorder := httptest.NewRecorder()
+	revokeRequest := httptest.NewRequest(http.MethodPost, "/v1/workload-identities/workers/certificates/"+issued.Certificate.ID+"/revoke", strings.NewReader(`{"reason":"rotated"}`))
+	revokeRequest.Header.Set("Authorization", "Bearer admin-token")
+	revokeRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(revokeRecorder, revokeRequest)
+	if revokeRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 revoke worker certificate, got %d", revokeRecorder.Code)
+	}
+
+	var revoked models.WorkloadCertificate
+	if err := json.NewDecoder(revokeRecorder.Body).Decode(&revoked); err != nil {
+		t.Fatalf("decode revoked worker certificate response: %v", err)
+	}
+	if revoked.Status != "revoked" {
+		t.Fatalf("expected revoked certificate status, got %s", revoked.Status)
+	}
+}
+
+func TestCABundleEndpoint(t *testing.T) {
+	t.Parallel()
+
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "admin@example.com",
+			DisplayName:      "Admin",
+			Role:             "platform_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		caBundle: models.CertificateAuthorityBundle{
+			CertificatePEM: "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/trust/ca-bundle", nil)
+	request.Header.Set("Authorization", "Bearer admin-token")
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 ca bundle, got %d", recorder.Code)
+	}
+
+	var bundle models.CertificateAuthorityBundle
+	if err := json.NewDecoder(recorder.Body).Decode(&bundle); err != nil {
+		t.Fatalf("decode ca bundle response: %v", err)
+	}
+	if !strings.Contains(bundle.CertificatePEM, "BEGIN CERTIFICATE") {
+		t.Fatalf("expected cert pem payload, got %s", bundle.CertificatePEM)
 	}
 }
 
@@ -2328,6 +2531,59 @@ func TestEvidenceEndpointsListGetAndRetentionRun(t *testing.T) {
 	}
 	if !retentionPayload.DryRun || retentionPayload.ArchivedCount != 2 {
 		t.Fatalf("unexpected retention payload: %+v", retentionPayload)
+	}
+}
+
+func TestEvidenceIntegrityVerificationEndpoint(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "viewer@example.com",
+			DisplayName:      "Viewer",
+			Role:             "viewer",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		evidenceIntegrityFound: true,
+		evidenceIntegrity: models.EvidenceIntegrityVerification{
+			EvidenceID:       "evidence-1",
+			TenantID:         "org-1",
+			ObjectRef:        "C:/evidence/scan-1.log",
+			Verified:         true,
+			ObjectExists:     true,
+			HashAvailable:    true,
+			HashMatches:      true,
+			SignaturePresent: true,
+			SignatureValid:   true,
+			Algorithm:        "hmac-sha256",
+			KeyID:            "local-hmac-sha256",
+			VerifiedAt:       now,
+			Message:          "evidence hash and signature verified",
+		},
+	}
+
+	server := New(config.Load(), store)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/evidence/evidence-1/verify-integrity", nil)
+	request.Header.Set("Authorization", "Bearer viewer-token")
+	server.httpServer.Handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for evidence integrity verification, got %d", recorder.Code)
+	}
+
+	var payload models.EvidenceIntegrityVerification
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode evidence integrity verification response: %v", err)
+	}
+	if !payload.Verified || !payload.SignatureValid {
+		t.Fatalf("unexpected evidence integrity payload: %+v", payload)
 	}
 }
 

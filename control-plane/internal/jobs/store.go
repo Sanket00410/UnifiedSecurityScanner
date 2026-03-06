@@ -55,6 +55,8 @@ var (
 	ErrSecretReferenceNotFound      = errors.New("secret reference not found")
 	ErrSecretLeaseNotFound          = errors.New("secret lease not found")
 	ErrSecretLeaseExpired           = errors.New("secret lease expired")
+	ErrCertificateAuthorityDisabled = errors.New("certificate authority is not configured")
+	ErrWorkloadCertificateNotFound  = errors.New("workload certificate not found")
 )
 
 type TenantLimitExceededError struct {
@@ -88,13 +90,18 @@ func (e *PolicyDeniedError) Error() string {
 }
 
 type Store struct {
-	pool               *pgxpool.Pool
-	workerHeartbeatTTL time.Duration
-	bootstrapOrgID     string
-	bootstrapOrgName   string
-	oidcDefaultRole    string
-	kmsMasterKey       string
-	secretLeaseMaxTTL  time.Duration
+	pool                        *pgxpool.Pool
+	workerHeartbeatTTL          time.Duration
+	bootstrapOrgID              string
+	bootstrapOrgName            string
+	oidcDefaultRole             string
+	kmsMasterKey                string
+	secretLeaseMaxTTL           time.Duration
+	certificateAuthorityCertPEM string
+	certificateAuthorityKeyPEM  string
+	workloadCertificateTTL      time.Duration
+	evidenceSigningKey          string
+	evidenceSigningKeyID        string
 }
 
 func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
@@ -118,13 +125,18 @@ func NewStore(ctx context.Context, cfg config.Config) (*Store, error) {
 	}
 
 	store := &Store{
-		pool:               pool,
-		workerHeartbeatTTL: cfg.WorkerHeartbeatTTL,
-		bootstrapOrgID:     "bootstrap-org-" + normalizeSlug(cfg.BootstrapOrgSlug, "local"),
-		bootstrapOrgName:   strings.TrimSpace(cfg.BootstrapOrgName),
-		oidcDefaultRole:    normalizeRole(cfg.OIDCDefaultRole),
-		kmsMasterKey:       strings.TrimSpace(cfg.KMSMasterKey),
-		secretLeaseMaxTTL:  cfg.SecretLeaseMaxTTL,
+		pool:                        pool,
+		workerHeartbeatTTL:          cfg.WorkerHeartbeatTTL,
+		bootstrapOrgID:              "bootstrap-org-" + normalizeSlug(cfg.BootstrapOrgSlug, "local"),
+		bootstrapOrgName:            strings.TrimSpace(cfg.BootstrapOrgName),
+		oidcDefaultRole:             normalizeRole(cfg.OIDCDefaultRole),
+		kmsMasterKey:                strings.TrimSpace(cfg.KMSMasterKey),
+		secretLeaseMaxTTL:           cfg.SecretLeaseMaxTTL,
+		certificateAuthorityCertPEM: strings.TrimSpace(cfg.CertificateAuthorityCertPEM),
+		certificateAuthorityKeyPEM:  strings.TrimSpace(cfg.CertificateAuthorityKeyPEM),
+		workloadCertificateTTL:      cfg.WorkloadCertificateTTL,
+		evidenceSigningKey:          strings.TrimSpace(cfg.EvidenceSigningKey),
+		evidenceSigningKeyID:        strings.TrimSpace(cfg.EvidenceSigningKeyID),
 	}
 
 	if err := store.EnsureBootstrap(ctx, cfg); err != nil {
@@ -543,7 +555,7 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 		}
 	}
 
-	registeredEvidenceCount, err := registerTaskEvidenceTx(ctx, tx, task, submission.EvidencePaths, now)
+	registeredEvidenceCount, err := s.registerTaskEvidenceTx(ctx, tx, task, submission.WorkerID, submission.EvidencePaths, now)
 	if err != nil {
 		return err
 	}

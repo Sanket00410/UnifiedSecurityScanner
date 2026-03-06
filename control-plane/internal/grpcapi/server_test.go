@@ -359,6 +359,29 @@ func TestWorkerIdentityTokenValidation(t *testing.T) {
 	}
 }
 
+func TestBuildServerCredentialsDisabled(t *testing.T) {
+	t.Parallel()
+
+	credentials, err := buildServerCredentials(TransportSecurityConfig{})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if credentials != nil {
+		t.Fatalf("expected nil transport credentials when tls is disabled")
+	}
+}
+
+func TestBuildServerCredentialsRequiresPair(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildServerCredentials(TransportSecurityConfig{
+		ServerCertFile: "server.crt",
+	})
+	if err == nil {
+		t.Fatal("expected error when only grpc tls cert file is configured")
+	}
+}
+
 func newTestWorkerClient(t *testing.T, store workerStore, workerSharedSecret string, workloadIdentitySigningKey string) workerv1.WorkerControlPlaneClient {
 	t.Helper()
 

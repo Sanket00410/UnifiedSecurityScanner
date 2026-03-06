@@ -2,15 +2,19 @@ package grpcapi
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -27,9 +31,17 @@ type Server struct {
 	bind                       string
 	grpcServer                 *grpc.Server
 	listener                   net.Listener
+	initErr                    error
 	store                      workerStore
 	workerSharedSecret         string
 	workloadIdentitySigningKey string
+}
+
+type TransportSecurityConfig struct {
+	ServerCertFile    string
+	ServerKeyFile     string
+	ClientCAFile      string
+	RequireClientCert bool
 }
 
 type workerStore interface {
@@ -40,7 +52,10 @@ type workerStore interface {
 	FinalizeTask(ctx context.Context, submission models.TaskResultSubmission) error
 }
 
-func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret string, workloadIdentitySigningKey string) *Server {
+func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret string, workloadIdentitySigningKey string, transportSecurity TransportSecurityConfig) *Server {
+	serverOptions := make([]grpc.ServerOption, 0, 1)
+	serverCredentials, err := buildServerCredentials(transportSecurity)
+
 	server := &Server{
 		logger:                     logger,
 		bind:                       bind,
@@ -48,8 +63,14 @@ func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret 
 		workerSharedSecret:         strings.TrimSpace(workerSharedSecret),
 		workloadIdentitySigningKey: strings.TrimSpace(workloadIdentitySigningKey),
 	}
+	if err != nil {
+		server.initErr = err
+	}
+	if serverCredentials != nil {
+		serverOptions = append(serverOptions, grpc.Creds(serverCredentials))
+	}
 
-	server.grpcServer = grpc.NewServer()
+	server.grpcServer = grpc.NewServer(serverOptions...)
 	workerv1.RegisterWorkerControlPlaneServer(server.grpcServer, &workerService{
 		store:                      store,
 		logger:                     logger,
@@ -61,6 +82,10 @@ func New(bind string, store *jobs.Store, logger *log.Logger, workerSharedSecret 
 }
 
 func (s *Server) ListenAndServe() error {
+	if s.initErr != nil {
+		return s.initErr
+	}
+
 	listener, err := net.Listen("tcp", s.bind)
 	if err != nil {
 		return fmt.Errorf("listen grpc: %w", err)
@@ -68,6 +93,46 @@ func (s *Server) ListenAndServe() error {
 
 	s.listener = listener
 	return s.grpcServer.Serve(listener)
+}
+
+func buildServerCredentials(cfg TransportSecurityConfig) (credentials.TransportCredentials, error) {
+	certFile := strings.TrimSpace(cfg.ServerCertFile)
+	keyFile := strings.TrimSpace(cfg.ServerKeyFile)
+	if certFile == "" && keyFile == "" {
+		return nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, fmt.Errorf("grpc tls requires both cert and key files")
+	}
+
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load grpc tls keypair: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+	}
+
+	if cfg.RequireClientCert {
+		caFile := strings.TrimSpace(cfg.ClientCAFile)
+		if caFile == "" {
+			return nil, fmt.Errorf("grpc mTLS requires client ca file")
+		}
+		caPEM, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read grpc client ca file: %w", err)
+		}
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("parse grpc client ca file")
+		}
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = certPool
+	}
+
+	return credentials.NewTLS(tlsConfig), nil
 }
 
 func (s *Server) Shutdown(_ context.Context) error {

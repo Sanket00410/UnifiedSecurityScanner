@@ -121,3 +121,41 @@ type IssuedSecretLease struct {
 	Lease      SecretLease `json:"lease"`
 	LeaseToken string      `json:"lease_token"`
 }
+
+type CertificateAuthorityBundle struct {
+	CertificatePEM string `json:"certificate_pem"`
+}
+
+type WorkloadCertificate struct {
+	ID                string         `json:"id"`
+	TenantID          string         `json:"tenant_id,omitempty"`
+	SubjectType       string         `json:"subject_type"`
+	SubjectID         string         `json:"subject_id"`
+	SerialNumber      string         `json:"serial_number"`
+	FingerprintSHA256 string         `json:"fingerprint_sha256"`
+	CertificatePEM    string         `json:"certificate_pem"`
+	Status            string         `json:"status"`
+	IssuedBy          string         `json:"issued_by,omitempty"`
+	IssuedAt          time.Time      `json:"issued_at"`
+	ExpiresAt         time.Time      `json:"expires_at"`
+	RevokedAt         *time.Time     `json:"revoked_at,omitempty"`
+	RevokedReason     string         `json:"revoked_reason,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+}
+
+type IssueWorkerCertificateRequest struct {
+	WorkerID   string   `json:"worker_id"`
+	TTLSeconds int64    `json:"ttl_seconds,omitempty"`
+	DNSNames   []string `json:"dns_names,omitempty"`
+	URISANs    []string `json:"uri_sans,omitempty"`
+}
+
+type IssuedWorkerCertificate struct {
+	Certificate   WorkloadCertificate `json:"certificate"`
+	PrivateKeyPEM string              `json:"private_key_pem"`
+	CABundlePEM   string              `json:"ca_bundle_pem"`
+}
+
+type RevokeWorkloadCertificateRequest struct {
+	Reason string `json:"reason,omitempty"`
+}
