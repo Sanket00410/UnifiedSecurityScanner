@@ -202,3 +202,71 @@ func TestEvaluateSubmissionRequiresApprovalForTargetRule(t *testing.T) {
 		t.Fatalf("unexpected approval mode: %s", plan.ApprovalMode)
 	}
 }
+
+func TestEvaluateIngestionSubmissionRejectsBlockedEventType(t *testing.T) {
+	t.Parallel()
+
+	rejection := EvaluateIngestionSubmission([]models.Policy{
+		{
+			ID:      "policy-ingestion-event",
+			Enabled: true,
+			Scope:   "repository",
+			Mode:    "enforce",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "block",
+					Field:  "event_type",
+					Match:  "exact",
+					Values: []string{"github.push"},
+				},
+			},
+		},
+	}, IngestionRequest{
+		Provider:   "github",
+		EventType:  "github.push",
+		TargetKind: "repo",
+		Target:     "https://github.com/acme/core",
+		Profile:    "balanced",
+		Tools:      []string{"semgrep"},
+	})
+	if rejection == nil {
+		t.Fatal("expected blocked ingestion event type to be rejected")
+	}
+	if rejection.Reason != "ingestion event type is blocked by enforced policy" {
+		t.Fatalf("unexpected rejection reason: %s", rejection.Reason)
+	}
+}
+
+func TestEvaluateIngestionSubmissionRejectsBlockedProvider(t *testing.T) {
+	t.Parallel()
+
+	rejection := EvaluateIngestionSubmission([]models.Policy{
+		{
+			ID:      "policy-ingestion-provider",
+			Enabled: true,
+			Scope:   "repository",
+			Mode:    "enforce",
+			Rules: models.PolicyRuleSet{
+				{
+					Effect: "block",
+					Field:  "provider",
+					Match:  "exact",
+					Values: []string{"gitlab"},
+				},
+			},
+		},
+	}, IngestionRequest{
+		Provider:   "gitlab",
+		EventType:  "gitlab.push_hook",
+		TargetKind: "repo",
+		Target:     "https://gitlab.com/acme/platform",
+		Profile:    "balanced",
+		Tools:      []string{"semgrep"},
+	})
+	if rejection == nil {
+		t.Fatal("expected blocked ingestion provider to be rejected")
+	}
+	if rejection.Reason != "ingestion provider is blocked by enforced policy" {
+		t.Fatalf("unexpected rejection reason: %s", rejection.Reason)
+	}
+}

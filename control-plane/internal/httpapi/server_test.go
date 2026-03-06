@@ -43,6 +43,7 @@ type stubAPIStore struct {
 	lastIngestionWebhookReq  models.IngestionWebhookRequest
 	lastIngestionSourceID    string
 	lastIngestionToken       string
+	lastIngestionRawBody     []byte
 	platformEvents           []models.PlatformEvent
 	tenantOpsSnapshot        models.TenantOperationsSnapshot
 	tenantExecutionControls  models.TenantExecutionControls
@@ -306,21 +307,22 @@ func (s *stubAPIStore) CreateIngestionSourceForTenant(_ context.Context, tenantI
 	}
 
 	item := models.IngestionSource{
-		ID:          "ingestion-source-created",
-		TenantID:    tenantID,
-		Name:        strings.TrimSpace(request.Name),
-		Provider:    strings.TrimSpace(request.Provider),
-		Enabled:     enabled,
-		TargetKind:  strings.TrimSpace(request.TargetKind),
-		Target:      strings.TrimSpace(request.Target),
-		Profile:     strings.TrimSpace(request.Profile),
-		Tools:       request.Tools,
-		Labels:      request.Labels,
-		CreatedBy:   actor,
-		UpdatedBy:   actor,
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
-		LastEventAt: nil,
+		ID:                "ingestion-source-created",
+		TenantID:          tenantID,
+		Name:              strings.TrimSpace(request.Name),
+		Provider:          strings.TrimSpace(request.Provider),
+		Enabled:           enabled,
+		TargetKind:        strings.TrimSpace(request.TargetKind),
+		Target:            strings.TrimSpace(request.Target),
+		Profile:           strings.TrimSpace(request.Profile),
+		Tools:             request.Tools,
+		Labels:            request.Labels,
+		CreatedBy:         actor,
+		UpdatedBy:         actor,
+		CreatedAt:         time.Now().UTC(),
+		UpdatedAt:         time.Now().UTC(),
+		LastEventAt:       nil,
+		SignatureRequired: request.SignatureRequired != nil && *request.SignatureRequired,
 	}
 	if item.Name == "" {
 		item.Name = "Unnamed Ingestion Source"
@@ -356,6 +358,9 @@ func (s *stubAPIStore) UpdateIngestionSourceForTenant(_ context.Context, _ strin
 		}
 		if request.Enabled != nil {
 			s.ingestionSources[idx].Enabled = *request.Enabled
+		}
+		if request.SignatureRequired != nil {
+			s.ingestionSources[idx].SignatureRequired = *request.SignatureRequired
 		}
 		if value := strings.TrimSpace(request.TargetKind); value != "" {
 			s.ingestionSources[idx].TargetKind = value
@@ -410,10 +415,11 @@ func (s *stubAPIStore) ListIngestionEventsForTenant(context.Context, string, str
 	return s.ingestionEvents, nil
 }
 
-func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, sourceID string, token string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error) {
+func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, sourceID string, token string, request models.IngestionWebhookRequest, rawBody []byte) (models.IngestionWebhookResponse, error) {
 	s.lastIngestionWebhookReq = request
 	s.lastIngestionSourceID = sourceID
 	s.lastIngestionToken = token
+	s.lastIngestionRawBody = append([]byte(nil), rawBody...)
 
 	if s.ingestionWebhookErr != nil {
 		return models.IngestionWebhookResponse{}, s.ingestionWebhookErr
@@ -2323,6 +2329,9 @@ func TestIngestionWebhookEndpointCollectsProviderHeaders(t *testing.T) {
 	if store.lastIngestionToken != "stub-token" {
 		t.Fatalf("expected token to be passed to store, got %s", store.lastIngestionToken)
 	}
+	if strings.TrimSpace(string(store.lastIngestionRawBody)) == "" {
+		t.Fatal("expected raw webhook payload to be passed to store")
+	}
 	if store.lastIngestionWebhookReq.Headers["x-github-event"] != "push" {
 		t.Fatalf("expected x-github-event to be collected, got %#v", store.lastIngestionWebhookReq.Headers["x-github-event"])
 	}
@@ -2356,6 +2365,16 @@ func TestIngestionWebhookEndpointRejectsMissingOrInvalidToken(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(invalidTokenRecorder, invalidTokenRequest)
 	if invalidTokenRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for invalid ingestion token, got %d", invalidTokenRecorder.Code)
+	}
+
+	store.ingestionWebhookErr = jobs.ErrInvalidIngestionSignature
+	invalidSignatureRecorder := httptest.NewRecorder()
+	invalidSignatureRequest := httptest.NewRequest(http.MethodPost, "/ingest/webhooks/source-1", strings.NewReader(`{}`))
+	invalidSignatureRequest.Header.Set(ingestionTokenHeader, "valid-token")
+	invalidSignatureRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(invalidSignatureRecorder, invalidSignatureRequest)
+	if invalidSignatureRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid ingestion signature, got %d", invalidSignatureRecorder.Code)
 	}
 }
 

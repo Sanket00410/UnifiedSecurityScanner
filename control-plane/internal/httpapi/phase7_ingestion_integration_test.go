@@ -3,6 +3,9 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,6 +40,7 @@ func TestPhase7IngestionWebhookFlowCreatesAndReplaysEvents(t *testing.T) {
 	cfg.DatabaseMaxConns = 2
 	cfg.DatabaseMinConns = 0
 	cfg.WorkerSharedSecret = "phase7-ingestion-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -140,6 +144,235 @@ func TestPhase7IngestionWebhookFlowCreatesAndReplaysEvents(t *testing.T) {
 	if eventsPayload.Items[0].CreatedScanJobID != accepted.Job.ID {
 		t.Fatalf("expected ingestion event to reference job %s, got %s", accepted.Job.ID, eventsPayload.Items[0].CreatedScanJobID)
 	}
+}
+
+func TestPhase7IngestionWebhookSignatureVerification(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase7_ingestion_signature_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase7-ingestion-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+	createSourceResponse, createSourceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/ingestion/sources", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":               "Signed GitHub Ingestion",
+		"provider":           "github",
+		"signature_required": true,
+		"webhook_secret":     "phase7-signing-secret",
+		"target_kind":        "repo",
+		"target":             "https://github.com/acme/secure",
+		"profile":            "balanced",
+		"tools":              []string{"semgrep"},
+	}, http.StatusCreated)
+	defer createSourceResponse.Body.Close()
+
+	var createdSource models.CreatedIngestionSource
+	decodeJSONResponse(t, createSourceBody, &createdSource)
+	if !createdSource.Source.SignatureRequired {
+		t.Fatal("expected created ingestion source signature_required=true")
+	}
+
+	signedPayload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-signature-ok",
+		"requested_by": "github-webhook",
+		"payload": map[string]any{
+			"ref":   "refs/heads/main",
+			"after": "f00dbabe",
+			"repository": map[string]any{
+				"full_name": "acme/secure",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal signed payload: %v", err)
+	}
+
+	validSignature := githubWebhookSignature("phase7-signing-secret", signedPayload)
+	validRequest, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(signedPayload))
+	if err != nil {
+		t.Fatalf("create signed webhook request: %v", err)
+	}
+	validRequest.Header.Set("Content-Type", "application/json")
+	validRequest.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	validRequest.Header.Set("X-GitHub-Event", "push")
+	validRequest.Header.Set("X-Hub-Signature-256", validSignature)
+
+	validResponse, err := client.Do(validRequest)
+	if err != nil {
+		t.Fatalf("execute signed webhook request: %v", err)
+	}
+	validBody, err := readAllAndClose(validResponse)
+	if err != nil {
+		t.Fatalf("read signed webhook response: %v", err)
+	}
+	if validResponse.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted response for valid signature, got %d body=%s", validResponse.StatusCode, string(validBody))
+	}
+
+	invalidPayload, err := json.Marshal(map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-signature-invalid",
+		"requested_by": "github-webhook",
+	})
+	if err != nil {
+		t.Fatalf("marshal invalid payload: %v", err)
+	}
+
+	invalidRequest, err := http.NewRequest(http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, bytes.NewReader(invalidPayload))
+	if err != nil {
+		t.Fatalf("create invalid webhook request: %v", err)
+	}
+	invalidRequest.Header.Set("Content-Type", "application/json")
+	invalidRequest.Header.Set("Authorization", "Bearer "+createdSource.IngestToken)
+	invalidRequest.Header.Set("X-GitHub-Event", "push")
+	invalidRequest.Header.Set("X-Hub-Signature-256", "sha256=deadbeef")
+
+	invalidResponse, err := client.Do(invalidRequest)
+	if err != nil {
+		t.Fatalf("execute invalid webhook request: %v", err)
+	}
+	invalidBody, err := readAllAndClose(invalidResponse)
+	if err != nil {
+		t.Fatalf("read invalid webhook response: %v", err)
+	}
+	if invalidResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid signature, got %d body=%s", invalidResponse.StatusCode, string(invalidBody))
+	}
+}
+
+func TestPhase7IngestionWebhookPolicyBlocksEventType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase7_ingestion_policy_event_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase7-ingestion-secret"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+
+	createPolicyResponse, createPolicyBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/policies", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":    "Block GitHub Push Events",
+		"scope":   "repository",
+		"mode":    "enforce",
+		"enabled": true,
+		"rules": []map[string]any{
+			{
+				"effect": "block",
+				"field":  "event_type",
+				"match":  "exact",
+				"values": []string{"github.push"},
+			},
+		},
+	}, http.StatusCreated)
+	defer createPolicyResponse.Body.Close()
+
+	var createdPolicy models.Policy
+	decodeJSONResponse(t, createPolicyBody, &createdPolicy)
+	if strings.TrimSpace(createdPolicy.ID) == "" {
+		t.Fatal("expected created policy id")
+	}
+
+	createSourceResponse, createSourceBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/ingestion/sources", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":        "Policy-Gated GitHub Source",
+		"provider":    "github",
+		"target_kind": "repo",
+		"target":      "https://github.com/acme/policy",
+		"profile":     "balanced",
+		"tools":       []string{"semgrep"},
+	}, http.StatusCreated)
+	defer createSourceResponse.Body.Close()
+
+	var createdSource models.CreatedIngestionSource
+	decodeJSONResponse(t, createSourceBody, &createdSource)
+
+	webhookResponse, webhookBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/ingest/webhooks/"+createdSource.Source.ID, "", ingestionTokenHeader, createdSource.IngestToken, map[string]any{
+		"event_type":   "github.push",
+		"external_id":  "evt-policy-block",
+		"requested_by": "github-webhook",
+	}, http.StatusAccepted)
+	defer webhookResponse.Body.Close()
+
+	var webhookResult models.IngestionWebhookResponse
+	decodeJSONResponse(t, webhookBody, &webhookResult)
+	if webhookResult.Event.Status != "policy_denied" {
+		t.Fatalf("expected policy_denied ingestion status, got %s", webhookResult.Event.Status)
+	}
+	if webhookResult.Job != nil {
+		t.Fatalf("expected no job for blocked ingestion event, got %#v", webhookResult.Job)
+	}
+	if webhookResult.Event.PolicyID != createdPolicy.ID {
+		t.Fatalf("expected policy id %s, got %s", createdPolicy.ID, webhookResult.Event.PolicyID)
+	}
+
+	scanJobsResponse, scanJobsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/scan-jobs", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer scanJobsResponse.Body.Close()
+
+	var scanJobsPayload struct {
+		Items []models.ScanJob `json:"items"`
+	}
+	decodeJSONResponse(t, scanJobsBody, &scanJobsPayload)
+	if len(scanJobsPayload.Items) != 0 {
+		t.Fatalf("expected 0 scan jobs when event is policy blocked, got %d", len(scanJobsPayload.Items))
+	}
+}
+
+func githubWebhookSignature(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func TestPhase7IngestionWebhookNormalizesProviderHeadersAndPayload(t *testing.T) {

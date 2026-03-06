@@ -33,6 +33,15 @@ type Rejection struct {
 	RuleHits []string
 }
 
+type IngestionRequest struct {
+	Provider   string
+	EventType  string
+	TargetKind string
+	Target     string
+	Profile    string
+	Tools      []string
+}
+
 type boundRule struct {
 	PolicyID string
 	Rule     models.PolicyRule
@@ -112,6 +121,43 @@ func EvaluateSubmission(policies []models.Policy, request models.CreateScanJobRe
 	}
 
 	return plan, nil
+}
+
+func EvaluateIngestionSubmission(policies []models.Policy, request IngestionRequest) *Rejection {
+	applicable := applicablePolicies(policies, models.CreateScanJobRequest{
+		TargetKind: request.TargetKind,
+		Profile:    request.Profile,
+		Target:     request.Target,
+	})
+	enforced := make([]models.Policy, 0, len(applicable))
+	for _, policy := range applicable {
+		if isEnforced(policy.Mode) {
+			enforced = append(enforced, policy)
+		}
+	}
+
+	context := map[string]string{
+		"provider":    strings.ToLower(strings.TrimSpace(request.Provider)),
+		"event_type":  strings.ToLower(strings.TrimSpace(request.EventType)),
+		"target_kind": strings.ToLower(strings.TrimSpace(request.TargetKind)),
+		"profile":     strings.ToLower(strings.TrimSpace(request.Profile)),
+		"target":      strings.ToLower(strings.TrimSpace(request.Target)),
+	}
+
+	for _, field := range []string{"provider", "event_type", "target_kind", "profile", "target"} {
+		if rejection := evaluateFieldRules(enforced, field, context); rejection != nil {
+			return rejection
+		}
+	}
+
+	for _, tool := range request.Tools {
+		context["tool"] = strings.ToLower(strings.TrimSpace(tool))
+		if rejection := evaluateFieldRules(enforced, "tool", context); rejection != nil {
+			return rejection
+		}
+	}
+
+	return nil
 }
 
 func applicablePolicies(policies []models.Policy, request models.CreateScanJobRequest) []models.Policy {
@@ -282,6 +328,10 @@ func normalizeField(value string) string {
 		return "target_kind"
 	case "profile":
 		return "profile"
+	case "provider":
+		return "provider"
+	case "event_type":
+		return "event_type"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -309,6 +359,16 @@ func rejectionReason(field string, effect string) string {
 			return "scan target is not allow-listed by enforced policy"
 		}
 		return "scan target is blocked by enforced policy"
+	case "provider":
+		if effect == "allow" {
+			return "ingestion provider is not allow-listed by enforced policy"
+		}
+		return "ingestion provider is blocked by enforced policy"
+	case "event_type":
+		if effect == "allow" {
+			return "ingestion event type is not allow-listed by enforced policy"
+		}
+		return "ingestion event type is blocked by enforced policy"
 	default:
 		if effect == "allow" {
 			return "requested operation is not allow-listed by enforced policy"

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"testing"
+	"time"
 
 	"unifiedsecurityscanner/control-plane/internal/models"
 )
@@ -150,6 +151,61 @@ func TestNormalizeIngestionWebhookRequestJenkinsInfersFromHeadersAndPayload(t *t
 	if request.Metadata["build_url"] != "https://jenkins.local/job/platform-nightly/502/" {
 		t.Fatalf("expected build_url metadata, got %#v", request.Metadata["build_url"])
 	}
+}
+
+func TestNormalizeCreateIngestionSourceRequestEnablesSignaturesWhenWebhookSecretProvided(t *testing.T) {
+	t.Parallel()
+
+	source := normalizeCreateIngestionSourceRequest("tenant-1", "user@example.com", models.CreateIngestionSourceRequest{
+		Provider:      "github",
+		TargetKind:    "repo",
+		Target:        "https://github.com/acme/core",
+		WebhookSecret: "shared-secret",
+	}, nowUTC())
+	if !source.SignatureRequired {
+		t.Fatal("expected signature_required to default true when webhook_secret is provided")
+	}
+}
+
+func TestVerifyIngestionWebhookSignatureGitHub(t *testing.T) {
+	t.Parallel()
+
+	store := &Store{kmsMasterKey: "test-master-key"}
+	tenantID := "tenant-1"
+	sourceID := "source-1"
+	payload := []byte(`{"hello":"world"}`)
+
+	encrypted, err := store.encryptIngestionWebhookSecret(tenantID, sourceID, "github", "shared-secret")
+	if err != nil {
+		t.Fatalf("encrypt webhook secret: %v", err)
+	}
+	record := ingestionSourceRecord{
+		Source: models.IngestionSource{
+			ID:                sourceID,
+			TenantID:          tenantID,
+			Provider:          "github",
+			SignatureRequired: true,
+		},
+		WebhookSecretEncrypted: encrypted,
+	}
+
+	validHeaders := map[string]string{
+		"x-hub-signature-256": "sha256=" + computeIngestionWebhookHMAC("shared-secret", payload),
+	}
+	if err := store.verifyIngestionWebhookSignature(record, validHeaders, payload); err != nil {
+		t.Fatalf("expected valid signature to pass, got %v", err)
+	}
+
+	invalidHeaders := map[string]string{
+		"x-hub-signature-256": "sha256=deadbeef",
+	}
+	if err := store.verifyIngestionWebhookSignature(record, invalidHeaders, payload); err == nil {
+		t.Fatal("expected invalid signature to fail")
+	}
+}
+
+func nowUTC() time.Time {
+	return time.Now().UTC()
 }
 
 type ingestionRequest = models.IngestionWebhookRequest

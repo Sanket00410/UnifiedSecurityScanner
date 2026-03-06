@@ -92,7 +92,7 @@ type apiStore interface {
 	DeleteIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string) (bool, error)
 	RotateIngestionSourceTokenForTenant(ctx context.Context, tenantID string, sourceID string, actor string) (models.RotateIngestionSourceTokenResponse, bool, error)
 	ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error)
-	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error)
+	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest, rawBody []byte) (models.IngestionWebhookResponse, error)
 	ListPlatformEventsForTenant(ctx context.Context, tenantID string, eventType string, limit int) ([]models.PlatformEvent, error)
 	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
 	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
@@ -911,6 +911,10 @@ func (s *Server) handleIngestionSources(w http.ResponseWriter, r *http.Request) 
 				})
 				return
 			}
+			if errors.Is(err, jobs.ErrInvalidIngestionSourceConfig) {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
 			s.writeError(w, http.StatusInternalServerError, "create_ingestion_source_failed", "ingestion source could not be created")
 			return
 		}
@@ -959,6 +963,10 @@ func (s *Server) handleIngestionSourceRoute(w http.ResponseWriter, r *http.Reque
 
 			item, found, err := s.store.UpdateIngestionSourceForTenant(r.Context(), principal.OrganizationID, sourceID, principal.Email, request)
 			if err != nil {
+				if errors.Is(err, jobs.ErrInvalidIngestionSourceConfig) {
+					s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+					return
+				}
 				s.writeError(w, http.StatusInternalServerError, "update_ingestion_source_failed", "ingestion source could not be updated")
 				return
 			}
@@ -1066,10 +1074,18 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 
 	defer r.Body.Close()
 
-	var request models.IngestionWebhookRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
-		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_body", "request body could not be read")
 		return
+	}
+
+	var request models.IngestionWebhookRequest
+	if len(rawBody) > 0 {
+		if err := json.Unmarshal(rawBody, &request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
 	}
 	if request.Headers == nil {
 		request.Headers = map[string]string{}
@@ -1078,7 +1094,7 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 		request.Headers[key] = value
 	}
 
-	response, err := s.store.HandleIngestionWebhook(r.Context(), sourceID, token, request)
+	response, err := s.store.HandleIngestionWebhook(r.Context(), sourceID, token, request, rawBody)
 	if err != nil {
 		var limitExceeded *jobs.TenantLimitExceededError
 		switch {
@@ -1086,6 +1102,8 @@ func (s *Server) handleIngestionWebhook(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusNotFound, "ingestion_source_not_found", "ingestion source was not found")
 		case errors.Is(err, jobs.ErrInvalidIngestionToken):
 			s.writeError(w, http.StatusUnauthorized, "invalid_ingestion_token", "the webhook ingestion token is invalid")
+		case errors.Is(err, jobs.ErrInvalidIngestionSignature):
+			s.writeError(w, http.StatusUnauthorized, "invalid_ingestion_signature", "the webhook signature is invalid")
 		case errors.Is(err, jobs.ErrIngestionSourceDisabled):
 			s.writeError(w, http.StatusConflict, "ingestion_source_disabled", "ingestion source is disabled")
 		case errors.As(err, &limitExceeded):
@@ -1116,13 +1134,18 @@ func collectIngestionHeaders(headers http.Header) map[string]string {
 	for _, key := range []string{
 		"X-GitHub-Event",
 		"X-GitHub-Delivery",
+		"X-Hub-Signature-256",
+		"X-Hub-Signature",
 		"X-GitLab-Event",
 		"X-GitLab-Event-UUID",
 		"X-GitLab-Delivery",
+		"X-GitLab-Token",
 		"X-Event-Key",
 		"X-Jenkins-Event",
 		"X-Jenkins-Build-Number",
 		"X-Jenkins-Job",
+		"X-Jenkins-Token",
+		"X-USS-Webhook-Signature",
 	} {
 		value := strings.TrimSpace(headers.Get(key))
 		if value == "" {

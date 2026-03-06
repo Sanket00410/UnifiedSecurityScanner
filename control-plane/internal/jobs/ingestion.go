@@ -2,8 +2,13 @@ package jobs
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,11 +22,13 @@ import (
 
 	"unifiedsecurityscanner/control-plane/internal/auth"
 	"unifiedsecurityscanner/control-plane/internal/models"
+	policyengine "unifiedsecurityscanner/control-plane/internal/policy"
 )
 
 type ingestionSourceRecord struct {
-	Source     models.IngestionSource
-	SecretHash string
+	Source                 models.IngestionSource
+	SecretHash             string
+	WebhookSecretEncrypted string
 }
 
 func (s *Store) ListIngestionSourcesForTenant(ctx context.Context, tenantID string, limit int) ([]models.IngestionSource, error) {
@@ -35,7 +42,7 @@ func (s *Store) ListIngestionSourcesForTenant(ctx context.Context, tenantID stri
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash
+		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
 		FROM ingestion_sources
 		WHERE tenant_id = $1
 		ORDER BY updated_at DESC, name ASC
@@ -87,6 +94,14 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 		return models.CreatedIngestionSource{}, fmt.Errorf("create ingestion token: %w", err)
 	}
 	secretHash := auth.TokenHash(token)
+	webhookSecret := strings.TrimSpace(request.WebhookSecret)
+	if source.SignatureRequired && webhookSecret == "" {
+		return models.CreatedIngestionSource{}, fmt.Errorf("%w: webhook_secret is required when signature_required is enabled", ErrInvalidIngestionSourceConfig)
+	}
+	webhookSecretEncrypted, err := s.encryptIngestionWebhookSecret(source.TenantID, source.ID, source.Provider, webhookSecret)
+	if err != nil {
+		return models.CreatedIngestionSource{}, fmt.Errorf("encrypt webhook secret: %w", err)
+	}
 	labelsJSON, err := json.Marshal(source.Labels)
 	if err != nil {
 		return models.CreatedIngestionSource{}, fmt.Errorf("marshal ingestion source labels: %w", err)
@@ -95,13 +110,13 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO ingestion_sources (
 			id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-			labels_json, secret_hash, created_by, updated_by, last_event_at, created_at, updated_at
+			labels_json, secret_hash, webhook_secret_encrypted, signature_required, created_by, updated_by, last_event_at, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			$10, $11, $12, $13, NULL, $14, $14
+			$10, $11, $12, $13, $14, $15, NULL, $16, $16
 		)
 	`, source.ID, source.TenantID, source.Name, source.Provider, source.Enabled, source.TargetKind, source.Target, source.Profile, source.Tools,
-		labelsJSON, secretHash, source.CreatedBy, source.UpdatedBy, now)
+		labelsJSON, secretHash, webhookSecretEncrypted, source.SignatureRequired, source.CreatedBy, source.UpdatedBy, now)
 	if err != nil {
 		return models.CreatedIngestionSource{}, fmt.Errorf("insert ingestion source: %w", err)
 	}
@@ -113,11 +128,12 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 		AggregateType: "ingestion_source",
 		AggregateID:   source.ID,
 		Payload: map[string]any{
-			"name":        source.Name,
-			"provider":    source.Provider,
-			"enabled":     source.Enabled,
-			"target_kind": source.TargetKind,
-			"profile":     source.Profile,
+			"name":               source.Name,
+			"provider":           source.Provider,
+			"enabled":            source.Enabled,
+			"signature_required": source.SignatureRequired,
+			"target_kind":        source.TargetKind,
+			"profile":            source.Profile,
 		},
 		CreatedAt: now,
 	})
@@ -129,7 +145,7 @@ func (s *Store) CreateIngestionSourceForTenant(ctx context.Context, tenantID str
 }
 
 func (s *Store) UpdateIngestionSourceForTenant(ctx context.Context, tenantID string, sourceID string, actor string, request models.UpdateIngestionSourceRequest) (models.IngestionSource, bool, error) {
-	existing, found, err := s.GetIngestionSourceForTenant(ctx, tenantID, sourceID)
+	existingRecord, found, err := s.getIngestionSourceRecordForTenant(ctx, tenantID, sourceID)
 	if err != nil {
 		return models.IngestionSource{}, false, err
 	}
@@ -138,7 +154,26 @@ func (s *Store) UpdateIngestionSourceForTenant(ctx context.Context, tenantID str
 	}
 
 	now := time.Now().UTC()
-	updated := normalizeUpdateIngestionSourceRequest(existing, strings.TrimSpace(actor), request, now)
+	updated := normalizeUpdateIngestionSourceRequest(existingRecord.Source, strings.TrimSpace(actor), request, now)
+	webhookSecretEncrypted := existingRecord.WebhookSecretEncrypted
+	if secret := strings.TrimSpace(request.WebhookSecret); secret != "" {
+		webhookSecretEncrypted, err = s.encryptIngestionWebhookSecret(updated.TenantID, updated.ID, updated.Provider, secret)
+		if err != nil {
+			return models.IngestionSource{}, false, fmt.Errorf("encrypt webhook secret: %w", err)
+		}
+	} else if strings.TrimSpace(existingRecord.WebhookSecretEncrypted) != "" && !strings.EqualFold(existingRecord.Source.Provider, updated.Provider) {
+		existingSecret, decryptErr := s.decryptIngestionWebhookSecret(existingRecord.Source.TenantID, existingRecord.Source.ID, existingRecord.Source.Provider, existingRecord.WebhookSecretEncrypted)
+		if decryptErr != nil {
+			return models.IngestionSource{}, false, fmt.Errorf("decrypt existing webhook secret: %w", decryptErr)
+		}
+		webhookSecretEncrypted, err = s.encryptIngestionWebhookSecret(updated.TenantID, updated.ID, updated.Provider, existingSecret)
+		if err != nil {
+			return models.IngestionSource{}, false, fmt.Errorf("re-encrypt webhook secret: %w", err)
+		}
+	}
+	if updated.SignatureRequired && strings.TrimSpace(webhookSecretEncrypted) == "" {
+		return models.IngestionSource{}, false, fmt.Errorf("%w: webhook_secret is required when signature_required is enabled", ErrInvalidIngestionSourceConfig)
+	}
 	labelsJSON, err := json.Marshal(updated.Labels)
 	if err != nil {
 		return models.IngestionSource{}, false, fmt.Errorf("marshal ingestion source labels: %w", err)
@@ -149,18 +184,20 @@ func (s *Store) UpdateIngestionSourceForTenant(ctx context.Context, tenantID str
 		SET name = $3,
 		    provider = $4,
 		    enabled = $5,
-		    target_kind = $6,
-		    target = $7,
-		    profile = $8,
-		    tools = $9,
-		    labels_json = $10,
-		    updated_by = $11,
-		    updated_at = $12
+		    signature_required = $6,
+		    target_kind = $7,
+		    target = $8,
+		    profile = $9,
+		    tools = $10,
+		    labels_json = $11,
+		    webhook_secret_encrypted = $12,
+		    updated_by = $13,
+		    updated_at = $14
 		WHERE tenant_id = $1 AND id = $2
 		RETURNING id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-		          labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash
+		          labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
 	`, strings.TrimSpace(tenantID), strings.TrimSpace(sourceID), updated.Name, updated.Provider, updated.Enabled,
-		updated.TargetKind, updated.Target, updated.Profile, updated.Tools, labelsJSON, updated.UpdatedBy, now)
+		updated.SignatureRequired, updated.TargetKind, updated.Target, updated.Profile, updated.Tools, labelsJSON, webhookSecretEncrypted, updated.UpdatedBy, now)
 
 	record, err := scanIngestionSourceRecord(row)
 	if err != nil {
@@ -226,7 +263,7 @@ func (s *Store) RotateIngestionSourceTokenForTenant(ctx context.Context, tenantI
 		    updated_at = $5
 		WHERE tenant_id = $1 AND id = $2
 		RETURNING id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-		          labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash
+		          labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
 	`, strings.TrimSpace(tenantID), strings.TrimSpace(sourceID), secretHash, actor, now)
 
 	record, err := scanIngestionSourceRecord(row)
@@ -297,7 +334,7 @@ func (s *Store) ListIngestionEventsForTenant(ctx context.Context, tenantID strin
 	return items, nil
 }
 
-func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest) (models.IngestionWebhookResponse, error) {
+func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest, rawBody []byte) (models.IngestionWebhookResponse, error) {
 	record, found, err := s.getIngestionSourceRecordByID(ctx, sourceID)
 	if err != nil {
 		return models.IngestionWebhookResponse{}, err
@@ -311,6 +348,11 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 	}
 	if !record.Source.Enabled {
 		return models.IngestionWebhookResponse{}, ErrIngestionSourceDisabled
+	}
+	if record.Source.SignatureRequired {
+		if err := s.verifyIngestionWebhookSignature(record, request.Headers, rawBody); err != nil {
+			return models.IngestionWebhookResponse{}, err
+		}
 	}
 
 	normalized := normalizeIngestionWebhookRequest(record.Source, request)
@@ -367,29 +409,50 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 		policyDenied *PolicyDeniedError
 	)
 
-	createdJob, err := s.CreateForTenant(ctx, record.Source.TenantID, models.CreateScanJobRequest{
-		TenantID:    record.Source.TenantID,
-		TargetKind:  normalized.TargetKind,
-		Target:      normalized.Target,
-		Profile:     normalized.Profile,
-		RequestedBy: normalized.RequestedBy,
-		Tools:       normalized.Tools,
-	})
+	applicablePolicies, err := s.ListPoliciesForTenant(ctx, record.Source.TenantID, 500)
 	if err != nil {
-		if errors.As(err, &policyDenied) {
-			event.Status = "policy_denied"
-			event.ErrorMessage = policyDenied.Error()
-			event.PolicyID = strings.TrimSpace(policyDenied.PolicyID)
-			event.PolicyRuleHits = append([]string(nil), policyDenied.RuleHits...)
-		} else {
-			event.Status = "failed"
-			event.ErrorMessage = "scan job creation failed"
-			createJobErr = err
-		}
+		createJobErr = fmt.Errorf("load ingestion policies: %w", err)
+		event.Status = "failed"
+		event.ErrorMessage = "scan job creation failed"
 	} else {
-		job = &createdJob
-		event.Status = "queued"
-		event.CreatedScanJobID = createdJob.ID
+		if rejection := policyengine.EvaluateIngestionSubmission(applicablePolicies, policyengine.IngestionRequest{
+			Provider:   record.Source.Provider,
+			EventType:  normalized.EventType,
+			TargetKind: normalized.TargetKind,
+			Target:     normalized.Target,
+			Profile:    normalized.Profile,
+			Tools:      normalized.Tools,
+		}); rejection != nil {
+			event.Status = "policy_denied"
+			event.ErrorMessage = rejection.Reason
+			event.PolicyID = strings.TrimSpace(rejection.PolicyID)
+			event.PolicyRuleHits = append([]string(nil), rejection.RuleHits...)
+		} else {
+			createdJob, err := s.CreateForTenant(ctx, record.Source.TenantID, models.CreateScanJobRequest{
+				TenantID:    record.Source.TenantID,
+				TargetKind:  normalized.TargetKind,
+				Target:      normalized.Target,
+				Profile:     normalized.Profile,
+				RequestedBy: normalized.RequestedBy,
+				Tools:       normalized.Tools,
+			})
+			if err != nil {
+				if errors.As(err, &policyDenied) {
+					event.Status = "policy_denied"
+					event.ErrorMessage = policyDenied.Error()
+					event.PolicyID = strings.TrimSpace(policyDenied.PolicyID)
+					event.PolicyRuleHits = append([]string(nil), policyDenied.RuleHits...)
+				} else {
+					event.Status = "failed"
+					event.ErrorMessage = "scan job creation failed"
+					createJobErr = err
+				}
+			} else {
+				job = &createdJob
+				event.Status = "queued"
+				event.CreatedScanJobID = createdJob.ID
+			}
+		}
 	}
 
 	insertedEvent, err := s.insertIngestionEvent(ctx, event)
@@ -457,7 +520,7 @@ func (s *Store) HandleIngestionWebhook(ctx context.Context, sourceID string, raw
 func (s *Store) getIngestionSourceRecordForTenant(ctx context.Context, tenantID string, sourceID string) (ingestionSourceRecord, bool, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash
+		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
 		FROM ingestion_sources
 		WHERE tenant_id = $1 AND id = $2
 	`, strings.TrimSpace(tenantID), strings.TrimSpace(sourceID))
@@ -475,7 +538,7 @@ func (s *Store) getIngestionSourceRecordForTenant(ctx context.Context, tenantID 
 func (s *Store) getIngestionSourceRecordByID(ctx context.Context, sourceID string) (ingestionSourceRecord, bool, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, name, provider, enabled, target_kind, target, profile, tools,
-		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash
+		       labels_json, created_by, updated_by, last_event_at, created_at, updated_at, secret_hash, webhook_secret_encrypted, signature_required
 		FROM ingestion_sources
 		WHERE id = $1
 	`, strings.TrimSpace(sourceID))
@@ -538,6 +601,159 @@ func (s *Store) insertIngestionEvent(ctx context.Context, event models.Ingestion
 	return inserted, nil
 }
 
+func (s *Store) verifyIngestionWebhookSignature(record ingestionSourceRecord, headers map[string]string, rawBody []byte) error {
+	secret, err := s.decryptIngestionWebhookSecret(record.Source.TenantID, record.Source.ID, record.Source.Provider, record.WebhookSecretEncrypted)
+	if err != nil {
+		return ErrInvalidIngestionSignature
+	}
+	if strings.TrimSpace(secret) == "" {
+		return ErrInvalidIngestionSignature
+	}
+
+	normalizedHeaders := normalizeHeaderMap(headers)
+	provider := normalizeIngestionProvider(record.Source.Provider)
+	switch provider {
+	case "github":
+		signature := strings.TrimSpace(normalizedHeaders["x-hub-signature-256"])
+		if signature == "" {
+			return ErrInvalidIngestionSignature
+		}
+		expected := computeIngestionWebhookHMAC(secret, rawBody)
+		if !matchesIngestionHMACSignature(signature, expected) {
+			return ErrInvalidIngestionSignature
+		}
+	case "gitlab":
+		token := strings.TrimSpace(normalizedHeaders["x-gitlab-token"])
+		if !constantTimeEqualStrings(token, secret) {
+			return ErrInvalidIngestionSignature
+		}
+	case "jenkins":
+		token := strings.TrimSpace(normalizedHeaders["x-jenkins-token"])
+		if !constantTimeEqualStrings(token, secret) {
+			return ErrInvalidIngestionSignature
+		}
+	default:
+		signature := strings.TrimSpace(normalizedHeaders["x-uss-webhook-signature"])
+		if signature == "" {
+			return ErrInvalidIngestionSignature
+		}
+		expected := computeIngestionWebhookHMAC(secret, rawBody)
+		if !matchesIngestionHMACSignature(signature, expected) {
+			return ErrInvalidIngestionSignature
+		}
+	}
+
+	return nil
+}
+
+func computeIngestionWebhookHMAC(secret string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(strings.TrimSpace(secret)))
+	_, _ = mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func matchesIngestionHMACSignature(provided string, expectedHex string) bool {
+	provided = strings.ToLower(strings.TrimSpace(provided))
+	if strings.HasPrefix(provided, "sha256=") {
+		provided = strings.TrimPrefix(provided, "sha256=")
+	}
+	expectedHex = strings.ToLower(strings.TrimSpace(expectedHex))
+	return constantTimeEqualStrings(provided, expectedHex)
+}
+
+func constantTimeEqualStrings(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if len(left) != len(right) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+}
+
+func (s *Store) encryptIngestionWebhookSecret(tenantID string, sourceID string, provider string, secret string) (string, error) {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return "", nil
+	}
+
+	key, err := s.deriveIngestionWebhookKey(tenantID, sourceID, provider)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("create webhook cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("create webhook gcm: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generate webhook nonce: %w", err)
+	}
+
+	aad := []byte(normalizeIngestionProvider(provider))
+	ciphertext := gcm.Seal(nil, nonce, []byte(secret), aad)
+	combined := append(nonce, ciphertext...)
+	return base64.StdEncoding.EncodeToString(combined), nil
+}
+
+func (s *Store) decryptIngestionWebhookSecret(tenantID string, sourceID string, provider string, encrypted string) (string, error) {
+	encrypted = strings.TrimSpace(encrypted)
+	if encrypted == "" {
+		return "", nil
+	}
+
+	key, err := s.deriveIngestionWebhookKey(tenantID, sourceID, provider)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("create webhook cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("create webhook gcm: %w", err)
+	}
+
+	combined, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("decode webhook secret: %w", err)
+	}
+	if len(combined) < gcm.NonceSize() {
+		return "", fmt.Errorf("decode webhook secret: payload too small")
+	}
+
+	nonce := combined[:gcm.NonceSize()]
+	ciphertext := combined[gcm.NonceSize():]
+	aad := []byte(normalizeIngestionProvider(provider))
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return "", fmt.Errorf("decrypt webhook secret: %w", err)
+	}
+	return strings.TrimSpace(string(plaintext)), nil
+}
+
+func (s *Store) deriveIngestionWebhookKey(tenantID string, sourceID string, provider string) ([]byte, error) {
+	masterKey := strings.TrimSpace(s.kmsMasterKey)
+	if masterKey == "" {
+		return nil, fmt.Errorf("kms master key is not configured")
+	}
+
+	mac := hmac.New(sha256.New, []byte(masterKey))
+	_, _ = mac.Write([]byte(strings.ToLower(strings.TrimSpace(tenantID))))
+	_, _ = mac.Write([]byte("|"))
+	_, _ = mac.Write([]byte(strings.ToLower(strings.TrimSpace(sourceID))))
+	_, _ = mac.Write([]byte("|"))
+	_, _ = mac.Write([]byte(normalizeIngestionProvider(provider)))
+	_, _ = mac.Write([]byte("|ingestion-webhook"))
+	sum := mac.Sum(nil)
+	return sum[:32], nil
+}
+
 func normalizeCreateIngestionSourceRequest(tenantID string, actor string, request models.CreateIngestionSourceRequest, now time.Time) models.IngestionSource {
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
@@ -566,23 +782,30 @@ func normalizeCreateIngestionSourceRequest(tenantID string, actor string, reques
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
+	signatureRequired := false
+	if request.SignatureRequired != nil {
+		signatureRequired = *request.SignatureRequired
+	} else if strings.TrimSpace(request.WebhookSecret) != "" {
+		signatureRequired = true
+	}
 
 	return models.IngestionSource{
-		ID:          nextIngestionSourceID(),
-		TenantID:    tenantID,
-		Name:        name,
-		Provider:    provider,
-		Enabled:     enabled,
-		TargetKind:  targetKind,
-		Target:      target,
-		Profile:     profile,
-		Tools:       tools,
-		Labels:      labels,
-		CreatedBy:   actor,
-		UpdatedBy:   actor,
-		LastEventAt: nil,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                nextIngestionSourceID(),
+		TenantID:          tenantID,
+		Name:              name,
+		Provider:          provider,
+		Enabled:           enabled,
+		SignatureRequired: signatureRequired,
+		TargetKind:        targetKind,
+		Target:            target,
+		Profile:           profile,
+		Tools:             tools,
+		Labels:            labels,
+		CreatedBy:         actor,
+		UpdatedBy:         actor,
+		LastEventAt:       nil,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 }
 
@@ -627,6 +850,12 @@ func normalizeUpdateIngestionSourceRequest(existing models.IngestionSource, acto
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
+	signatureRequired := existing.SignatureRequired
+	if request.SignatureRequired != nil {
+		signatureRequired = *request.SignatureRequired
+	} else if strings.TrimSpace(request.WebhookSecret) != "" {
+		signatureRequired = true
+	}
 
 	labels := request.Labels
 	if labels == nil {
@@ -646,6 +875,7 @@ func normalizeUpdateIngestionSourceRequest(existing models.IngestionSource, acto
 	existing.Name = name
 	existing.Provider = provider
 	existing.Enabled = enabled
+	existing.SignatureRequired = signatureRequired
 	existing.TargetKind = targetKind
 	existing.Target = target
 	existing.Profile = profile
@@ -1075,6 +1305,8 @@ func scanIngestionSourceRecord(row interface{ Scan(dest ...any) error }) (ingest
 		&record.Source.CreatedAt,
 		&record.Source.UpdatedAt,
 		&record.SecretHash,
+		&record.WebhookSecretEncrypted,
+		&record.Source.SignatureRequired,
 	)
 	if err != nil {
 		return ingestionSourceRecord{}, err

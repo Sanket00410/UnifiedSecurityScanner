@@ -3,43 +3,48 @@ package models
 import "time"
 
 type IngestionSource struct {
-	ID          string         `json:"id"`
-	TenantID    string         `json:"tenant_id"`
-	Name        string         `json:"name"`
-	Provider    string         `json:"provider"`
-	Enabled     bool           `json:"enabled"`
-	TargetKind  string         `json:"target_kind"`
-	Target      string         `json:"target"`
-	Profile     string         `json:"profile"`
-	Tools       []string       `json:"tools"`
-	Labels      map[string]any `json:"labels,omitempty"`
-	CreatedBy   string         `json:"created_by"`
-	UpdatedBy   string         `json:"updated_by"`
-	LastEventAt *time.Time     `json:"last_event_at,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID                string         `json:"id"`
+	TenantID          string         `json:"tenant_id"`
+	Name              string         `json:"name"`
+	Provider          string         `json:"provider"`
+	Enabled           bool           `json:"enabled"`
+	SignatureRequired bool           `json:"signature_required"`
+	TargetKind        string         `json:"target_kind"`
+	Target            string         `json:"target"`
+	Profile           string         `json:"profile"`
+	Tools             []string       `json:"tools"`
+	Labels            map[string]any `json:"labels,omitempty"`
+	CreatedBy         string         `json:"created_by"`
+	UpdatedBy         string         `json:"updated_by"`
+	LastEventAt       *time.Time     `json:"last_event_at,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
 }
 
 type CreateIngestionSourceRequest struct {
-	Name       string         `json:"name"`
-	Provider   string         `json:"provider"`
-	Enabled    *bool          `json:"enabled"`
-	TargetKind string         `json:"target_kind"`
-	Target     string         `json:"target"`
-	Profile    string         `json:"profile"`
-	Tools      []string       `json:"tools"`
-	Labels     map[string]any `json:"labels,omitempty"`
+	Name              string         `json:"name"`
+	Provider          string         `json:"provider"`
+	Enabled           *bool          `json:"enabled"`
+	SignatureRequired *bool          `json:"signature_required"`
+	WebhookSecret     string         `json:"webhook_secret,omitempty"`
+	TargetKind        string         `json:"target_kind"`
+	Target            string         `json:"target"`
+	Profile           string         `json:"profile"`
+	Tools             []string       `json:"tools"`
+	Labels            map[string]any `json:"labels,omitempty"`
 }
 
 type UpdateIngestionSourceRequest struct {
-	Name       string         `json:"name"`
-	Provider   string         `json:"provider"`
-	Enabled    *bool          `json:"enabled"`
-	TargetKind string         `json:"target_kind"`
-	Target     string         `json:"target"`
-	Profile    string         `json:"profile"`
-	Tools      []string       `json:"tools"`
-	Labels     map[string]any `json:"labels,omitempty"`
+	Name              string         `json:"name"`
+	Provider          string         `json:"provider"`
+	Enabled           *bool          `json:"enabled"`
+	SignatureRequired *bool          `json:"signature_required"`
+	WebhookSecret     string         `json:"webhook_secret,omitempty"`
+	TargetKind        string         `json:"target_kind"`
+	Target            string         `json:"target"`
+	Profile           string         `json:"profile"`
+	Tools             []string       `json:"tools"`
+	Labels            map[string]any `json:"labels,omitempty"`
 }
 
 type CreatedIngestionSource struct {

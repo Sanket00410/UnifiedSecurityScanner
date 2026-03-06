@@ -303,6 +303,10 @@ func normalizeRuleField(value string) string {
 		return "target_kind"
 	case "profile":
 		return "profile"
+	case "provider", "source_provider":
+		return "provider"
+	case "event_type", "event":
+		return "event_type"
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}

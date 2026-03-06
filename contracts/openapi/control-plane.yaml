@@ -3503,6 +3503,7 @@ components:
         - name
         - provider
         - enabled
+        - signature_required
         - target_kind
         - target
         - profile
@@ -3521,6 +3522,8 @@ components:
         provider:
           type: string
         enabled:
+          type: boolean
+        signature_required:
           type: boolean
         target_kind:
           type: string
@@ -3561,6 +3564,10 @@ components:
           type: string
         enabled:
           type: boolean
+        signature_required:
+          type: boolean
+        webhook_secret:
+          type: string
         target_kind:
           type: string
         target:
@@ -3584,6 +3591,10 @@ components:
           type: string
         enabled:
           type: boolean
+        signature_required:
+          type: boolean
+        webhook_secret:
+          type: string
         target_kind:
           type: string
         target:
