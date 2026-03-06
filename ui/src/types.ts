@@ -155,6 +155,7 @@ export type IngestionSource = {
   name: string;
   provider?: string;
   enabled?: boolean;
+  signature_required?: boolean;
   target_kind: string;
   target: string;
   profile: string;
@@ -186,6 +187,11 @@ export type CreatedIngestionSource = {
 export type RotatedIngestionSourceToken = {
   source: IngestionSource;
   ingest_token: string;
+};
+
+export type RotatedIngestionSourceWebhookSecret = {
+  source: IngestionSource;
+  webhook_secret: string;
 };
 
 export type RiskSummary = {

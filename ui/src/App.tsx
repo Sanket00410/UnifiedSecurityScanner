@@ -14,6 +14,7 @@ import {
   ReportSummary,
   Remediation,
   RotatedIngestionSourceToken,
+  RotatedIngestionSourceWebhookSecret,
   RiskSummary,
   RouteKey,
   ScanJob,
@@ -182,6 +183,7 @@ export function App() {
   const [reportPreview, setReportPreview] = useState<ReportSummary | Record<string, any> | null>(null);
   const [scanJobResult, setScanJobResult] = useState("");
   const [latestIngestionToken, setLatestIngestionToken] = useState("");
+  const [latestWebhookSecret, setLatestWebhookSecret] = useState("");
   const [reportExportFormat, setReportExportFormat] = useState<"json" | "csv">("json");
 
   const selectedFinding = findings.find((item) => item.finding_id === selectedFindingID) || null;
@@ -773,6 +775,8 @@ export function App() {
           name: String(formData.get("name") || "").trim(),
           provider: String(formData.get("provider") || "").trim() || "generic",
           enabled: String(formData.get("enabled") || "true") === "true",
+          signature_required: String(formData.get("signature_required") || "false") === "true",
+          webhook_secret: String(formData.get("webhook_secret") || "").trim(),
           target_kind: targetKind,
           target,
           profile: String(formData.get("profile") || "").trim() || "balanced",
@@ -805,6 +809,25 @@ export function App() {
     );
   }
 
+  function handleRotateIngestionSourceWebhookSecret() {
+    if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
+    if (!selectedIngestionSourceID) {
+      setStatus({ message: "Select an ingestion source first.", error: true });
+      return;
+    }
+
+    withRefresh(
+      async () => {
+        const rotated = await postJSON<RotatedIngestionSourceWebhookSecret>(
+          `/v1/ingestion/sources/${encodeURIComponent(selectedIngestionSourceID)}/rotate-webhook-secret`,
+          {}
+        );
+        setLatestWebhookSecret(rotated.webhook_secret || "");
+      },
+      "Webhook secret rotated."
+    );
+  }
+
   function handleDeleteIngestionSource() {
     if (!requirePermission(canWriteScanJobs, "Permission denied: scan_jobs:write scope is required.")) return;
     if (!selectedIngestionSourceID) {
@@ -816,6 +839,7 @@ export function App() {
       async () => {
         await deleteJSON<void>(`/v1/ingestion/sources/${encodeURIComponent(selectedIngestionSourceID)}`);
         setLatestIngestionToken("");
+        setLatestWebhookSecret("");
       },
       "Ingestion source deleted."
     );
@@ -1231,6 +1255,11 @@ export function App() {
                   <option value="true">enabled</option>
                   <option value="false">disabled</option>
                 </select>
+                <select name="signature_required" defaultValue="false">
+                  <option value="false">signature not required</option>
+                  <option value="true">signature required</option>
+                </select>
+                <input name="webhook_secret" placeholder="optional webhook signing secret" />
                 <input name="target_kind" defaultValue="repo" required />
                 <input name="target" placeholder="https://github.com/org/repo or c:/repo" required />
                 <input name="profile" defaultValue="balanced" />
@@ -1257,14 +1286,16 @@ export function App() {
               </table>
               <div className="actions left">
                 <button disabled={!selectedIngestionSourceID || !canWriteScanJobs} onClick={handleRotateIngestionSourceToken}>Rotate Ingestion Token</button>
+                <button disabled={!selectedIngestionSourceID || !canWriteScanJobs} onClick={handleRotateIngestionSourceWebhookSecret}>Rotate Webhook Secret</button>
                 <button className="ghost" disabled={!selectedIngestionSourceID || !canWriteScanJobs} onClick={handleDeleteIngestionSource}>Delete Ingestion Source</button>
               </div>
               <div className="meta">
                 {selectedIngestionSource
-                  ? `Webhook path: /ingest/webhooks/${selectedIngestionSource.id}`
+                  ? `Webhook path: /ingest/webhooks/${selectedIngestionSource.id} | Signature required: ${selectedIngestionSource.signature_required ? "yes" : "no"}`
                   : "Select an ingestion source to view webhook details."}
               </div>
               {latestIngestionToken && <pre className="code">Newest ingest token (store securely): {latestIngestionToken}</pre>}
+              {latestWebhookSecret && <pre className="code">Newest webhook secret (store securely): {latestWebhookSecret}</pre>}
               <h3>Ingestion Events</h3>
               <ul className="list compact">
                 {filteredIngestionEvents.slice(0, 30).map((item) => (
