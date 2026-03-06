@@ -184,6 +184,37 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 		t.Fatalf("expected out-of-scope url evaluation, got %#v", outScope)
 	}
 
+	runResponse, runBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/run",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"profile": "runtime",
+			"tools":   []string{"zap", "nuclei"},
+		},
+		http.StatusCreated,
+	)
+	defer runResponse.Body.Close()
+
+	var runPayload struct {
+		Target models.WebTarget `json:"target"`
+		Job    models.ScanJob   `json:"job"`
+	}
+	decodeJSONResponse(t, runBody, &runPayload)
+	if strings.TrimSpace(runPayload.Job.ID) == "" {
+		t.Fatal("expected run endpoint to create scan job")
+	}
+	if runPayload.Target.ID != createdTarget.ID {
+		t.Fatalf("expected run target id %s, got %s", createdTarget.ID, runPayload.Target.ID)
+	}
+	if runPayload.Job.Target != "https://app.example.com" {
+		t.Fatalf("expected run job target https://app.example.com, got %s", runPayload.Job.Target)
+	}
+
 	listTargetsResponse, listTargetsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/web-targets", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
 	defer listTargetsResponse.Body.Close()
 
@@ -204,5 +235,16 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 	decodeJSONResponse(t, listProfilesBody, &listedProfiles)
 	if len(listedProfiles.Items) != 1 {
 		t.Fatalf("expected 1 web auth profile, got %d", len(listedProfiles.Items))
+	}
+
+	listJobsResponse, listJobsBody := mustJSONRequest(t, client, http.MethodGet, testServer.URL+"/v1/scan-jobs", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", nil, http.StatusOK)
+	defer listJobsResponse.Body.Close()
+
+	var listedJobs struct {
+		Items []models.ScanJob `json:"items"`
+	}
+	decodeJSONResponse(t, listJobsBody, &listedJobs)
+	if len(listedJobs.Items) != 1 {
+		t.Fatalf("expected 1 scan job from web target run, got %d", len(listedJobs.Items))
 	}
 }

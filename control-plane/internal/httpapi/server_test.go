@@ -480,6 +480,44 @@ func (s *stubAPIStore) EvaluateWebTargetScopeForTenant(_ context.Context, _ stri
 	return result, nil
 }
 
+func (s *stubAPIStore) RunWebTargetForTenant(_ context.Context, tenantID string, targetID string, actor string, request models.RunWebTargetRequest) (models.WebTarget, models.ScanJob, bool, error) {
+	target, found, err := s.GetWebTargetForTenant(context.Background(), tenantID, targetID)
+	if err != nil || !found {
+		return models.WebTarget{}, models.ScanJob{}, false, err
+	}
+	tools := request.Tools
+	if len(tools) == 0 {
+		tools = []string{"zap", "nuclei"}
+	}
+	scanJob, err := s.CreateForTenant(context.Background(), tenantID, models.CreateScanJobRequest{
+		TenantID:    strings.TrimSpace(tenantID),
+		TargetKind:  "url",
+		Target:      target.BaseURL,
+		Profile:     strings.TrimSpace(request.Profile),
+		RequestedBy: strings.TrimSpace(actor),
+		Tools:       tools,
+	})
+	if err != nil {
+		return models.WebTarget{}, models.ScanJob{}, true, err
+	}
+	if strings.TrimSpace(scanJob.ID) == "" {
+		scanJob = models.ScanJob{
+			ID:           "job-stub-web-target",
+			TenantID:     strings.TrimSpace(tenantID),
+			TargetKind:   "url",
+			Target:       target.BaseURL,
+			Profile:      strings.TrimSpace(request.Profile),
+			RequestedBy:  strings.TrimSpace(actor),
+			Tools:        tools,
+			Status:       models.ScanJobStatusQueued,
+			ApprovalMode: "standard",
+			RequestedAt:  time.Now().UTC(),
+			UpdatedAt:    time.Now().UTC(),
+		}
+	}
+	return target, scanJob, true, nil
+}
+
 func (s *stubAPIStore) ListWebAuthProfilesForTenant(context.Context, string, int) ([]models.WebAuthProfile, error) {
 	return s.webAuthProfiles, nil
 }

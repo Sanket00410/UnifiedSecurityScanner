@@ -12,12 +12,13 @@ const (
 )
 
 type CreateScanJobRequest struct {
-	TenantID    string   `json:"tenant_id"`
-	TargetKind  string   `json:"target_kind"`
-	Target      string   `json:"target"`
-	Profile     string   `json:"profile"`
-	RequestedBy string   `json:"requested_by"`
-	Tools       []string `json:"tools"`
+	TenantID    string            `json:"tenant_id"`
+	TargetKind  string            `json:"target_kind"`
+	Target      string            `json:"target"`
+	Profile     string            `json:"profile"`
+	RequestedBy string            `json:"requested_by"`
+	Tools       []string          `json:"tools"`
+	TaskLabels  map[string]string `json:"task_labels,omitempty"`
 }
 
 type ScanJob struct {

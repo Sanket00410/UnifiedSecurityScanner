@@ -150,3 +150,8 @@ type WebTargetScopeEvaluation struct {
 	InScope     bool   `json:"in_scope"`
 	Reason      string `json:"reason,omitempty"`
 }
+
+type RunWebTargetRequest struct {
+	Profile string   `json:"profile"`
+	Tools   []string `json:"tools"`
+}

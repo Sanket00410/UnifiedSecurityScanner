@@ -275,6 +275,17 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 			"scan_job_id": job.ID,
 			"profile":     job.Profile,
 		}
+		for key, value := range request.TaskLabels {
+			normalizedKey := strings.ToLower(strings.TrimSpace(key))
+			normalizedValue := strings.TrimSpace(value)
+			if normalizedKey == "" || normalizedValue == "" {
+				continue
+			}
+			if normalizedKey == "scan_job_id" || normalizedKey == "profile" {
+				continue
+			}
+			labels[normalizedKey] = normalizedValue
+		}
 		maxRuntimeSeconds := maxRuntimeForTool(tool)
 		if control, exists := engineControls[tool]; exists {
 			if strings.TrimSpace(control.RulepackVersion) != "" {

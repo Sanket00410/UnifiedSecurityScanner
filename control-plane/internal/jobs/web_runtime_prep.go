@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -648,6 +649,96 @@ func (s *Store) EvaluateWebTargetScopeForTenant(ctx context.Context, tenantID st
 		return models.WebTargetScopeEvaluation{}, err
 	}
 	return evaluateWebTargetScope(target, policy, rawURL), nil
+}
+
+func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunWebTargetRequest) (models.WebTarget, models.ScanJob, bool, error) {
+	target, found, err := s.GetWebTargetForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebTarget{}, models.ScanJob{}, false, err
+	}
+	if !found {
+		return models.WebTarget{}, models.ScanJob{}, false, nil
+	}
+
+	policy, _, err := s.GetWebCrawlPolicyForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebTarget{}, models.ScanJob{}, true, err
+	}
+	baseline, hasBaseline, err := s.GetWebCoverageBaselineForTenant(ctx, tenantID, targetID)
+	if err != nil {
+		return models.WebTarget{}, models.ScanJob{}, true, err
+	}
+
+	profile := strings.TrimSpace(request.Profile)
+	if profile == "" {
+		profile = "runtime"
+	}
+
+	targetKind := "url"
+	scanTarget := strings.TrimSpace(target.BaseURL)
+	if strings.EqualFold(target.TargetType, "api") && strings.TrimSpace(target.APISchemaURL) != "" {
+		targetKind = "api_schema"
+		scanTarget = strings.TrimSpace(target.APISchemaURL)
+	}
+	if scanTarget == "" {
+		return models.WebTarget{}, models.ScanJob{}, true, fmt.Errorf("web target does not contain a runnable url")
+	}
+
+	tools := sanitizeTools(request.Tools)
+	if len(tools) == 0 {
+		if targetKind == "api_schema" {
+			tools = []string{"zap-api", "nuclei"}
+		} else {
+			tools = []string{"zap", "nuclei"}
+		}
+	}
+
+	taskLabels := map[string]string{
+		"web_target_id":   strings.TrimSpace(target.ID),
+		"web_target_type": strings.TrimSpace(target.TargetType),
+		"web_safe_mode":   strconv.FormatBool(policy.SafeMode),
+	}
+	if strings.TrimSpace(policy.AuthProfileID) != "" {
+		taskLabels["web_auth_profile_id"] = strings.TrimSpace(policy.AuthProfileID)
+	}
+	if policy.MaxDepth > 0 {
+		taskLabels["web_max_depth"] = fmt.Sprintf("%d", policy.MaxDepth)
+	}
+	if policy.MaxRequests > 0 {
+		taskLabels["web_max_requests"] = fmt.Sprintf("%d", policy.MaxRequests)
+	}
+	if policy.RequestBudgetPerMinute > 0 {
+		taskLabels["web_request_budget_per_minute"] = fmt.Sprintf("%d", policy.RequestBudgetPerMinute)
+	}
+	if len(policy.AllowPaths) > 0 {
+		taskLabels["web_allow_paths"] = strings.Join(policy.AllowPaths, ",")
+	}
+	if len(policy.DenyPaths) > 0 {
+		taskLabels["web_deny_paths"] = strings.Join(policy.DenyPaths, ",")
+	}
+	if len(policy.SeedURLs) > 0 {
+		taskLabels["web_seed_urls"] = strings.Join(policy.SeedURLs, ",")
+	}
+	if hasBaseline {
+		taskLabels["web_min_route_coverage"] = fmt.Sprintf("%.2f", baseline.MinimumRouteCoverage)
+		taskLabels["web_min_api_coverage"] = fmt.Sprintf("%.2f", baseline.MinimumAPICoverage)
+		taskLabels["web_min_auth_coverage"] = fmt.Sprintf("%.2f", baseline.MinimumAuthCoverage)
+	}
+
+	job, err := s.CreateForTenant(ctx, strings.TrimSpace(tenantID), models.CreateScanJobRequest{
+		TenantID:    strings.TrimSpace(tenantID),
+		TargetKind:  targetKind,
+		Target:      scanTarget,
+		Profile:     profile,
+		RequestedBy: strings.TrimSpace(actor),
+		Tools:       tools,
+		TaskLabels:  taskLabels,
+	})
+	if err != nil {
+		return models.WebTarget{}, models.ScanJob{}, true, err
+	}
+
+	return target, job, true, nil
 }
 
 func evaluateWebTargetScope(target models.WebTarget, policy models.WebCrawlPolicy, rawURL string) models.WebTargetScopeEvaluation {

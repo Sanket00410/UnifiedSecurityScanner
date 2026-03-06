@@ -63,6 +63,7 @@ type apiStore interface {
 	GetWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageBaseline, bool, error)
 	UpsertWebCoverageBaselineForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.UpsertWebCoverageBaselineRequest) (models.WebCoverageBaseline, error)
 	EvaluateWebTargetScopeForTenant(ctx context.Context, tenantID string, targetID string, rawURL string) (models.WebTargetScopeEvaluation, error)
+	RunWebTargetForTenant(ctx context.Context, tenantID string, targetID string, actor string, request models.RunWebTargetRequest) (models.WebTarget, models.ScanJob, bool, error)
 	ListWebAuthProfilesForTenant(ctx context.Context, tenantID string, limit int) ([]models.WebAuthProfile, error)
 	GetWebAuthProfileForTenant(ctx context.Context, tenantID string, profileID string) (models.WebAuthProfile, bool, error)
 	CreateWebAuthProfileForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebAuthProfileRequest) (models.WebAuthProfile, error)
@@ -226,6 +227,7 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:    auth.PermissionScanJobsRead,
 		http.MethodPut:    auth.PermissionScanJobsWrite,
 		http.MethodDelete: auth.PermissionScanJobsWrite,
+		http.MethodPost:   auth.PermissionScanJobsWrite,
 	}, "web_target", "web_target", server.handleWebTargetRoute))
 	mux.HandleFunc("/v1/web-auth-profiles", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionScanJobsRead,
@@ -952,6 +954,79 @@ func (s *Server) handleWebTargetRoute(w http.ResponseWriter, r *http.Request) {
 		default:
 			s.writeMethodNotAllowed(w)
 		}
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "run" {
+		if r.Method != http.MethodPost {
+			s.writeMethodNotAllowed(w)
+			return
+		}
+
+		defer r.Body.Close()
+
+		var request models.RunWebTargetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		target, job, found, err := s.store.RunWebTargetForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
+		if err != nil {
+			var denied *jobs.PolicyDeniedError
+			if errors.As(err, &denied) {
+				s.writeJSON(w, http.StatusForbidden, map[string]any{
+					"code":      "policy_denied",
+					"message":   denied.Error(),
+					"policy_id": denied.PolicyID,
+					"rule_hits": denied.RuleHits,
+				})
+				return
+			}
+			var engineDenied *jobs.EngineControlDeniedError
+			if errors.As(err, &engineDenied) {
+				s.writeJSON(w, http.StatusForbidden, map[string]any{
+					"code":        "engine_control_denied",
+					"message":     engineDenied.Error(),
+					"adapter_id":  strings.TrimSpace(engineDenied.AdapterID),
+					"target_kind": strings.TrimSpace(engineDenied.TargetKind),
+				})
+				return
+			}
+			var limitExceeded *jobs.TenantLimitExceededError
+			if errors.As(err, &limitExceeded) {
+				s.writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"code":    "tenant_limit_exceeded",
+					"message": limitExceeded.Error(),
+					"metric":  limitExceeded.Metric,
+					"limit":   limitExceeded.Limit,
+					"current": limitExceeded.Current,
+				})
+				return
+			}
+			var controlViolation *jobs.ExecutionControlViolationError
+			if errors.As(err, &controlViolation) {
+				s.writeJSON(w, http.StatusConflict, map[string]any{
+					"code":        strings.TrimSpace(controlViolation.Code),
+					"message":     controlViolation.Error(),
+					"reason":      strings.TrimSpace(controlViolation.Reason),
+					"window_id":   strings.TrimSpace(controlViolation.WindowID),
+					"window_name": strings.TrimSpace(controlViolation.WindowName),
+				})
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "run_web_target_failed", "web target could not be executed")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "web_target_not_found", "web target was not found")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, map[string]any{
+			"target": target,
+			"job":    job,
+		})
 		return
 	}
 
