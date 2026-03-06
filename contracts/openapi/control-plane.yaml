@@ -1970,6 +1970,93 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AssetSummary"
+  /v1/assets/apis:
+    get:
+      operationId: listApiAssets
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          description: Tenant API assets
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIAsset"
+    post:
+      operationId: importOpenApiAsset
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportOpenAPIRequest"
+      responses:
+        "201":
+          description: OpenAPI spec imported
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportedAPIAsset"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /v1/assets/apis/{apiAssetId}/endpoints:
+    get:
+      operationId: listApiAssetEndpoints
+      security:
+        - BearerToken: []
+        - SessionCookie: []
+      parameters:
+        - name: apiAssetId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5000
+            default: 1000
+      responses:
+        "200":
+          description: API endpoint inventory for asset
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIEndpoint"
   /v1/assets/sync:
     post:
       operationId: syncAssets
@@ -3814,6 +3901,103 @@ components:
           type: integer
         finding_count:
           type: integer
+    APIAsset:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - tenant_id
+        - name
+        - source
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        base_url:
+          type: string
+        source:
+          type: string
+        spec_version:
+          type: string
+        spec_hash:
+          type: string
+        created_by:
+          type: string
+        endpoint_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    APIEndpoint:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - api_asset_id
+        - tenant_id
+        - path
+        - method
+        - auth_required
+        - created_at
+      properties:
+        id:
+          type: string
+        api_asset_id:
+          type: string
+        tenant_id:
+          type: string
+        path:
+          type: string
+        method:
+          type: string
+        operation_id:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        auth_required:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    ImportOpenAPIRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - spec
+      properties:
+        name:
+          type: string
+        base_url:
+          type: string
+        source:
+          type: string
+        spec:
+          type: object
+          additionalProperties: true
+    ImportedAPIAsset:
+      type: object
+      additionalProperties: false
+      required:
+        - asset
+        - endpoint_count
+      properties:
+        asset:
+          $ref: "#/components/schemas/APIAsset"
+        endpoint_count:
+          type: integer
+          format: int64
     AssetProfile:
       type: object
       additionalProperties: false

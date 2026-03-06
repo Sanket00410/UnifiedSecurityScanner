@@ -110,6 +110,9 @@ type apiStore interface {
 	CreateFindingWaiverForTenant(ctx context.Context, tenantID string, findingID string, request models.CreateFindingWaiverRequest) (models.FindingWaiver, error)
 	ListRiskSummaryForTenant(ctx context.Context, tenantID string) (models.RiskSummary, error)
 	ListAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.AssetSummary, error)
+	ListAPIAssetsForTenant(ctx context.Context, tenantID string, limit int) ([]models.APIAsset, error)
+	ListAPIEndpointsForTenant(ctx context.Context, tenantID string, apiAssetID string, limit int) ([]models.APIEndpoint, error)
+	ImportOpenAPIForTenant(ctx context.Context, tenantID string, actor string, request models.ImportOpenAPIRequest) (models.ImportedAPIAsset, error)
 	GetAssetProfileForTenant(ctx context.Context, tenantID string, assetID string) (models.AssetProfile, bool, error)
 	UpsertAssetProfileForTenant(ctx context.Context, tenantID string, assetID string, request models.UpsertAssetProfileRequest) (models.AssetProfile, error)
 	SyncAssetProfilesForTenant(ctx context.Context, tenantID string, request models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error)
@@ -271,6 +274,11 @@ func New(cfg config.Config, store apiStore) *Server {
 	mux.HandleFunc("/v1/reports/summary", server.withUserAuth(auth.PermissionFindingsRead, "reports.summary", "report", server.handleReportSummary))
 	mux.HandleFunc("/v1/reports/findings/export", server.withUserAuth(auth.PermissionFindingsRead, "reports.findings_export", "report", server.handleFindingsExport))
 	mux.HandleFunc("/v1/assets", server.withUserAuth(auth.PermissionAssetsRead, "assets.list", "asset", server.handleAssets))
+	mux.HandleFunc("/v1/assets/apis", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "api_assets", "api_asset", server.handleAPIAssets))
+	mux.HandleFunc("/v1/assets/apis/", server.withUserAuth(auth.PermissionAssetsRead, "api_asset.endpoints", "api_asset", server.handleAPIAssetRoute))
 	mux.HandleFunc("/v1/assets/sync", server.withUserAuth(auth.PermissionAssetsWrite, "assets.sync", "asset", server.handleAssetSync))
 	mux.HandleFunc("/v1/assets/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionAssetsRead,
@@ -2658,6 +2666,105 @@ func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"items": assets,
+	})
+}
+
+func (s *Server) handleAPIAssets(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListAPIAssetsForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_api_assets_failed", "api assets could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.ImportOpenAPIRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+
+		actor := strings.TrimSpace(principal.Email)
+		if actor == "" {
+			actor = strings.TrimSpace(principal.UserID)
+		}
+
+		imported, err := s.store.ImportOpenAPIForTenant(r.Context(), principal.OrganizationID, actor, request)
+		if err != nil {
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "required") || strings.Contains(lower, "valid openapi json") || strings.Contains(lower, "spec") {
+				s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "import_openapi_failed", "openapi spec could not be imported")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, imported)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleAPIAssetRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/assets/apis/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "endpoints" {
+		s.writeError(w, http.StatusNotFound, "api_asset_route_not_found", "the requested api asset route was not found")
+		return
+	}
+
+	limit := 1000
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+
+	items, err := s.store.ListAPIEndpointsForTenant(r.Context(), principal.OrganizationID, parts[0], limit)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "list_api_endpoints_failed", "api endpoints could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
 	})
 }
 

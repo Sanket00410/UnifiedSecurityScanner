@@ -37,6 +37,8 @@ var (
 	assignmentSequence              uint64
 	notificationSequence            uint64
 	scanTargetSequence              uint64
+	apiAssetSequence                uint64
+	apiEndpointSequence             uint64
 	ingestionSourceSequence         uint64
 	ingestionEventSequence          uint64
 	platformEventSequence           uint64

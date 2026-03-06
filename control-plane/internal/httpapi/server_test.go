@@ -76,6 +76,9 @@ type stubAPIStore struct {
 	apiTokens                []models.APIToken
 	assetProfile             models.AssetProfile
 	assetSummaries           []models.AssetSummary
+	apiAssets                []models.APIAsset
+	apiEndpointsByAsset      map[string][]models.APIEndpoint
+	importOpenAPIErr         error
 	assetControls            []models.CompensatingControl
 	syncedAssets             models.SyncAssetProfilesResult
 	findingWaivers           []models.FindingWaiver
@@ -1002,6 +1005,50 @@ func (s *stubAPIStore) ListRiskSummaryForTenant(context.Context, string) (models
 
 func (s *stubAPIStore) ListAssetsForTenant(context.Context, string, int) ([]models.AssetSummary, error) {
 	return s.assetSummaries, nil
+}
+
+func (s *stubAPIStore) ListAPIAssetsForTenant(context.Context, string, int) ([]models.APIAsset, error) {
+	return s.apiAssets, nil
+}
+
+func (s *stubAPIStore) ListAPIEndpointsForTenant(_ context.Context, _ string, apiAssetID string, _ int) ([]models.APIEndpoint, error) {
+	if len(s.apiEndpointsByAsset) == 0 {
+		return nil, nil
+	}
+	return s.apiEndpointsByAsset[apiAssetID], nil
+}
+
+func (s *stubAPIStore) ImportOpenAPIForTenant(_ context.Context, tenantID string, actor string, request models.ImportOpenAPIRequest) (models.ImportedAPIAsset, error) {
+	if s.importOpenAPIErr != nil {
+		return models.ImportedAPIAsset{}, s.importOpenAPIErr
+	}
+
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		name = "Imported API"
+	}
+	source := strings.TrimSpace(request.Source)
+	if source == "" {
+		source = "manual"
+	}
+
+	asset := models.APIAsset{
+		ID:          fmt.Sprintf("api-asset-%d", len(s.apiAssets)+1),
+		TenantID:    strings.TrimSpace(tenantID),
+		Name:        name,
+		BaseURL:     strings.TrimSpace(request.BaseURL),
+		Source:      source,
+		SpecVersion: "3.0.0",
+		CreatedBy:   strings.TrimSpace(actor),
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	s.apiAssets = append(s.apiAssets, asset)
+	return models.ImportedAPIAsset{
+		Asset:         asset,
+		EndpointCount: 0,
+	}, nil
 }
 
 func (s *stubAPIStore) GetAssetProfileForTenant(context.Context, string, string) (models.AssetProfile, bool, error) {
@@ -3041,6 +3088,95 @@ func TestAssetRouteSupportsProfilesAndControls(t *testing.T) {
 	server.httpServer.Handler.ServeHTTP(controlsRecorder, controlsRequest)
 	if controlsRecorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 for control list, got %d", controlsRecorder.Code)
+	}
+}
+
+func TestAPIAssetDiscoveryEndpoints(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := &stubAPIStore{
+		authenticated: true,
+		authPrincipal: models.AuthPrincipal{
+			UserID:           "user-1",
+			OrganizationID:   "org-1",
+			OrganizationSlug: "org",
+			OrganizationName: "Org",
+			Email:            "appsec@example.com",
+			DisplayName:      "AppSec",
+			Role:             "appsec_admin",
+			AuthProvider:     "local",
+			Scopes:           []string{"*"},
+		},
+		apiAssets: []models.APIAsset{
+			{
+				ID:            "api-asset-1",
+				TenantID:      "org-1",
+				Name:          "Public API",
+				BaseURL:       "https://api.example.com",
+				Source:        "manual",
+				SpecVersion:   "3.0.3",
+				EndpointCount: 2,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			},
+		},
+		apiEndpointsByAsset: map[string][]models.APIEndpoint{
+			"api-asset-1": {
+				{
+					ID:           "api-endpoint-1",
+					APIAssetID:   "api-asset-1",
+					TenantID:     "org-1",
+					Path:         "/v1/users",
+					Method:       "GET",
+					OperationID:  "listUsers",
+					AuthRequired: true,
+					CreatedAt:    now,
+				},
+			},
+		},
+	}
+
+	server := New(config.Load(), store)
+
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/apis?limit=10", nil)
+	listRequest.Header.Set("Authorization", "Bearer appsec-token")
+	server.httpServer.Handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for api assets list, got %d", listRecorder.Code)
+	}
+
+	importRecorder := httptest.NewRecorder()
+	importRequest := httptest.NewRequest(http.MethodPost, "/v1/assets/apis", strings.NewReader(`{
+		"name": "Billing API",
+		"base_url": "https://billing.example.com",
+		"source": "git",
+		"spec": {
+			"openapi": "3.0.3",
+			"paths": {
+				"/v1/invoices": {
+					"get": {
+						"operationId": "listInvoices",
+						"tags": ["billing"]
+					}
+				}
+			}
+		}
+	}`))
+	importRequest.Header.Set("Authorization", "Bearer appsec-token")
+	importRequest.Header.Set("Content-Type", "application/json")
+	server.httpServer.Handler.ServeHTTP(importRecorder, importRequest)
+	if importRecorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for openapi import, got %d", importRecorder.Code)
+	}
+
+	endpointsRecorder := httptest.NewRecorder()
+	endpointsRequest := httptest.NewRequest(http.MethodGet, "/v1/assets/apis/api-asset-1/endpoints?limit=100", nil)
+	endpointsRequest.Header.Set("Authorization", "Bearer appsec-token")
+	server.httpServer.Handler.ServeHTTP(endpointsRecorder, endpointsRequest)
+	if endpointsRecorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for api endpoint list, got %d", endpointsRecorder.Code)
 	}
 }
 
