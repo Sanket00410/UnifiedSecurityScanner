@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,6 +130,38 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleComplianceOWASPSync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	defer r.Body.Close()
+
+	request := models.SyncOWASPMappingRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	result, err := s.store.SyncOWASPMappingsForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+	if err != nil {
+		if s.writeComplianceMutationError(w, err) {
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "sync_owasp_mappings_failed", "owasp mappings could not be synchronized")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleComplianceSAMMMetrics(w http.ResponseWriter, r *http.Request) {

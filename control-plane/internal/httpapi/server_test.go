@@ -122,6 +122,7 @@ type stubAPIStore struct {
 	runtimeEnrichmentBackfill  models.RuntimeEnrichmentBackfillResult
 	complianceMappings         []models.ComplianceControlMapping
 	complianceSummary          models.ComplianceSummary
+	owaspSyncResult            models.OWASPMappingSyncResult
 	sammMetrics                models.SAMMMetrics
 	detectionRulepacks         []models.DetectionRulepack
 	detectionRulepackVersions  []models.DetectionRulepackVersion
@@ -2871,6 +2872,13 @@ func (s *stubAPIStore) GetComplianceSummaryForTenant(context.Context, string) (m
 		s.complianceSummary.FrameworkStatus = map[string]map[string]int64{}
 	}
 	return s.complianceSummary, nil
+}
+
+func (s *stubAPIStore) SyncOWASPMappingsForTenant(_ context.Context, _ string, _ string, _ models.SyncOWASPMappingRequest) (models.OWASPMappingSyncResult, error) {
+	if s.owaspSyncResult.FrameworkTotals == nil {
+		s.owaspSyncResult.FrameworkTotals = map[string]int64{}
+	}
+	return s.owaspSyncResult, nil
 }
 
 func (s *stubAPIStore) GetSAMMMetricsForTenant(context.Context, string) (models.SAMMMetrics, error) {

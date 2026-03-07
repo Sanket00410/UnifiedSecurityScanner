@@ -193,6 +193,7 @@ type apiStore interface {
 	CreateComplianceControlMappingForTenant(ctx context.Context, tenantID string, actor string, request models.CreateComplianceControlMappingRequest) (models.ComplianceControlMapping, error)
 	UpdateComplianceControlMappingForTenant(ctx context.Context, tenantID string, mappingID string, actor string, request models.UpdateComplianceControlMappingRequest) (models.ComplianceControlMapping, bool, error)
 	GetComplianceSummaryForTenant(ctx context.Context, tenantID string) (models.ComplianceSummary, error)
+	SyncOWASPMappingsForTenant(ctx context.Context, tenantID string, actor string, request models.SyncOWASPMappingRequest) (models.OWASPMappingSyncResult, error)
 	GetSAMMMetricsForTenant(ctx context.Context, tenantID string) (models.SAMMMetrics, error)
 	ListDetectionRulepacksForTenant(ctx context.Context, tenantID string, engine string, status string, limit int) ([]models.DetectionRulepack, error)
 	GetDetectionRulepackForTenant(ctx context.Context, tenantID string, rulepackID string) (models.DetectionRulepack, bool, error)
@@ -467,6 +468,7 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "compliance_mappings", "compliance_mapping", server.handleComplianceMappings))
 	mux.HandleFunc("/v1/compliance/mappings/", server.withUserAuth(auth.PermissionPoliciesWrite, "compliance_mapping.update", "compliance_mapping", server.handleComplianceMappingRoute))
 	mux.HandleFunc("/v1/compliance/summary", server.withUserAuth(auth.PermissionFindingsRead, "compliance.summary", "compliance_summary", server.handleComplianceSummary))
+	mux.HandleFunc("/v1/compliance/owasp/sync", server.withUserAuth(auth.PermissionPoliciesWrite, "compliance.owasp_sync", "compliance_owasp_mapping", server.handleComplianceOWASPSync))
 	mux.HandleFunc("/v1/compliance/samm/metrics", server.withUserAuth(auth.PermissionFindingsRead, "compliance.samm_metrics", "compliance_samm_metrics", server.handleComplianceSAMMMetrics))
 	mux.HandleFunc("/v1/detection/rulepacks", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,

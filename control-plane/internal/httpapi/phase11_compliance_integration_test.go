@@ -150,6 +150,178 @@ func TestPhase11ComplianceMappingFlow(t *testing.T) {
 	}
 }
 
+func TestPhase11OWASPMappingSyncFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase11_owasp_sync_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase11-owasp-sync-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+	now := time.Date(2026, time.March, 6, 12, 0, 0, 0, time.UTC)
+
+	findingID := fmt.Sprintf("finding-owasp-sync-%d", time.Now().UTC().UnixNano())
+	taskID := createAssignedTask(t, client, testServer.URL, cfg.BootstrapAdminToken, cfg.WorkerSharedSecret, models.CreateScanJobRequest{
+		TargetKind: "api",
+		Target:     "https://api.example.com",
+		Profile:    "default",
+		Tools:      []string{"semgrep"},
+	}, models.WorkerRegistrationRequest{
+		WorkerID:        "phase11-owasp-worker",
+		WorkerVersion:   "1.0.0",
+		OperatingSystem: "windows",
+		Hostname:        "phase11-owasp-host",
+		Capabilities: []models.WorkerCapability{
+			{
+				AdapterID:            "semgrep",
+				SupportedTargetKinds: []string{"api"},
+				SupportedModes:       []models.ExecutionMode{models.ExecutionModePassive},
+				Labels:               []string{"phase11"},
+			},
+		},
+	})
+
+	if err := store.FinalizeTask(ctx, models.TaskResultSubmission{
+		TaskID:     taskID,
+		WorkerID:   "phase11-owasp-worker",
+		FinalState: "completed",
+		ReportedFindings: []models.CanonicalFinding{
+			{
+				FindingID:     findingID,
+				Category:      "api_bola",
+				Title:         "Broken object level authorization",
+				Description:   "IDOR issue in API endpoint /v1/users/{id}",
+				Severity:      "high",
+				Confidence:    "high",
+				Status:        "open",
+				FirstSeenAt:   now,
+				LastSeenAt:    now,
+				SchemaVersion: "1.0.0",
+				Asset: models.CanonicalAssetInfo{
+					AssetID:     "api.example.com",
+					AssetType:   "api",
+					AssetName:   "Public API",
+					Environment: "production",
+					Exposure:    "internet",
+					ServiceName: "public-api",
+					OwnerTeam:   "platform",
+					ServiceTier: "tier1",
+					OwnerHierarchy: []string{
+						"engineering",
+						"platform",
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("finalize owasp mapping finding: %v", err)
+	}
+
+	syncResponse, syncBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/compliance/owasp/sync",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"limit":      200,
+			"frameworks": []string{"owasp_top10", "owasp_api_top10"},
+		},
+		http.StatusOK,
+	)
+	defer syncResponse.Body.Close()
+
+	var syncResult models.OWASPMappingSyncResult
+	decodeJSONResponse(t, syncBody, &syncResult)
+	if syncResult.ProcessedFindings < 1 {
+		t.Fatalf("expected processed_findings>=1, got %d", syncResult.ProcessedFindings)
+	}
+	if syncResult.CreatedMappings < 2 {
+		t.Fatalf("expected at least 2 created mappings, got %d", syncResult.CreatedMappings)
+	}
+	if syncResult.FrameworkTotals["owasp_top10"] < 1 {
+		t.Fatalf("expected owasp_top10 mapping count, got %#v", syncResult.FrameworkTotals)
+	}
+	if syncResult.FrameworkTotals["owasp_api_top10"] < 1 {
+		t.Fatalf("expected owasp_api_top10 mapping count, got %#v", syncResult.FrameworkTotals)
+	}
+
+	top10Response, top10Body := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/compliance/mappings?framework=owasp_top10&source_id="+findingID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer top10Response.Body.Close()
+	var top10Payload struct {
+		Items []models.ComplianceControlMapping `json:"items"`
+	}
+	decodeJSONResponse(t, top10Body, &top10Payload)
+	if len(top10Payload.Items) != 1 {
+		t.Fatalf("expected 1 owasp_top10 mapping, got %d", len(top10Payload.Items))
+	}
+	if top10Payload.Items[0].ControlID != "A01-BROKEN-ACCESS-CONTROL" {
+		t.Fatalf("expected A01 control id, got %s", top10Payload.Items[0].ControlID)
+	}
+
+	apiTop10Response, apiTop10Body := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/compliance/mappings?framework=owasp_api_top10&source_id="+findingID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer apiTop10Response.Body.Close()
+	var apiTop10Payload struct {
+		Items []models.ComplianceControlMapping `json:"items"`
+	}
+	decodeJSONResponse(t, apiTop10Body, &apiTop10Payload)
+	if len(apiTop10Payload.Items) != 1 {
+		t.Fatalf("expected 1 owasp_api_top10 mapping, got %d", len(apiTop10Payload.Items))
+	}
+	if apiTop10Payload.Items[0].ControlID != "API1-BROKEN-OBJECT-LEVEL-AUTHORIZATION" {
+		t.Fatalf("expected API1 control id, got %s", apiTop10Payload.Items[0].ControlID)
+	}
+}
+
 func TestPhase11SAMMMetricsFlow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed integration test in short mode")
