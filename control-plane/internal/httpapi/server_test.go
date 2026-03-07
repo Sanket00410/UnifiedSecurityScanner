@@ -112,6 +112,10 @@ type stubAPIStore struct {
 	validationAttackTraces   []models.ValidationAttackTrace
 	validationManualTests    []models.ValidationManualTestCase
 	validationEngagementErr  error
+	designReviews            []models.DesignReview
+	designThreats            []models.DesignThreat
+	designDataFlows          []models.DesignDataFlowModel
+	designControlMappings    []models.DesignControlMapping
 	policy                   models.Policy
 	policies                 []models.Policy
 	policyVersions           []models.PolicyVersion
@@ -2283,6 +2287,346 @@ func (s *stubAPIStore) UpdateValidationManualTestForTenant(_ context.Context, _ 
 		return item, true, nil
 	}
 	return models.ValidationManualTestCase{}, false, nil
+}
+
+func (s *stubAPIStore) ListDesignReviewsForTenant(_ context.Context, _ string, status string, _ int) ([]models.DesignReview, error) {
+	if strings.TrimSpace(status) == "" {
+		return s.designReviews, nil
+	}
+	out := make([]models.DesignReview, 0, len(s.designReviews))
+	for _, item := range s.designReviews {
+		if strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubAPIStore) GetDesignReviewForTenant(_ context.Context, _ string, reviewID string) (models.DesignReview, bool, error) {
+	for _, item := range s.designReviews {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(reviewID)) {
+			return item, true, nil
+		}
+	}
+	return models.DesignReview{}, false, nil
+}
+
+func (s *stubAPIStore) CreateDesignReviewForTenant(_ context.Context, tenantID string, actor string, request models.CreateDesignReviewRequest) (models.DesignReview, error) {
+	now := time.Now().UTC()
+	item := models.DesignReview{
+		ID:                 fmt.Sprintf("design-review-%d", now.UnixNano()),
+		TenantID:           strings.TrimSpace(tenantID),
+		Title:              strings.TrimSpace(request.Title),
+		ServiceName:        strings.TrimSpace(request.ServiceName),
+		ServiceID:          strings.TrimSpace(request.ServiceID),
+		Status:             "draft",
+		ThreatTemplate:     strings.TrimSpace(request.ThreatTemplate),
+		Summary:            strings.TrimSpace(request.Summary),
+		DiagramRef:         strings.TrimSpace(request.DiagramRef),
+		DataClassification: strings.TrimSpace(request.DataClassification),
+		DesignOwner:        strings.TrimSpace(request.DesignOwner),
+		Reviewer:           strings.TrimSpace(request.Reviewer),
+		CreatedBy:          strings.TrimSpace(actor),
+		UpdatedBy:          strings.TrimSpace(actor),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+	s.designReviews = append([]models.DesignReview{item}, s.designReviews...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateDesignReviewForTenant(_ context.Context, _ string, reviewID string, actor string, request models.UpdateDesignReviewRequest) (models.DesignReview, bool, error) {
+	for idx, item := range s.designReviews {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(reviewID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Title); value != "" {
+			item.Title = value
+		}
+		if value := strings.TrimSpace(request.ServiceName); value != "" {
+			item.ServiceName = value
+		}
+		if value := strings.TrimSpace(request.ServiceID); value != "" {
+			item.ServiceID = value
+		}
+		if value := strings.TrimSpace(request.ThreatTemplate); value != "" {
+			item.ThreatTemplate = value
+		}
+		if value := strings.TrimSpace(request.Summary); value != "" {
+			item.Summary = value
+		}
+		if value := strings.TrimSpace(request.DiagramRef); value != "" {
+			item.DiagramRef = value
+		}
+		if value := strings.TrimSpace(request.DataClassification); value != "" {
+			item.DataClassification = value
+		}
+		if value := strings.TrimSpace(request.DesignOwner); value != "" {
+			item.DesignOwner = value
+		}
+		if value := strings.TrimSpace(request.Reviewer); value != "" {
+			item.Reviewer = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.designReviews[idx] = item
+		return item, true, nil
+	}
+	return models.DesignReview{}, false, nil
+}
+
+func (s *stubAPIStore) SubmitDesignReviewForTenant(_ context.Context, _ string, reviewID string, actor string, _ string) (models.DesignReview, bool, error) {
+	return s.transitionDesignReview(reviewID, actor, "in_review")
+}
+
+func (s *stubAPIStore) ApproveDesignReviewForTenant(_ context.Context, _ string, reviewID string, actor string, _ string) (models.DesignReview, bool, error) {
+	return s.transitionDesignReview(reviewID, actor, "approved")
+}
+
+func (s *stubAPIStore) CloseDesignReviewForTenant(_ context.Context, _ string, reviewID string, actor string, _ string) (models.DesignReview, bool, error) {
+	return s.transitionDesignReview(reviewID, actor, "closed")
+}
+
+func (s *stubAPIStore) transitionDesignReview(reviewID string, actor string, nextStatus string) (models.DesignReview, bool, error) {
+	for idx, item := range s.designReviews {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(reviewID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = nextStatus
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = now
+		switch nextStatus {
+		case "in_review":
+			item.SubmittedAt = &now
+		case "approved":
+			item.ApprovedAt = &now
+		case "closed":
+			item.ClosedAt = &now
+		}
+		s.designReviews[idx] = item
+		return item, true, nil
+	}
+	return models.DesignReview{}, false, nil
+}
+
+func (s *stubAPIStore) ListDesignThreatsForTenant(_ context.Context, _ string, reviewID string, status string, _ int) ([]models.DesignThreat, error) {
+	items := make([]models.DesignThreat, 0, len(s.designThreats))
+	for _, item := range s.designThreats {
+		if strings.TrimSpace(reviewID) != "" && !strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) {
+			continue
+		}
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) CreateDesignThreatForTenant(_ context.Context, tenantID string, reviewID string, actor string, request models.CreateDesignThreatRequest) (models.DesignThreat, error) {
+	now := time.Now().UTC()
+	item := models.DesignThreat{
+		ID:                  fmt.Sprintf("design-threat-%d", now.UnixNano()),
+		TenantID:            strings.TrimSpace(tenantID),
+		ReviewID:            strings.TrimSpace(reviewID),
+		Category:            strings.TrimSpace(request.Category),
+		Title:               strings.TrimSpace(request.Title),
+		Description:         strings.TrimSpace(request.Description),
+		AbuseCase:           strings.TrimSpace(request.AbuseCase),
+		Impact:              strings.TrimSpace(request.Impact),
+		Likelihood:          strings.TrimSpace(request.Likelihood),
+		Severity:            strings.TrimSpace(request.Severity),
+		Status:              strings.TrimSpace(request.Status),
+		LinkedAssetID:       strings.TrimSpace(request.LinkedAssetID),
+		LinkedFindingID:     strings.TrimSpace(request.LinkedFindingID),
+		RuntimeEvidenceRefs: request.RuntimeEvidenceRefs,
+		Mitigation:          strings.TrimSpace(request.Mitigation),
+		CreatedBy:           strings.TrimSpace(actor),
+		UpdatedBy:           strings.TrimSpace(actor),
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if item.Status == "" {
+		item.Status = "open"
+	}
+	if item.Severity == "" {
+		item.Severity = "medium"
+	}
+	s.designThreats = append([]models.DesignThreat{item}, s.designThreats...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateDesignThreatForTenant(_ context.Context, _ string, reviewID string, threatID string, actor string, request models.UpdateDesignThreatRequest) (models.DesignThreat, bool, error) {
+	for idx, item := range s.designThreats {
+		if !strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) ||
+			!strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(threatID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Category); value != "" {
+			item.Category = value
+		}
+		if value := strings.TrimSpace(request.Title); value != "" {
+			item.Title = value
+		}
+		if value := strings.TrimSpace(request.Description); value != "" {
+			item.Description = value
+		}
+		if value := strings.TrimSpace(request.AbuseCase); value != "" {
+			item.AbuseCase = value
+		}
+		if value := strings.TrimSpace(request.Impact); value != "" {
+			item.Impact = value
+		}
+		if value := strings.TrimSpace(request.Likelihood); value != "" {
+			item.Likelihood = value
+		}
+		if value := strings.TrimSpace(request.Severity); value != "" {
+			item.Severity = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.LinkedAssetID); value != "" {
+			item.LinkedAssetID = value
+		}
+		if value := strings.TrimSpace(request.LinkedFindingID); value != "" {
+			item.LinkedFindingID = value
+		}
+		if request.RuntimeEvidenceRefs != nil {
+			item.RuntimeEvidenceRefs = request.RuntimeEvidenceRefs
+		}
+		if value := strings.TrimSpace(request.Mitigation); value != "" {
+			item.Mitigation = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.designThreats[idx] = item
+		return item, true, nil
+	}
+	return models.DesignThreat{}, false, nil
+}
+
+func (s *stubAPIStore) GetDesignDataFlowForTenant(_ context.Context, _ string, reviewID string) (models.DesignDataFlowModel, bool, error) {
+	for _, item := range s.designDataFlows {
+		if strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) {
+			return item, true, nil
+		}
+	}
+	return models.DesignDataFlowModel{}, false, nil
+}
+
+func (s *stubAPIStore) UpsertDesignDataFlowForTenant(_ context.Context, tenantID string, reviewID string, actor string, request models.UpsertDesignDataFlowRequest) (models.DesignDataFlowModel, error) {
+	for idx, item := range s.designDataFlows {
+		if !strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) {
+			continue
+		}
+		if request.Entities != nil {
+			item.Entities = request.Entities
+		}
+		if request.Flows != nil {
+			item.Flows = request.Flows
+		}
+		if request.TrustBoundaries != nil {
+			item.TrustBoundaries = request.TrustBoundaries
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.designDataFlows[idx] = item
+		return item, nil
+	}
+	now := time.Now().UTC()
+	item := models.DesignDataFlowModel{
+		ID:              fmt.Sprintf("design-dataflow-%d", now.UnixNano()),
+		TenantID:        strings.TrimSpace(tenantID),
+		ReviewID:        strings.TrimSpace(reviewID),
+		Entities:        request.Entities,
+		Flows:           request.Flows,
+		TrustBoundaries: request.TrustBoundaries,
+		Notes:           strings.TrimSpace(request.Notes),
+		UpdatedBy:       strings.TrimSpace(actor),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	s.designDataFlows = append([]models.DesignDataFlowModel{item}, s.designDataFlows...)
+	return item, nil
+}
+
+func (s *stubAPIStore) ListDesignControlMappingsForTenant(_ context.Context, _ string, reviewID string, framework string, _ int) ([]models.DesignControlMapping, error) {
+	items := make([]models.DesignControlMapping, 0, len(s.designControlMappings))
+	for _, item := range s.designControlMappings {
+		if strings.TrimSpace(reviewID) != "" && !strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) {
+			continue
+		}
+		if strings.TrimSpace(framework) != "" && !strings.EqualFold(strings.TrimSpace(item.Framework), strings.TrimSpace(framework)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) CreateDesignControlMappingForTenant(_ context.Context, tenantID string, reviewID string, actor string, request models.CreateDesignControlMappingRequest) (models.DesignControlMapping, error) {
+	now := time.Now().UTC()
+	item := models.DesignControlMapping{
+		ID:           fmt.Sprintf("design-control-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		ReviewID:     strings.TrimSpace(reviewID),
+		ThreatID:     strings.TrimSpace(request.ThreatID),
+		Framework:    strings.TrimSpace(request.Framework),
+		ControlID:    strings.TrimSpace(request.ControlID),
+		ControlTitle: strings.TrimSpace(request.ControlTitle),
+		Status:       strings.TrimSpace(request.Status),
+		EvidenceRef:  strings.TrimSpace(request.EvidenceRef),
+		Notes:        strings.TrimSpace(request.Notes),
+		CreatedBy:    strings.TrimSpace(actor),
+		UpdatedBy:    strings.TrimSpace(actor),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if item.Status == "" {
+		item.Status = "planned"
+	}
+	s.designControlMappings = append([]models.DesignControlMapping{item}, s.designControlMappings...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateDesignControlMappingForTenant(_ context.Context, _ string, reviewID string, mappingID string, actor string, request models.UpdateDesignControlMappingRequest) (models.DesignControlMapping, bool, error) {
+	for idx, item := range s.designControlMappings {
+		if !strings.EqualFold(strings.TrimSpace(item.ReviewID), strings.TrimSpace(reviewID)) ||
+			!strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(mappingID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.ThreatID); value != "" {
+			item.ThreatID = value
+		}
+		if value := strings.TrimSpace(request.Framework); value != "" {
+			item.Framework = value
+		}
+		if value := strings.TrimSpace(request.ControlID); value != "" {
+			item.ControlID = value
+		}
+		if value := strings.TrimSpace(request.ControlTitle); value != "" {
+			item.ControlTitle = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.EvidenceRef); value != "" {
+			item.EvidenceRef = value
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.designControlMappings[idx] = item
+		return item, true, nil
+	}
+	return models.DesignControlMapping{}, false, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {

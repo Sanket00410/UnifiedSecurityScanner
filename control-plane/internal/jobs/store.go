@@ -47,6 +47,10 @@ var (
 	validationManualTestSequence     uint64
 	validationEnvelopeSequence       uint64
 	validationPlanStepSequence       uint64
+	designReviewSequence             uint64
+	designThreatSequence             uint64
+	designDataFlowSequence           uint64
+	designControlMappingSequence     uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
 	externalAssetSequence            uint64
@@ -86,6 +90,10 @@ var (
 	ErrValidationPlanStepNotApproved = errors.New("validation plan step is not approved")
 	ErrValidationPlanStepDependency  = errors.New("validation plan step dependencies are not approved")
 	ErrValidationPlanStepScope       = errors.New("validation plan step scope mismatch")
+	ErrDesignReviewNotFound          = errors.New("design review not found")
+	ErrDesignThreatNotFound          = errors.New("design threat not found")
+	ErrDesignDataFlowNotFound        = errors.New("design data flow model not found")
+	ErrDesignControlMappingNotFound  = errors.New("design control mapping not found")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )

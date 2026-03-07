@@ -166,6 +166,21 @@ type apiStore interface {
 	ListValidationManualTestsForTenant(ctx context.Context, tenantID string, engagementID string, status string, limit int) ([]models.ValidationManualTestCase, error)
 	CreateValidationManualTestForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationManualTestCaseRequest) (models.ValidationManualTestCase, error)
 	UpdateValidationManualTestForTenant(ctx context.Context, tenantID string, testCaseID string, actor string, request models.UpdateValidationManualTestCaseRequest) (models.ValidationManualTestCase, bool, error)
+	ListDesignReviewsForTenant(ctx context.Context, tenantID string, status string, limit int) ([]models.DesignReview, error)
+	GetDesignReviewForTenant(ctx context.Context, tenantID string, reviewID string) (models.DesignReview, bool, error)
+	CreateDesignReviewForTenant(ctx context.Context, tenantID string, actor string, request models.CreateDesignReviewRequest) (models.DesignReview, error)
+	UpdateDesignReviewForTenant(ctx context.Context, tenantID string, reviewID string, actor string, request models.UpdateDesignReviewRequest) (models.DesignReview, bool, error)
+	SubmitDesignReviewForTenant(ctx context.Context, tenantID string, reviewID string, actor string, reason string) (models.DesignReview, bool, error)
+	ApproveDesignReviewForTenant(ctx context.Context, tenantID string, reviewID string, actor string, reason string) (models.DesignReview, bool, error)
+	CloseDesignReviewForTenant(ctx context.Context, tenantID string, reviewID string, actor string, reason string) (models.DesignReview, bool, error)
+	ListDesignThreatsForTenant(ctx context.Context, tenantID string, reviewID string, status string, limit int) ([]models.DesignThreat, error)
+	CreateDesignThreatForTenant(ctx context.Context, tenantID string, reviewID string, actor string, request models.CreateDesignThreatRequest) (models.DesignThreat, error)
+	UpdateDesignThreatForTenant(ctx context.Context, tenantID string, reviewID string, threatID string, actor string, request models.UpdateDesignThreatRequest) (models.DesignThreat, bool, error)
+	GetDesignDataFlowForTenant(ctx context.Context, tenantID string, reviewID string) (models.DesignDataFlowModel, bool, error)
+	UpsertDesignDataFlowForTenant(ctx context.Context, tenantID string, reviewID string, actor string, request models.UpsertDesignDataFlowRequest) (models.DesignDataFlowModel, error)
+	ListDesignControlMappingsForTenant(ctx context.Context, tenantID string, reviewID string, framework string, limit int) ([]models.DesignControlMapping, error)
+	CreateDesignControlMappingForTenant(ctx context.Context, tenantID string, reviewID string, actor string, request models.CreateDesignControlMappingRequest) (models.DesignControlMapping, error)
+	UpdateDesignControlMappingForTenant(ctx context.Context, tenantID string, reviewID string, mappingID string, actor string, request models.UpdateDesignControlMappingRequest) (models.DesignControlMapping, bool, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -396,6 +411,15 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "validation_manual_tests", "validation_manual_test", server.handleValidationManualTests))
 	mux.HandleFunc("/v1/validation/manual-tests/", server.withUserAuth(auth.PermissionPoliciesWrite, "validation_manual_test.update", "validation_manual_test", server.handleValidationManualTestRoute))
+	mux.HandleFunc("/v1/design-reviews", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "design_reviews", "design_review", server.handleDesignReviews))
+	mux.HandleFunc("/v1/design-reviews/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPut:  auth.PermissionAssetsWrite,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "design_review", "design_review", server.handleDesignReviewRoute))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -5744,6 +5768,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 			return path
 		}
 		return strings.TrimSpace(assetID)
+	case strings.HasPrefix(r.URL.Path, "/v1/design-reviews/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/design-reviews/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/reports/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/reports/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
