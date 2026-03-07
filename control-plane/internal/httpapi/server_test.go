@@ -122,6 +122,7 @@ type stubAPIStore struct {
 	runtimeEnrichmentBackfill  models.RuntimeEnrichmentBackfillResult
 	complianceMappings         []models.ComplianceControlMapping
 	complianceSummary          models.ComplianceSummary
+	sammMetrics                models.SAMMMetrics
 	detectionRulepacks         []models.DetectionRulepack
 	detectionRulepackVersions  []models.DetectionRulepackVersion
 	detectionRulepackRollouts  []models.DetectionRulepackRollout
@@ -2870,6 +2871,19 @@ func (s *stubAPIStore) GetComplianceSummaryForTenant(context.Context, string) (m
 		s.complianceSummary.FrameworkStatus = map[string]map[string]int64{}
 	}
 	return s.complianceSummary, nil
+}
+
+func (s *stubAPIStore) GetSAMMMetricsForTenant(context.Context, string) (models.SAMMMetrics, error) {
+	if s.sammMetrics.StatusTotals == nil {
+		s.sammMetrics.StatusTotals = map[string]int64{}
+	}
+	if s.sammMetrics.Categories == nil {
+		s.sammMetrics.Categories = []models.SAMMCategoryMetrics{}
+	}
+	if s.sammMetrics.GeneratedAt.IsZero() {
+		s.sammMetrics.GeneratedAt = time.Now().UTC()
+	}
+	return s.sammMetrics, nil
 }
 
 func (s *stubAPIStore) ListDetectionRulepacksForTenant(_ context.Context, _ string, engine string, status string, _ int) ([]models.DetectionRulepack, error) {

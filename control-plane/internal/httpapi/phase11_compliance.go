@@ -130,6 +130,27 @@ func (s *Server) handleComplianceSummary(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, http.StatusOK, summary)
 }
 
+func (s *Server) handleComplianceSAMMMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	metrics, err := s.store.GetSAMMMetricsForTenant(r.Context(), principal.OrganizationID)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, "get_samm_metrics_failed", "samm metrics could not be loaded")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, metrics)
+}
+
 func (s *Server) writeComplianceMutationError(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
