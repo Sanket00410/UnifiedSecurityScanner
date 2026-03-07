@@ -1,6 +1,10 @@
 package jobs
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestParseBrowserProbeCoveragePayload_FromCoverageObject(t *testing.T) {
 	payload := []byte(`{
@@ -61,5 +65,50 @@ func TestParseBrowserProbeCoveragePayload_NonJSONReturnsNotFound(t *testing.T) {
 	}
 	if found {
 		t.Fatalf("expected no coverage payload for non-json input, got %#v", request)
+	}
+}
+
+func TestNormalizeRuntimeCoverageAdapterID(t *testing.T) {
+	if value := normalizeRuntimeCoverageAdapterID(" browser-probe "); value != "browser-probe" {
+		t.Fatalf("expected browser-probe adapter id, got %q", value)
+	}
+	if value := normalizeRuntimeCoverageAdapterID("ZAP-API"); value != "zap-api" {
+		t.Fatalf("expected zap-api adapter id, got %q", value)
+	}
+	if value := normalizeRuntimeCoverageAdapterID("zap"); value != "" {
+		t.Fatalf("expected unsupported adapter to return empty, got %q", value)
+	}
+}
+
+func TestExtractRuntimeCoverageFromEvidence_ZapAPI(t *testing.T) {
+	tempDir := t.TempDir()
+	evidencePath := filepath.Join(tempDir, "zap-api-output.log")
+	payload := `{
+		"coverage_summary": {
+			"api_coverage": 78.5,
+			"auth_coverage": 61.0,
+			"discovered_api_operation_count": 41,
+			"discovered_auth_state_count": 4
+		}
+	}`
+	if err := os.WriteFile(evidencePath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write evidence fixture: %v", err)
+	}
+
+	request, evidenceRef, found, err := extractRuntimeCoverageFromEvidence("zap-api", []string{evidencePath})
+	if err != nil {
+		t.Fatalf("extract coverage: %v", err)
+	}
+	if !found {
+		t.Fatal("expected coverage to be extracted")
+	}
+	if evidenceRef != evidencePath {
+		t.Fatalf("expected evidence ref %s, got %s", evidencePath, evidenceRef)
+	}
+	if request.APICoverage != 78.5 || request.AuthCoverage != 61 {
+		t.Fatalf("unexpected extracted coverage values: %#v", request)
+	}
+	if request.DiscoveredAPIOperationCount != 41 || request.DiscoveredAuthStateCount != 4 {
+		t.Fatalf("unexpected extracted coverage counts: %#v", request)
 	}
 }

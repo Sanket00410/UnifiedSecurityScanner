@@ -284,3 +284,260 @@ func TestPhase7WebRuntimeCoverageIngestFromBrowserProbeEvidence(t *testing.T) {
 		t.Fatalf("expected latest run %s, got %#v", run.ID, coverageStatus.LatestRun)
 	}
 }
+
+func TestPhase7WebRuntimeCoverageIngestFromZapAPIEvidence(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase7_api_runtime_coverage_ingest_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase7-api-runtime-coverage-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+
+	createTargetResponse, createTargetBody := mustJSONRequest(t, client, http.MethodPost, testServer.URL+"/v1/web-targets", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"name":           "Phase7 API Coverage",
+		"target_type":    "api",
+		"base_url":       "https://api.phase7.example.com",
+		"api_schema_url": "https://api.phase7.example.com/openapi.json",
+	}, http.StatusCreated)
+	defer createTargetResponse.Body.Close()
+
+	var createdTarget models.WebTarget
+	decodeJSONResponse(t, createTargetBody, &createdTarget)
+	if strings.TrimSpace(createdTarget.ID) == "" {
+		t.Fatal("expected created api target id")
+	}
+
+	upsertBaselineResponse, upsertBaselineBody := mustJSONRequest(t, client, http.MethodPut, testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-baseline", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{
+		"minimum_route_coverage": 0,
+		"minimum_api_coverage":   70,
+		"minimum_auth_coverage":  0,
+		"notes":                  "api runtime auto-ingest baseline",
+	}, http.StatusOK)
+	defer upsertBaselineResponse.Body.Close()
+	var baseline models.WebCoverageBaseline
+	decodeJSONResponse(t, upsertBaselineBody, &baseline)
+	if baseline.MinimumAPICoverage != 70 {
+		t.Fatalf("expected minimum_api_coverage=70, got %.1f", baseline.MinimumAPICoverage)
+	}
+
+	runResponse, runBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/run",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"profile": "runtime",
+			"tools":   []string{"zap-api"},
+		},
+		http.StatusCreated,
+	)
+	defer runResponse.Body.Close()
+
+	var runPayload struct {
+		Target models.WebTarget `json:"target"`
+		Job    models.ScanJob   `json:"job"`
+	}
+	decodeJSONResponse(t, runBody, &runPayload)
+	if strings.TrimSpace(runPayload.Job.ID) == "" {
+		t.Fatal("expected scan job id from api run")
+	}
+	if runPayload.Job.TargetKind != "api_schema" {
+		t.Fatalf("expected target_kind api_schema, got %s", runPayload.Job.TargetKind)
+	}
+
+	workerRequest := models.WorkerRegistrationRequest{
+		WorkerID:        "phase7-api-runtime-coverage-worker",
+		WorkerVersion:   "1.0.0",
+		OperatingSystem: "linux",
+		Hostname:        "phase7-api-runtime-coverage-host",
+		Capabilities: []models.WorkerCapability{
+			{
+				AdapterID:            "zap-api",
+				SupportedTargetKinds: []string{"api_schema", "api"},
+				SupportedModes:       []models.ExecutionMode{models.ExecutionModePassive, models.ExecutionModeActiveValidation},
+				Labels:               []string{"phase7", "api"},
+				LinuxPreferred:       true,
+			},
+		},
+	}
+
+	registerResponse, registerBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/workers/register",
+		"",
+		auth.WorkerSecretHeader,
+		cfg.WorkerSharedSecret,
+		workerRequest,
+		http.StatusOK,
+	)
+	defer registerResponse.Body.Close()
+
+	var registerPayload models.WorkerRegistrationResponse
+	decodeJSONResponse(t, registerBody, &registerPayload)
+	if !registerPayload.Accepted {
+		t.Fatal("expected worker registration to be accepted")
+	}
+
+	heartbeatResponse, heartbeatBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/workers/heartbeat",
+		"",
+		auth.WorkerSecretHeader,
+		cfg.WorkerSharedSecret,
+		models.HeartbeatRequest{
+			WorkerID:      workerRequest.WorkerID,
+			LeaseID:       registerPayload.LeaseID,
+			TimestampUnix: time.Now().UTC().Unix(),
+			Metrics: map[string]string{
+				"phase": "7-api-coverage",
+			},
+		},
+		http.StatusOK,
+	)
+	defer heartbeatResponse.Body.Close()
+
+	var heartbeatPayload models.HeartbeatResponse
+	decodeJSONResponse(t, heartbeatBody, &heartbeatPayload)
+	if len(heartbeatPayload.Assignments) != 1 {
+		t.Fatalf("expected 1 assignment, got %d", len(heartbeatPayload.Assignments))
+	}
+
+	assignment := heartbeatPayload.Assignments[0]
+	if assignment.AdapterID != "zap-api" {
+		t.Fatalf("expected zap-api assignment, got %s", assignment.AdapterID)
+	}
+	if assignment.Labels["web_target_id"] != createdTarget.ID {
+		t.Fatalf("expected web_target_id label %s, got %#v", createdTarget.ID, assignment.Labels["web_target_id"])
+	}
+
+	evidenceDir := t.TempDir()
+	evidencePath := filepath.Join(evidenceDir, "zap-api-output.log")
+	evidencePayload := `{
+		"coverage_summary": {
+			"api_coverage": 84.0,
+			"auth_coverage": 62.5,
+			"discovered_api_operation_count": 53,
+			"discovered_auth_state_count": 5
+		}
+	}`
+	if err := os.WriteFile(evidencePath, []byte(evidencePayload), 0o600); err != nil {
+		t.Fatalf("write zap-api coverage fixture: %v", err)
+	}
+
+	finalizeNow := time.Now().UTC()
+	if err := store.FinalizeTask(ctx, models.TaskResultSubmission{
+		TaskID:        assignment.JobID,
+		WorkerID:      workerRequest.WorkerID,
+		FinalState:    "completed",
+		EvidencePaths: []string{evidencePath},
+		ReportedFindings: []models.CanonicalFinding{
+			{
+				SchemaVersion: "1.0.0",
+				Category:      "api_misconfiguration",
+				Title:         "API runtime coverage ingest verification finding",
+				Severity:      "medium",
+				Confidence:    "medium",
+				Status:        "open",
+				FirstSeenAt:   finalizeNow,
+				LastSeenAt:    finalizeNow,
+				Source: models.CanonicalSourceInfo{
+					Layer: "runtime",
+					Tool:  "zap-api",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("finalize zap-api task: %v", err)
+	}
+
+	listCoverageRunsResponse, listCoverageRunsBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-runs",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer listCoverageRunsResponse.Body.Close()
+	var listedCoverageRuns struct {
+		Items []models.WebRuntimeCoverageRun `json:"items"`
+	}
+	decodeJSONResponse(t, listCoverageRunsBody, &listedCoverageRuns)
+	if len(listedCoverageRuns.Items) != 1 {
+		t.Fatalf("expected 1 coverage run, got %d", len(listedCoverageRuns.Items))
+	}
+
+	run := listedCoverageRuns.Items[0]
+	if run.ScanJobID != runPayload.Job.ID {
+		t.Fatalf("expected coverage run scan_job_id %s, got %s", runPayload.Job.ID, run.ScanJobID)
+	}
+	if run.APICoverage != 84 || run.AuthCoverage != 62.5 {
+		t.Fatalf("unexpected api coverage values: %#v", run)
+	}
+	if run.DiscoveredAPIOperationCount != 53 || run.DiscoveredAuthStateCount != 5 {
+		t.Fatalf("unexpected discovered api/auth counts: %#v", run)
+	}
+	if run.EvidenceRef != evidencePath {
+		t.Fatalf("expected coverage run evidence_ref %s, got %s", evidencePath, run.EvidenceRef)
+	}
+
+	coverageStatusResponse, coverageStatusBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-status",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer coverageStatusResponse.Body.Close()
+
+	var coverageStatus models.WebCoverageStatus
+	decodeJSONResponse(t, coverageStatusBody, &coverageStatus)
+	if !coverageStatus.OverallMeets {
+		t.Fatalf("expected api coverage status overall_meets=true, got %#v", coverageStatus)
+	}
+	if coverageStatus.LatestRun == nil || coverageStatus.LatestRun.ID != run.ID {
+		t.Fatalf("expected latest run %s, got %#v", run.ID, coverageStatus.LatestRun)
+	}
+}

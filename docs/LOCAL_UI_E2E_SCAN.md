@@ -106,7 +106,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
     - if auth profile is attached, it must be enabled or run creation is rejected
     - on worker assignment, short-lived secret leases are auto-issued for web auth secret refs and passed to runtime adapters via assignment labels
   - post run results into **Coverage Runs** and track **Coverage Status**
-    - browser-probe task finalization auto-ingests coverage metrics from evidence JSON into coverage runs
+    - browser-probe and zap-api task finalization auto-ingest coverage metrics from evidence JSON into coverage runs
 - Go to **Reports** to load server summary and export findings via:
   - `/v1/reports/summary`
   - `/v1/reports/findings/export?format=json|csv`

@@ -21,7 +21,8 @@ func ingestWebRuntimeCoverageRunTx(
 	submission models.TaskResultSubmission,
 	now time.Time,
 ) (bool, error) {
-	if !strings.EqualFold(strings.TrimSpace(task.AdapterID), "browser-probe") {
+	adapterID := normalizeRuntimeCoverageAdapterID(task.AdapterID)
+	if adapterID == "" {
 		return false, nil
 	}
 
@@ -30,7 +31,7 @@ func ingestWebRuntimeCoverageRunTx(
 		return false, nil
 	}
 
-	coverage, evidenceRef, found, err := extractBrowserProbeCoverageFromEvidence(submission.EvidencePaths)
+	coverage, evidenceRef, found, err := extractRuntimeCoverageFromEvidence(adapterID, submission.EvidencePaths)
 	if err != nil {
 		return false, err
 	}
@@ -83,7 +84,7 @@ func ingestWebRuntimeCoverageRunTx(
 			"evidence_ref":       item.EvidenceRef,
 			"ingested_by_worker": createdBy,
 			"coverage_run_id":    item.ID,
-			"source_adapter_id":  strings.TrimSpace(task.AdapterID),
+			"source_adapter_id":  adapterID,
 			"source_task_id":     strings.TrimSpace(task.TaskID),
 		},
 		CreatedAt: now,
@@ -125,7 +126,18 @@ func createWebRuntimeCoverageRunTx(
 	return created, nil
 }
 
-func extractBrowserProbeCoverageFromEvidence(evidencePaths []string) (models.CreateWebRuntimeCoverageRunRequest, string, bool, error) {
+func normalizeRuntimeCoverageAdapterID(adapterID string) string {
+	switch strings.ToLower(strings.TrimSpace(adapterID)) {
+	case "browser-probe":
+		return "browser-probe"
+	case "zap-api":
+		return "zap-api"
+	default:
+		return ""
+	}
+}
+
+func extractRuntimeCoverageFromEvidence(adapterID string, evidencePaths []string) (models.CreateWebRuntimeCoverageRunRequest, string, bool, error) {
 	for _, path := range evidencePaths {
 		normalizedPath := strings.TrimSpace(path)
 		if normalizedPath == "" {
@@ -137,12 +149,12 @@ func extractBrowserProbeCoverageFromEvidence(evidencePaths []string) (models.Cre
 			if os.IsNotExist(err) {
 				continue
 			}
-			return models.CreateWebRuntimeCoverageRunRequest{}, "", false, fmt.Errorf("read browser probe coverage evidence %s: %w", normalizedPath, err)
+			return models.CreateWebRuntimeCoverageRunRequest{}, "", false, fmt.Errorf("read runtime coverage evidence %s: %w", normalizedPath, err)
 		}
 
 		coverage, found, err := parseBrowserProbeCoveragePayload(payloadBytes)
 		if err != nil {
-			return models.CreateWebRuntimeCoverageRunRequest{}, "", false, fmt.Errorf("parse browser probe coverage evidence %s: %w", normalizedPath, err)
+			return models.CreateWebRuntimeCoverageRunRequest{}, "", false, fmt.Errorf("parse %s coverage evidence %s: %w", adapterID, normalizedPath, err)
 		}
 		if found {
 			coverage.EvidenceRef = normalizedPath
