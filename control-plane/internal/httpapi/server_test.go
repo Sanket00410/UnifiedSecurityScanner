@@ -123,6 +123,8 @@ type stubAPIStore struct {
 	detectionRulepacks         []models.DetectionRulepack
 	detectionRulepackVersions  []models.DetectionRulepackVersion
 	detectionRulepackRollouts  []models.DetectionRulepackRollout
+	aiPolicy                   models.AIGatewayPolicy
+	aiTriageRequests           []models.AITriageRequest
 	policy                     models.Policy
 	policies                   []models.Policy
 	policyVersions             []models.PolicyVersion
@@ -3026,6 +3028,90 @@ func (s *stubAPIStore) ListDetectionRulepackRolloutsForTenant(_ context.Context,
 		}
 	}
 	return items, nil
+}
+
+func (s *stubAPIStore) GetAIGatewayPolicyForTenant(_ context.Context, tenantID string) (models.AIGatewayPolicy, bool, error) {
+	if strings.TrimSpace(s.aiPolicy.DefaultModel) == "" {
+		return models.AIGatewayPolicy{
+			TenantID:            strings.TrimSpace(tenantID),
+			DefaultModel:        "gpt-4o-mini",
+			AllowedModels:       []string{"gpt-4o-mini"},
+			MaxInputChars:       12000,
+			MaxOutputChars:      3000,
+			RequireGrounding:    true,
+			RequireEvidenceRefs: true,
+			RedactSecrets:       true,
+			UpdatedBy:           "system",
+			UpdatedAt:           time.Now().UTC(),
+		}, false, nil
+	}
+	return s.aiPolicy, true, nil
+}
+
+func (s *stubAPIStore) UpsertAIGatewayPolicyForTenant(_ context.Context, tenantID string, actor string, request models.UpsertAIGatewayPolicyRequest) (models.AIGatewayPolicy, error) {
+	current, _, _ := s.GetAIGatewayPolicyForTenant(context.Background(), tenantID)
+	if value := strings.TrimSpace(request.DefaultModel); value != "" {
+		current.DefaultModel = value
+	}
+	if request.AllowedModels != nil {
+		current.AllowedModels = request.AllowedModels
+	}
+	if request.MaxInputChars != nil {
+		current.MaxInputChars = *request.MaxInputChars
+	}
+	if request.MaxOutputChars != nil {
+		current.MaxOutputChars = *request.MaxOutputChars
+	}
+	if request.RequireGrounding != nil {
+		current.RequireGrounding = *request.RequireGrounding
+	}
+	if request.RequireEvidenceRefs != nil {
+		current.RequireEvidenceRefs = *request.RequireEvidenceRefs
+	}
+	if request.RedactSecrets != nil {
+		current.RedactSecrets = *request.RedactSecrets
+	}
+	current.TenantID = strings.TrimSpace(tenantID)
+	current.UpdatedBy = strings.TrimSpace(actor)
+	current.UpdatedAt = time.Now().UTC()
+	s.aiPolicy = current
+	return current, nil
+}
+
+func (s *stubAPIStore) ListAITriageRequestsForTenant(_ context.Context, _ string, requestKind string, _ int) ([]models.AITriageRequest, error) {
+	if strings.TrimSpace(requestKind) == "" {
+		return s.aiTriageRequests, nil
+	}
+	items := make([]models.AITriageRequest, 0, len(s.aiTriageRequests))
+	for _, item := range s.aiTriageRequests {
+		if strings.EqualFold(strings.TrimSpace(item.RequestKind), strings.TrimSpace(requestKind)) {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) CreateAITriageSummaryForTenant(_ context.Context, tenantID string, actor string, request models.CreateAITriageSummaryRequest) (models.AITriageRequest, error) {
+	now := time.Now().UTC()
+	model := strings.TrimSpace(request.Model)
+	if model == "" {
+		model = "gpt-4o-mini"
+	}
+	item := models.AITriageRequest{
+		ID:           fmt.Sprintf("ai-triage-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		RequestKind:  "finding_summary",
+		Model:        model,
+		InputText:    strings.TrimSpace(request.InputText),
+		EvidenceRefs: request.EvidenceRefs,
+		FindingIDs:   request.FindingIDs,
+		ResponseText: "stub evidence-grounded summary",
+		SafetyState:  "grounded",
+		CreatedBy:    strings.TrimSpace(actor),
+		CreatedAt:    now,
+	}
+	s.aiTriageRequests = append([]models.AITriageRequest{item}, s.aiTriageRequests...)
+	return item, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {

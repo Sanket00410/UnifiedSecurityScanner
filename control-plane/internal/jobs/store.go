@@ -57,6 +57,7 @@ var (
 	detectionRulepackSequence        uint64
 	detectionRulepackVersionSequence uint64
 	detectionRulepackRolloutSequence uint64
+	aiTriageRequestSequence          uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
 	externalAssetSequence            uint64
@@ -104,6 +105,9 @@ var (
 	ErrComplianceMappingNotFound     = errors.New("compliance control mapping not found")
 	ErrDetectionRulepackNotFound     = errors.New("detection rulepack not found")
 	ErrDetectionVersionNotFound      = errors.New("detection rulepack version not found")
+	ErrAIPolicyModelDenied           = errors.New("ai model not permitted by policy")
+	ErrAIPolicyInputTooLarge         = errors.New("ai input exceeds policy limits")
+	ErrAIPolicyEvidenceRequired      = errors.New("ai evidence references are required by policy")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )

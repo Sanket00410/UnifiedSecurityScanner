@@ -199,6 +199,10 @@ type apiStore interface {
 	CreateDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.CreateDetectionRulepackVersionRequest) (models.DetectionRulepackVersion, error)
 	PromoteDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, actor string, request models.PromoteDetectionRulepackVersionRequest) (models.DetectionRulepackRollout, bool, error)
 	ListDetectionRulepackRolloutsForTenant(ctx context.Context, tenantID string, rulepackID string, limit int) ([]models.DetectionRulepackRollout, error)
+	GetAIGatewayPolicyForTenant(ctx context.Context, tenantID string) (models.AIGatewayPolicy, bool, error)
+	UpsertAIGatewayPolicyForTenant(ctx context.Context, tenantID string, actor string, request models.UpsertAIGatewayPolicyRequest) (models.AIGatewayPolicy, error)
+	ListAITriageRequestsForTenant(ctx context.Context, tenantID string, requestKind string, limit int) ([]models.AITriageRequest, error)
+	CreateAITriageSummaryForTenant(ctx context.Context, tenantID string, actor string, request models.CreateAITriageSummaryRequest) (models.AITriageRequest, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -465,6 +469,12 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionPoliciesWrite,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "detection_rulepack", "detection_rulepack", server.handleDetectionRulepackRoute))
+	mux.HandleFunc("/v1/ai/policy", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionPoliciesRead,
+		http.MethodPut: auth.PermissionPoliciesWrite,
+	}, "ai_policy", "ai_policy", server.handleAIPolicy))
+	mux.HandleFunc("/v1/ai/triage/requests", server.withUserAuth(auth.PermissionFindingsRead, "ai_triage_requests.list", "ai_triage_request", server.handleAITriageRequests))
+	mux.HandleFunc("/v1/ai/triage/summaries", server.withUserAuth(auth.PermissionPoliciesWrite, "ai_triage_summary.create", "ai_triage_request", server.handleAITriageSummaries))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
