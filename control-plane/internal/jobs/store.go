@@ -19,67 +19,75 @@ import (
 )
 
 var (
-	jobSequence                     uint64
-	leaseSequence                   uint64
-	taskSequence                    uint64
-	policySequence                  uint64
-	policyVersionSequence           uint64
-	policyApprovalSequence          uint64
-	remediationSequence             uint64
-	controlSequence                 uint64
-	waiverSequence                  uint64
-	occurrenceSequence              uint64
-	activitySequence                uint64
-	verificationSequence            uint64
-	exceptionSequence               uint64
-	ticketSequence                  uint64
-	remediationEvidenceSequence     uint64
-	assignmentSequence              uint64
-	notificationSequence            uint64
-	scanTargetSequence              uint64
-	webTargetSequence               uint64
-	webAuthProfileSequence          uint64
-	webCrawlPolicySequence          uint64
-	webCoverageBaselineSequence     uint64
-	webRuntimeCoverageRunSequence   uint64
-	validationEngagementSequence    uint64
-	validationAttackTraceSequence   uint64
-	validationManualTestSequence    uint64
-	apiAssetSequence                uint64
-	apiEndpointSequence             uint64
-	externalAssetSequence           uint64
-	ingestionSourceSequence         uint64
-	ingestionEventSequence          uint64
-	platformEventSequence           uint64
-	ErrWorkerLeaseNotFound          = errors.New("worker lease not found")
-	ErrTaskNotFound                 = errors.New("task not found")
-	ErrProtectedToken               = errors.New("protected token")
-	ErrWebTargetNotFound            = errors.New("web target not found")
-	ErrWebAuthProfileNotFound       = errors.New("web auth profile not found")
-	ErrWebAuthProfileDisabled       = errors.New("web auth profile disabled")
-	ErrWebRuntimeToolNotAllowed     = errors.New("web runtime tool not allowed")
-	ErrIngestionSourceNotFound      = errors.New("ingestion source not found")
-	ErrInvalidIngestionToken        = errors.New("invalid ingestion token")
-	ErrInvalidIngestionSignature    = errors.New("invalid ingestion signature")
-	ErrIngestionSourceDisabled      = errors.New("ingestion source disabled")
-	ErrInvalidIngestionSourceConfig = errors.New("invalid ingestion source configuration")
-	ErrInvalidWaiver                = errors.New("invalid finding waiver")
-	ErrInvalidRemediationTransition = errors.New("invalid remediation transition")
-	ErrInvalidVerification          = errors.New("invalid remediation verification")
-	ErrInvalidExceptionDecision     = errors.New("invalid remediation exception")
-	ErrInvalidAssignmentDecision    = errors.New("invalid remediation assignment")
-	ErrKMSKeyNotFound               = errors.New("kms key not found")
-	ErrSecretReferenceNotFound      = errors.New("secret reference not found")
-	ErrSecretLeaseNotFound          = errors.New("secret lease not found")
-	ErrSecretLeaseExpired           = errors.New("secret lease expired")
-	ErrValidationEngagementRequired = errors.New("validation engagement required")
-	ErrValidationEngagementNotFound = errors.New("validation engagement not found")
-	ErrValidationEngagementInactive = errors.New("validation engagement is not active")
-	ErrValidationEngagementScope    = errors.New("validation engagement scope mismatch")
-	ErrValidationEngagementTool     = errors.New("validation engagement does not allow requested tool")
-	ErrValidationManualTestNotFound = errors.New("validation manual test case not found")
-	ErrCertificateAuthorityDisabled = errors.New("certificate authority is not configured")
-	ErrWorkloadCertificateNotFound  = errors.New("workload certificate not found")
+	jobSequence                      uint64
+	leaseSequence                    uint64
+	taskSequence                     uint64
+	policySequence                   uint64
+	policyVersionSequence            uint64
+	policyApprovalSequence           uint64
+	remediationSequence              uint64
+	controlSequence                  uint64
+	waiverSequence                   uint64
+	occurrenceSequence               uint64
+	activitySequence                 uint64
+	verificationSequence             uint64
+	exceptionSequence                uint64
+	ticketSequence                   uint64
+	remediationEvidenceSequence      uint64
+	assignmentSequence               uint64
+	notificationSequence             uint64
+	scanTargetSequence               uint64
+	webTargetSequence                uint64
+	webAuthProfileSequence           uint64
+	webCrawlPolicySequence           uint64
+	webCoverageBaselineSequence      uint64
+	webRuntimeCoverageRunSequence    uint64
+	validationEngagementSequence     uint64
+	validationAttackTraceSequence    uint64
+	validationManualTestSequence     uint64
+	validationEnvelopeSequence       uint64
+	validationPlanStepSequence       uint64
+	apiAssetSequence                 uint64
+	apiEndpointSequence              uint64
+	externalAssetSequence            uint64
+	ingestionSourceSequence          uint64
+	ingestionEventSequence           uint64
+	platformEventSequence            uint64
+	ErrWorkerLeaseNotFound           = errors.New("worker lease not found")
+	ErrTaskNotFound                  = errors.New("task not found")
+	ErrProtectedToken                = errors.New("protected token")
+	ErrWebTargetNotFound             = errors.New("web target not found")
+	ErrWebAuthProfileNotFound        = errors.New("web auth profile not found")
+	ErrWebAuthProfileDisabled        = errors.New("web auth profile disabled")
+	ErrWebRuntimeToolNotAllowed      = errors.New("web runtime tool not allowed")
+	ErrIngestionSourceNotFound       = errors.New("ingestion source not found")
+	ErrInvalidIngestionToken         = errors.New("invalid ingestion token")
+	ErrInvalidIngestionSignature     = errors.New("invalid ingestion signature")
+	ErrIngestionSourceDisabled       = errors.New("ingestion source disabled")
+	ErrInvalidIngestionSourceConfig  = errors.New("invalid ingestion source configuration")
+	ErrInvalidWaiver                 = errors.New("invalid finding waiver")
+	ErrInvalidRemediationTransition  = errors.New("invalid remediation transition")
+	ErrInvalidVerification           = errors.New("invalid remediation verification")
+	ErrInvalidExceptionDecision      = errors.New("invalid remediation exception")
+	ErrInvalidAssignmentDecision     = errors.New("invalid remediation assignment")
+	ErrKMSKeyNotFound                = errors.New("kms key not found")
+	ErrSecretReferenceNotFound       = errors.New("secret reference not found")
+	ErrSecretLeaseNotFound           = errors.New("secret lease not found")
+	ErrSecretLeaseExpired            = errors.New("secret lease expired")
+	ErrValidationEngagementRequired  = errors.New("validation engagement required")
+	ErrValidationEngagementNotFound  = errors.New("validation engagement not found")
+	ErrValidationEngagementInactive  = errors.New("validation engagement is not active")
+	ErrValidationEngagementScope     = errors.New("validation engagement scope mismatch")
+	ErrValidationEngagementTool      = errors.New("validation engagement does not allow requested tool")
+	ErrValidationManualTestNotFound  = errors.New("validation manual test case not found")
+	ErrValidationEnvelopeInactive    = errors.New("validation execution envelope is not active")
+	ErrValidationPlanStepRequired    = errors.New("validation plan step approval is required")
+	ErrValidationPlanStepNotFound    = errors.New("validation plan step not found")
+	ErrValidationPlanStepNotApproved = errors.New("validation plan step is not approved")
+	ErrValidationPlanStepDependency  = errors.New("validation plan step dependencies are not approved")
+	ErrValidationPlanStepScope       = errors.New("validation plan step scope mismatch")
+	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
+	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )
 
 type TenantLimitExceededError struct {

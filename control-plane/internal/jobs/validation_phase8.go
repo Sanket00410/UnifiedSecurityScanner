@@ -385,9 +385,33 @@ func resolveValidationEngagementContextTx(
 		}
 	}
 
+	workflowLabels, err := resolveValidationWorkflowContextTx(
+		ctx,
+		tx,
+		tenantID,
+		engagement,
+		requiredTools,
+		targetKind,
+		target,
+		taskLabels,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	labels := validationEngagementLabels(engagement)
+	for key, value := range workflowLabels {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		normalizedValue := strings.TrimSpace(value)
+		if normalizedKey == "" || normalizedValue == "" {
+			continue
+		}
+		labels[normalizedKey] = normalizedValue
+	}
+
 	return &validationEngagementContext{
 		Engagement: engagement,
-		Labels:     validationEngagementLabels(engagement),
+		Labels:     labels,
 	}, nil
 }
 
@@ -425,6 +449,18 @@ func ensureValidationEngagementForDispatchTx(
 	}
 	if !validationEngagementAllowsTools(engagement, []string{strings.ToLower(strings.TrimSpace(adapterID))}) {
 		return ErrValidationEngagementTool
+	}
+	if err := ensureValidationWorkflowForDispatchTx(
+		ctx,
+		tx,
+		tenantID,
+		engagement,
+		targetKind,
+		target,
+		adapterID,
+		taskLabels,
+	); err != nil {
+		return err
 	}
 
 	return nil

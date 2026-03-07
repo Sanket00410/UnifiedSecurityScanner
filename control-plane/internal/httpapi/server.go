@@ -153,6 +153,14 @@ type apiStore interface {
 	ApproveValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
 	ActivateValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string) (models.ValidationEngagement, bool, error)
 	CloseValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
+	GetValidationExecutionEnvelopeForTenant(ctx context.Context, tenantID string, engagementID string) (models.ValidationExecutionEnvelope, bool, error)
+	UpsertValidationExecutionEnvelopeForTenant(ctx context.Context, tenantID string, engagementID string, actor string, request models.UpsertValidationExecutionEnvelopeRequest) (models.ValidationExecutionEnvelope, error)
+	ApproveValidationExecutionEnvelopeForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationExecutionEnvelope, bool, error)
+	ActivateValidationExecutionEnvelopeForTenant(ctx context.Context, tenantID string, engagementID string, actor string) (models.ValidationExecutionEnvelope, bool, error)
+	CloseValidationExecutionEnvelopeForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationExecutionEnvelope, bool, error)
+	ListValidationPlanStepsForTenant(ctx context.Context, tenantID string, engagementID string, status string, limit int) ([]models.ValidationPlanStep, error)
+	CreateValidationPlanStepForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationPlanStepRequest) (models.ValidationPlanStep, error)
+	DecideValidationPlanStepForTenant(ctx context.Context, tenantID string, stepID string, approved bool, actor string, reason string) (models.ValidationPlanStep, bool, error)
 	ListValidationAttackTracesForTenant(ctx context.Context, tenantID string, engagementID string, limit int) ([]models.ValidationAttackTrace, error)
 	CreateValidationAttackTraceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationAttackTraceRequest) (models.ValidationAttackTrace, error)
 	ListValidationManualTestsForTenant(ctx context.Context, tenantID string, engagementID string, status string, limit int) ([]models.ValidationManualTestCase, error)
@@ -369,6 +377,16 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionPoliciesWrite,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "validation_engagement", "validation_engagement", server.handleValidationEngagementRoute))
+	mux.HandleFunc("/v1/validation/envelopes/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPut:  auth.PermissionPoliciesWrite,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_execution_envelope", "validation_execution_envelope", server.handleValidationEnvelopeRoute))
+	mux.HandleFunc("/v1/validation/plan-steps", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_plan_steps", "validation_plan_step", server.handleValidationPlanSteps))
+	mux.HandleFunc("/v1/validation/plan-steps/", server.withUserAuth(auth.PermissionPoliciesWrite, "validation_plan_step.decide", "validation_plan_step", server.handleValidationPlanStepRoute))
 	mux.HandleFunc("/v1/validation/attack-traces", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -4047,6 +4065,227 @@ func (s *Server) handleValidationEngagementRoute(w http.ResponseWriter, r *http.
 	}
 }
 
+func (s *Server) handleValidationEnvelopeRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/validation/envelopes/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "validation_envelope_route_not_found", "the requested validation execution envelope route was not found")
+		return
+	}
+	engagementID := strings.TrimSpace(parts[0])
+
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetValidationExecutionEnvelopeForTenant(r.Context(), principal.OrganizationID, engagementID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_validation_execution_envelope_failed", "validation execution envelope could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "validation_execution_envelope_not_found", "validation execution envelope was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpsertValidationExecutionEnvelopeRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, err := s.store.UpsertValidationExecutionEnvelopeForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, request)
+			if err != nil {
+				if s.writeValidationEngagementMutationError(w, err) {
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "upsert_validation_execution_envelope_failed", "validation execution envelope could not be saved")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		s.writeError(w, http.StatusNotFound, "validation_envelope_route_not_found", "the requested validation execution envelope route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+	var decision models.ValidationEngagementDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&decision); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	action := strings.TrimSpace(parts[1])
+	switch action {
+	case "approve":
+		item, found, err := s.store.ApproveValidationExecutionEnvelopeForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, decision.Reason)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "approve_validation_execution_envelope_failed", "validation execution envelope could not be approved")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_execution_envelope_not_found", "validation execution envelope was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case "activate":
+		item, found, err := s.store.ActivateValidationExecutionEnvelopeForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "activate_validation_execution_envelope_failed", "validation execution envelope could not be activated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_execution_envelope_not_found", "validation execution envelope was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case "close":
+		item, found, err := s.store.CloseValidationExecutionEnvelopeForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, decision.Reason)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "close_validation_execution_envelope_failed", "validation execution envelope could not be closed")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_execution_envelope_not_found", "validation execution envelope was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	default:
+		s.writeError(w, http.StatusNotFound, "validation_envelope_route_not_found", "the requested validation execution envelope route was not found")
+	}
+}
+
+func (s *Server) handleValidationPlanSteps(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		engagementID := strings.TrimSpace(r.URL.Query().Get("engagement_id"))
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+
+		items, err := s.store.ListValidationPlanStepsForTenant(r.Context(), principal.OrganizationID, engagementID, status, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_validation_plan_steps_failed", "validation plan steps could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateValidationPlanStepRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.EngagementID) == "" || strings.TrimSpace(request.Name) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "engagement_id and name are required")
+			return
+		}
+
+		item, err := s.store.CreateValidationPlanStepForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_validation_plan_step_failed", "validation plan step could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleValidationPlanStepRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/validation/plan-steps/"))
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "validation_plan_step_route_not_found", "the requested validation plan step route was not found")
+		return
+	}
+
+	approved := false
+	switch strings.TrimSpace(parts[1]) {
+	case "approve":
+		approved = true
+	case "deny":
+		approved = false
+	default:
+		s.writeError(w, http.StatusNotFound, "validation_plan_step_route_not_found", "the requested validation plan step route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+	var decision models.ValidationPlanStepDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&decision); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, found, err := s.store.DecideValidationPlanStepForTenant(r.Context(), principal.OrganizationID, strings.TrimSpace(parts[0]), approved, principal.Email, decision.Reason)
+	if err != nil {
+		if s.writeValidationEngagementMutationError(w, err) {
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "decide_validation_plan_step_failed", "validation plan step could not be decided")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "validation_plan_step_not_found", "validation plan step was not found")
+		return
+	}
+	s.writeJSON(w, http.StatusOK, item)
+}
+
 func (s *Server) handleValidationAttackTraces(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
@@ -5095,6 +5334,24 @@ func (s *Server) writeValidationEngagementExecutionError(w http.ResponseWriter, 
 	case errors.Is(err, jobs.ErrValidationEngagementTool):
 		s.writeError(w, http.StatusBadRequest, "validation_engagement_tool_not_allowed", "validation engagement does not allow requested tools")
 		return true
+	case errors.Is(err, jobs.ErrValidationEnvelopeInactive):
+		s.writeError(w, http.StatusConflict, "validation_execution_envelope_inactive", "validation execution envelope is not active")
+		return true
+	case errors.Is(err, jobs.ErrValidationPlanStepRequired):
+		s.writeError(w, http.StatusBadRequest, "validation_plan_step_required", "validation plan step approval is required")
+		return true
+	case errors.Is(err, jobs.ErrValidationPlanStepNotFound):
+		s.writeError(w, http.StatusBadRequest, "validation_plan_step_not_found", "validation plan step was not found")
+		return true
+	case errors.Is(err, jobs.ErrValidationPlanStepNotApproved):
+		s.writeError(w, http.StatusConflict, "validation_plan_step_not_approved", "validation plan step is not approved")
+		return true
+	case errors.Is(err, jobs.ErrValidationPlanStepDependency):
+		s.writeError(w, http.StatusConflict, "validation_plan_step_dependency_pending", "validation plan step dependencies are not approved")
+		return true
+	case errors.Is(err, jobs.ErrValidationPlanStepScope):
+		s.writeError(w, http.StatusBadRequest, "validation_plan_step_scope_mismatch", "validation plan step does not match the requested scope")
+		return true
 	default:
 		return false
 	}
@@ -5116,6 +5373,9 @@ func (s *Server) writeValidationEngagementMutationError(w http.ResponseWriter, e
 		strings.Contains(lower, "requires approval"),
 		strings.Contains(lower, "in the past"):
 		s.writeError(w, http.StatusConflict, "validation_engagement_state_invalid", err.Error())
+		return true
+	case strings.Contains(lower, "max_runtime_seconds must be greater than or equal to zero"):
+		s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return true
 	case strings.Contains(lower, "duplicate key"),
 		strings.Contains(lower, "already exists"),

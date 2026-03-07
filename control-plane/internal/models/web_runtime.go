@@ -158,6 +158,7 @@ type RunWebTargetRequest struct {
 	Tools                  []string          `json:"tools"`
 	TaskLabels             map[string]string `json:"task_labels,omitempty"`
 	ValidationEngagementID string            `json:"validation_engagement_id,omitempty"`
+	ValidationPlanStepID   string            `json:"validation_plan_step_id,omitempty"`
 }
 
 type WebRuntimeCoverageRun struct {

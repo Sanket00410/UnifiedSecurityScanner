@@ -843,6 +843,9 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 	if value := strings.TrimSpace(request.ValidationEngagementID); value != "" {
 		taskLabels["validation_engagement_id"] = value
 	}
+	if value := strings.TrimSpace(request.ValidationPlanStepID); value != "" {
+		taskLabels["validation_plan_step_id"] = value
+	}
 	if strings.TrimSpace(policy.AuthProfileID) != "" {
 		taskLabels["web_auth_profile_id"] = strings.TrimSpace(policy.AuthProfileID)
 		authProfile, authProfileFound, err := s.GetWebAuthProfileForTenant(ctx, tenantID, policy.AuthProfileID)

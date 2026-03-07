@@ -107,6 +107,8 @@ type stubAPIStore struct {
 	notifications            []models.NotificationEvent
 	notificationSweep        models.NotificationSweepResult
 	validationEngagements    []models.ValidationEngagement
+	validationEnvelopes      []models.ValidationExecutionEnvelope
+	validationPlanSteps      []models.ValidationPlanStep
 	validationAttackTraces   []models.ValidationAttackTrace
 	validationManualTests    []models.ValidationManualTestCase
 	validationEngagementErr  error
@@ -1966,6 +1968,192 @@ func (s *stubAPIStore) CloseValidationEngagementForTenant(_ context.Context, _ s
 		return item, true, nil
 	}
 	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) GetValidationExecutionEnvelopeForTenant(_ context.Context, _ string, engagementID string) (models.ValidationExecutionEnvelope, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationExecutionEnvelope{}, false, s.validationEngagementErr
+	}
+	for _, item := range s.validationEnvelopes {
+		if strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			return item, true, nil
+		}
+	}
+	return models.ValidationExecutionEnvelope{}, false, nil
+}
+
+func (s *stubAPIStore) UpsertValidationExecutionEnvelopeForTenant(_ context.Context, tenantID string, engagementID string, actor string, request models.UpsertValidationExecutionEnvelopeRequest) (models.ValidationExecutionEnvelope, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationExecutionEnvelope{}, s.validationEngagementErr
+	}
+	now := time.Now().UTC()
+	for idx, item := range s.validationEnvelopes {
+		if !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.PolicyPackRef); value != "" {
+			item.PolicyPackRef = value
+		}
+		if request.AllowedTools != nil {
+			item.AllowedTools = request.AllowedTools
+		}
+		if request.RequiresStepApproval != nil {
+			item.RequiresStepApproval = *request.RequiresStepApproval
+		}
+		if request.MaxRuntimeSeconds != nil {
+			item.MaxRuntimeSeconds = *request.MaxRuntimeSeconds
+		}
+		if value := strings.TrimSpace(request.NetworkScope); value != "" {
+			item.NetworkScope = value
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		item.UpdatedAt = now
+		s.validationEnvelopes[idx] = item
+		return item, nil
+	}
+
+	item := models.ValidationExecutionEnvelope{
+		ID:                   fmt.Sprintf("validation-envelope-%d", now.UnixNano()),
+		TenantID:             strings.TrimSpace(tenantID),
+		EngagementID:         strings.TrimSpace(engagementID),
+		Status:               "draft",
+		PolicyPackRef:        strings.TrimSpace(request.PolicyPackRef),
+		AllowedTools:         request.AllowedTools,
+		RequiresStepApproval: request.RequiresStepApproval != nil && *request.RequiresStepApproval,
+		NetworkScope:         strings.TrimSpace(request.NetworkScope),
+		Notes:                strings.TrimSpace(request.Notes),
+		CreatedBy:            strings.TrimSpace(actor),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if request.MaxRuntimeSeconds != nil {
+		item.MaxRuntimeSeconds = *request.MaxRuntimeSeconds
+	}
+	s.validationEnvelopes = append([]models.ValidationExecutionEnvelope{item}, s.validationEnvelopes...)
+	return item, nil
+}
+
+func (s *stubAPIStore) ApproveValidationExecutionEnvelopeForTenant(_ context.Context, _ string, engagementID string, actor string, _ string) (models.ValidationExecutionEnvelope, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationExecutionEnvelope{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEnvelopes {
+		if !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "approved"
+		item.ApprovedBy = strings.TrimSpace(actor)
+		item.ApprovedAt = &now
+		item.UpdatedAt = now
+		s.validationEnvelopes[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationExecutionEnvelope{}, false, nil
+}
+
+func (s *stubAPIStore) ActivateValidationExecutionEnvelopeForTenant(_ context.Context, _ string, engagementID string, actor string) (models.ValidationExecutionEnvelope, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationExecutionEnvelope{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEnvelopes {
+		if !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "active"
+		item.ActivatedBy = strings.TrimSpace(actor)
+		item.ActivatedAt = &now
+		item.UpdatedAt = now
+		s.validationEnvelopes[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationExecutionEnvelope{}, false, nil
+}
+
+func (s *stubAPIStore) CloseValidationExecutionEnvelopeForTenant(_ context.Context, _ string, engagementID string, actor string, _ string) (models.ValidationExecutionEnvelope, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationExecutionEnvelope{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEnvelopes {
+		if !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "closed"
+		item.ClosedBy = strings.TrimSpace(actor)
+		item.ClosedAt = &now
+		item.UpdatedAt = now
+		s.validationEnvelopes[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationExecutionEnvelope{}, false, nil
+}
+
+func (s *stubAPIStore) ListValidationPlanStepsForTenant(_ context.Context, _ string, engagementID string, status string, _ int) ([]models.ValidationPlanStep, error) {
+	if s.validationEngagementErr != nil {
+		return nil, s.validationEngagementErr
+	}
+	filtered := make([]models.ValidationPlanStep, 0, len(s.validationPlanSteps))
+	for _, item := range s.validationPlanSteps {
+		if strings.TrimSpace(engagementID) != "" && !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) CreateValidationPlanStepForTenant(_ context.Context, tenantID string, actor string, request models.CreateValidationPlanStepRequest) (models.ValidationPlanStep, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationPlanStep{}, s.validationEngagementErr
+	}
+	now := time.Now().UTC()
+	item := models.ValidationPlanStep{
+		ID:           fmt.Sprintf("validation-plan-step-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		EngagementID: strings.TrimSpace(request.EngagementID),
+		Name:         strings.TrimSpace(request.Name),
+		AdapterID:    strings.TrimSpace(request.AdapterID),
+		TargetKind:   strings.TrimSpace(request.TargetKind),
+		Target:       strings.TrimSpace(request.Target),
+		DependsOn:    request.DependsOn,
+		Status:       "pending",
+		RequestedBy:  strings.TrimSpace(actor),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	s.validationPlanSteps = append([]models.ValidationPlanStep{item}, s.validationPlanSteps...)
+	return item, nil
+}
+
+func (s *stubAPIStore) DecideValidationPlanStepForTenant(_ context.Context, _ string, stepID string, approved bool, actor string, reason string) (models.ValidationPlanStep, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationPlanStep{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationPlanSteps {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(stepID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		if approved {
+			item.Status = "approved"
+		} else {
+			item.Status = "denied"
+		}
+		item.DecidedBy = strings.TrimSpace(actor)
+		item.Reason = strings.TrimSpace(reason)
+		item.DecidedAt = &now
+		item.UpdatedAt = now
+		s.validationPlanSteps[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationPlanStep{}, false, nil
 }
 
 func (s *stubAPIStore) ListValidationAttackTracesForTenant(_ context.Context, _ string, engagementID string, _ int) ([]models.ValidationAttackTrace, error) {

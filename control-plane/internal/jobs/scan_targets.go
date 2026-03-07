@@ -269,6 +269,9 @@ func (s *Store) RunScanTargetForTenant(ctx context.Context, tenantID string, tar
 	if value := strings.TrimSpace(request.ValidationEngagementID); value != "" {
 		taskLabels["validation_engagement_id"] = value
 	}
+	if value := strings.TrimSpace(request.ValidationPlanStepID); value != "" {
+		taskLabels["validation_plan_step_id"] = value
+	}
 	if len(taskLabels) == 0 {
 		taskLabels = nil
 	}
