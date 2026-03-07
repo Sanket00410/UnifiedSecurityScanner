@@ -148,6 +148,144 @@ func (s *Store) ListAITriageRequestsForTenant(ctx context.Context, tenantID stri
 	return items, nil
 }
 
+func (s *Store) ListAITriageEvaluationsForTenant(ctx context.Context, tenantID string, verdict string, triageRequestID string, limit int) ([]models.AITriageEvaluation, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	verdict = normalizeAITriageVerdict(verdict)
+	triageRequestID = strings.TrimSpace(triageRequestID)
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, triage_request_id, verdict, grounded, hallucination_score,
+		       policy_violations_json, evaluator, notes, created_at
+		FROM ai_triage_evaluations
+		WHERE tenant_id = $1
+		  AND ($2 = '' OR verdict = $2)
+		  AND ($3 = '' OR triage_request_id = $3)
+		ORDER BY created_at DESC, id DESC
+		LIMIT $4
+	`, tenantID, verdict, triageRequestID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list ai triage evaluations: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.AITriageEvaluation, 0, limit)
+	for rows.Next() {
+		item, err := scanAITriageEvaluation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan ai triage evaluation row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate ai triage evaluation rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) RecordAITriageEvaluationForTenant(ctx context.Context, tenantID string, actor string, request models.RecordAITriageEvaluationRequest) (models.AITriageEvaluation, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+	triageRequestID := strings.TrimSpace(request.TriageRequestID)
+	if triageRequestID == "" {
+		return models.AITriageEvaluation{}, fmt.Errorf("triage_request_id is required")
+	}
+
+	verdict := normalizeAITriageVerdict(request.Verdict)
+	if verdict == "" {
+		verdict = "needs_review"
+	}
+	grounded := verdict == "approved"
+	if request.Grounded != nil {
+		grounded = *request.Grounded
+	}
+	hallucinationScore := request.HallucinationScore
+	if hallucinationScore < 0 {
+		hallucinationScore = 0
+	}
+	if hallucinationScore > 1 {
+		hallucinationScore = 1
+	}
+	policyViolations := sanitizeDesignStringList(request.PolicyViolations)
+
+	now := time.Now().UTC()
+	item := models.AITriageEvaluation{
+		ID:                 nextAIEvaluationID(),
+		TenantID:           tenantID,
+		TriageRequestID:    triageRequestID,
+		Verdict:            verdict,
+		Grounded:           grounded,
+		HallucinationScore: hallucinationScore,
+		PolicyViolations:   policyViolations,
+		Evaluator:          actor,
+		Notes:              strings.TrimSpace(request.Notes),
+		CreatedAt:          now,
+	}
+	policyViolationsJSON, err := json.Marshal(item.PolicyViolations)
+	if err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("marshal ai triage policy violations: %w", err)
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("begin ai triage evaluation tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var requestExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM ai_triage_requests
+			WHERE tenant_id = $1
+			  AND id = $2
+		)
+	`, tenantID, triageRequestID).Scan(&requestExists); err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("check ai triage request: %w", err)
+	}
+	if !requestExists {
+		return models.AITriageEvaluation{}, ErrAITriageRequestNotFound
+	}
+
+	row := tx.QueryRow(ctx, `
+		INSERT INTO ai_triage_evaluations (
+			id, tenant_id, triage_request_id, verdict, grounded, hallucination_score,
+			policy_violations_json, evaluator, notes, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10
+		)
+		RETURNING id, tenant_id, triage_request_id, verdict, grounded, hallucination_score,
+		          policy_violations_json, evaluator, notes, created_at
+	`, item.ID, item.TenantID, item.TriageRequestID, item.Verdict, item.Grounded, item.HallucinationScore,
+		policyViolationsJSON, item.Evaluator, item.Notes, item.CreatedAt)
+	created, err := scanAITriageEvaluation(row)
+	if err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("insert ai triage evaluation: %w", err)
+	}
+
+	nextSafetyState := deriveAITriageSafetyState(created)
+	_, err = tx.Exec(ctx, `
+		UPDATE ai_triage_requests
+		SET safety_state = $3
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, tenantID, triageRequestID, nextSafetyState)
+	if err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("update ai triage safety state: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.AITriageEvaluation{}, fmt.Errorf("commit ai triage evaluation tx: %w", err)
+	}
+	return created, nil
+}
+
 func (s *Store) CreateAITriageSummaryForTenant(ctx context.Context, tenantID string, actor string, request models.CreateAITriageSummaryRequest) (models.AITriageRequest, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	actor = strings.TrimSpace(actor)
@@ -308,6 +446,42 @@ func scanAITriageRequest(row interface{ Scan(dest ...any) error }) (models.AITri
 	return item, nil
 }
 
+func scanAITriageEvaluation(row interface{ Scan(dest ...any) error }) (models.AITriageEvaluation, error) {
+	var (
+		item                 models.AITriageEvaluation
+		policyViolationsJSON []byte
+	)
+	err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.TriageRequestID,
+		&item.Verdict,
+		&item.Grounded,
+		&item.HallucinationScore,
+		&policyViolationsJSON,
+		&item.Evaluator,
+		&item.Notes,
+		&item.CreatedAt,
+	)
+	if err != nil {
+		return models.AITriageEvaluation{}, err
+	}
+	if len(policyViolationsJSON) > 0 {
+		if err := json.Unmarshal(policyViolationsJSON, &item.PolicyViolations); err != nil {
+			return models.AITriageEvaluation{}, fmt.Errorf("decode ai triage policy violations: %w", err)
+		}
+	}
+	item.Verdict = normalizeAITriageVerdict(item.Verdict)
+	item.PolicyViolations = sanitizeDesignStringList(item.PolicyViolations)
+	if item.HallucinationScore < 0 {
+		item.HallucinationScore = 0
+	}
+	if item.HallucinationScore > 1 {
+		item.HallucinationScore = 1
+	}
+	return item, nil
+}
+
 func sanitizeAIGatewayModels(values []string) []string {
 	if len(values) == 0 {
 		return []string{}
@@ -337,6 +511,29 @@ func containsNormalized(values []string, candidate string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeAITriageVerdict(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "approved", "needs_review", "rejected":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func deriveAITriageSafetyState(item models.AITriageEvaluation) string {
+	switch item.Verdict {
+	case "approved":
+		if item.Grounded && item.HallucinationScore <= 0.30 && len(item.PolicyViolations) == 0 {
+			return "grounded"
+		}
+		return "review_required"
+	case "rejected":
+		return "rejected"
+	default:
+		return "review_required"
+	}
 }
 
 func redactAIGatewaySecrets(input string) string {
@@ -387,4 +584,9 @@ func buildAIEvidenceGroundedSummary(inputText string, evidenceRefs []string, fin
 func nextAITriageRequestID() string {
 	value := atomic.AddUint64(&aiTriageRequestSequence, 1)
 	return fmt.Sprintf("ai-triage-%d-%06d", time.Now().UTC().Unix(), value)
+}
+
+func nextAIEvaluationID() string {
+	value := atomic.AddUint64(&aiEvaluationSequence, 1)
+	return fmt.Sprintf("ai-eval-%d-%06d", time.Now().UTC().Unix(), value)
 }

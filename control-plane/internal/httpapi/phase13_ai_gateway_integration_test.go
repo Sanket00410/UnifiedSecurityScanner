@@ -144,6 +144,54 @@ func TestPhase13AIGatewayPolicyAndTriageFlow(t *testing.T) {
 		t.Fatalf("expected grounded summary text, got %s", triage.ResponseText)
 	}
 
+	createEvaluationResponse, createEvaluationBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/ai/triage/evaluations",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"triage_request_id":   triage.ID,
+			"verdict":             "needs_review",
+			"grounded":            false,
+			"hallucination_score": 0.62,
+			"policy_violations":   []string{"ungrounded_statement", "missing_citation"},
+			"notes":               "phase13 evaluation flagged ungrounded response claims",
+		},
+		http.StatusCreated,
+	)
+	defer createEvaluationResponse.Body.Close()
+	var evaluation models.AITriageEvaluation
+	decodeJSONResponse(t, createEvaluationBody, &evaluation)
+	if strings.TrimSpace(evaluation.ID) == "" {
+		t.Fatal("expected ai triage evaluation id")
+	}
+	if evaluation.Verdict != "needs_review" {
+		t.Fatalf("expected verdict needs_review, got %s", evaluation.Verdict)
+	}
+
+	listEvaluationsResponse, listEvaluationsBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/ai/triage/evaluations?verdict=needs_review&triage_request_id="+triage.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer listEvaluationsResponse.Body.Close()
+	var listEvaluationsPayload struct {
+		Items []models.AITriageEvaluation `json:"items"`
+	}
+	decodeJSONResponse(t, listEvaluationsBody, &listEvaluationsPayload)
+	if len(listEvaluationsPayload.Items) != 1 {
+		t.Fatalf("expected 1 ai triage evaluation, got %d", len(listEvaluationsPayload.Items))
+	}
+
 	listRequestsResponse, listRequestsBody := mustJSONRequest(
 		t,
 		client,
@@ -162,5 +210,8 @@ func TestPhase13AIGatewayPolicyAndTriageFlow(t *testing.T) {
 	decodeJSONResponse(t, listRequestsBody, &listRequestsPayload)
 	if len(listRequestsPayload.Items) != 1 {
 		t.Fatalf("expected 1 ai triage request, got %d", len(listRequestsPayload.Items))
+	}
+	if listRequestsPayload.Items[0].SafetyState != "review_required" {
+		t.Fatalf("expected triage safety_state review_required after evaluation, got %s", listRequestsPayload.Items[0].SafetyState)
 	}
 }

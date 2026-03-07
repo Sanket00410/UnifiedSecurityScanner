@@ -131,6 +131,7 @@ type stubAPIStore struct {
 	detectionDistributions     []models.DetectionContentDistribution
 	aiPolicy                   models.AIGatewayPolicy
 	aiTriageRequests           []models.AITriageRequest
+	aiEvaluations              []models.AITriageEvaluation
 	policy                     models.Policy
 	policies                   []models.Policy
 	policyVersions             []models.PolicyVersion
@@ -3298,6 +3299,45 @@ func (s *stubAPIStore) CreateAITriageSummaryForTenant(_ context.Context, tenantI
 		CreatedAt:    now,
 	}
 	s.aiTriageRequests = append([]models.AITriageRequest{item}, s.aiTriageRequests...)
+	return item, nil
+}
+
+func (s *stubAPIStore) ListAITriageEvaluationsForTenant(_ context.Context, _ string, verdict string, triageRequestID string, _ int) ([]models.AITriageEvaluation, error) {
+	items := make([]models.AITriageEvaluation, 0, len(s.aiEvaluations))
+	for _, item := range s.aiEvaluations {
+		if strings.TrimSpace(verdict) != "" && !strings.EqualFold(strings.TrimSpace(item.Verdict), strings.TrimSpace(verdict)) {
+			continue
+		}
+		if strings.TrimSpace(triageRequestID) != "" && !strings.EqualFold(strings.TrimSpace(item.TriageRequestID), strings.TrimSpace(triageRequestID)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) RecordAITriageEvaluationForTenant(_ context.Context, tenantID string, actor string, request models.RecordAITriageEvaluationRequest) (models.AITriageEvaluation, error) {
+	now := time.Now().UTC()
+	grounded := false
+	if request.Grounded != nil {
+		grounded = *request.Grounded
+	}
+	item := models.AITriageEvaluation{
+		ID:                 fmt.Sprintf("ai-eval-%d", now.UnixNano()),
+		TenantID:           strings.TrimSpace(tenantID),
+		TriageRequestID:    strings.TrimSpace(request.TriageRequestID),
+		Verdict:            strings.TrimSpace(request.Verdict),
+		Grounded:           grounded,
+		HallucinationScore: request.HallucinationScore,
+		PolicyViolations:   request.PolicyViolations,
+		Evaluator:          strings.TrimSpace(actor),
+		Notes:              strings.TrimSpace(request.Notes),
+		CreatedAt:          now,
+	}
+	if item.Verdict == "" {
+		item.Verdict = "needs_review"
+	}
+	s.aiEvaluations = append([]models.AITriageEvaluation{item}, s.aiEvaluations...)
 	return item, nil
 }
 

@@ -46,3 +46,25 @@ type CreateAITriageSummaryRequest struct {
 	FindingIDs     []string `json:"finding_ids"`
 	MaxOutputChars *int64   `json:"max_output_chars"`
 }
+
+type AITriageEvaluation struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id,omitempty"`
+	TriageRequestID    string    `json:"triage_request_id"`
+	Verdict            string    `json:"verdict"`
+	Grounded           bool      `json:"grounded"`
+	HallucinationScore float64   `json:"hallucination_score"`
+	PolicyViolations   []string  `json:"policy_violations,omitempty"`
+	Evaluator          string    `json:"evaluator,omitempty"`
+	Notes              string    `json:"notes,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type RecordAITriageEvaluationRequest struct {
+	TriageRequestID    string   `json:"triage_request_id"`
+	Verdict            string   `json:"verdict"`
+	Grounded           *bool    `json:"grounded,omitempty"`
+	HallucinationScore float64  `json:"hallucination_score"`
+	PolicyViolations   []string `json:"policy_violations"`
+	Notes              string   `json:"notes"`
+}

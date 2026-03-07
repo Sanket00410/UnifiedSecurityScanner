@@ -60,6 +60,7 @@ var (
 	detectionQualityRunSequence      uint64
 	detectionDistributionSequence    uint64
 	aiTriageRequestSequence          uint64
+	aiEvaluationSequence             uint64
 	runtimeFindingEnrichmentSequence uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
@@ -113,6 +114,7 @@ var (
 	ErrAIPolicyModelDenied           = errors.New("ai model not permitted by policy")
 	ErrAIPolicyInputTooLarge         = errors.New("ai input exceeds policy limits")
 	ErrAIPolicyEvidenceRequired      = errors.New("ai evidence references are required by policy")
+	ErrAITriageRequestNotFound       = errors.New("ai triage request not found")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )

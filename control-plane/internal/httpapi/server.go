@@ -213,6 +213,8 @@ type apiStore interface {
 	UpsertAIGatewayPolicyForTenant(ctx context.Context, tenantID string, actor string, request models.UpsertAIGatewayPolicyRequest) (models.AIGatewayPolicy, error)
 	ListAITriageRequestsForTenant(ctx context.Context, tenantID string, requestKind string, limit int) ([]models.AITriageRequest, error)
 	CreateAITriageSummaryForTenant(ctx context.Context, tenantID string, actor string, request models.CreateAITriageSummaryRequest) (models.AITriageRequest, error)
+	ListAITriageEvaluationsForTenant(ctx context.Context, tenantID string, verdict string, triageRequestID string, limit int) ([]models.AITriageEvaluation, error)
+	RecordAITriageEvaluationForTenant(ctx context.Context, tenantID string, actor string, request models.RecordAITriageEvaluationRequest) (models.AITriageEvaluation, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -499,6 +501,10 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "ai_policy", "ai_policy", server.handleAIPolicy))
 	mux.HandleFunc("/v1/ai/triage/requests", server.withUserAuth(auth.PermissionFindingsRead, "ai_triage_requests.list", "ai_triage_request", server.handleAITriageRequests))
 	mux.HandleFunc("/v1/ai/triage/summaries", server.withUserAuth(auth.PermissionPoliciesWrite, "ai_triage_summary.create", "ai_triage_request", server.handleAITriageSummaries))
+	mux.HandleFunc("/v1/ai/triage/evaluations", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionFindingsRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "ai_triage_evaluations", "ai_triage_evaluation", server.handleAITriageEvaluations))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -5879,6 +5885,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/detection/distributions/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/detection/distributions/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/ai/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/ai/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

@@ -116,6 +116,63 @@ func (s *Server) handleAITriageSummaries(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, http.StatusCreated, item)
 }
 
+func (s *Server) handleAITriageEvaluations(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		items, err := s.store.ListAITriageEvaluationsForTenant(
+			r.Context(),
+			principal.OrganizationID,
+			strings.TrimSpace(r.URL.Query().Get("verdict")),
+			strings.TrimSpace(r.URL.Query().Get("triage_request_id")),
+			limit,
+		)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_ai_triage_evaluations_failed", "ai triage evaluations could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.RecordAITriageEvaluationRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.TriageRequestID) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "triage_request_id is required")
+			return
+		}
+
+		item, err := s.store.RecordAITriageEvaluationForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if s.writeAIGatewayMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_ai_triage_evaluation_failed", "ai triage evaluation could not be recorded")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
 func (s *Server) writeAIGatewayMutationError(w http.ResponseWriter, err error) bool {
 	switch {
 	case errors.Is(err, jobs.ErrAIPolicyModelDenied):
@@ -126,6 +183,9 @@ func (s *Server) writeAIGatewayMutationError(w http.ResponseWriter, err error) b
 		return true
 	case errors.Is(err, jobs.ErrAIPolicyEvidenceRequired):
 		s.writeError(w, http.StatusBadRequest, "ai_evidence_required", "evidence references are required by ai policy")
+		return true
+	case errors.Is(err, jobs.ErrAITriageRequestNotFound):
+		s.writeError(w, http.StatusNotFound, "ai_triage_request_not_found", "the referenced ai triage request was not found")
 		return true
 	}
 
