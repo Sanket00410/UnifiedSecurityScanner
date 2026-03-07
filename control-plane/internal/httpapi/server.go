@@ -153,6 +153,11 @@ type apiStore interface {
 	ApproveValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
 	ActivateValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string) (models.ValidationEngagement, bool, error)
 	CloseValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
+	ListValidationAttackTracesForTenant(ctx context.Context, tenantID string, engagementID string, limit int) ([]models.ValidationAttackTrace, error)
+	CreateValidationAttackTraceForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationAttackTraceRequest) (models.ValidationAttackTrace, error)
+	ListValidationManualTestsForTenant(ctx context.Context, tenantID string, engagementID string, status string, limit int) ([]models.ValidationManualTestCase, error)
+	CreateValidationManualTestForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationManualTestCaseRequest) (models.ValidationManualTestCase, error)
+	UpdateValidationManualTestForTenant(ctx context.Context, tenantID string, testCaseID string, actor string, request models.UpdateValidationManualTestCaseRequest) (models.ValidationManualTestCase, bool, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -364,6 +369,15 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionPoliciesWrite,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "validation_engagement", "validation_engagement", server.handleValidationEngagementRoute))
+	mux.HandleFunc("/v1/validation/attack-traces", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_attack_traces", "validation_attack_trace", server.handleValidationAttackTraces))
+	mux.HandleFunc("/v1/validation/manual-tests", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_manual_tests", "validation_manual_test", server.handleValidationManualTests))
+	mux.HandleFunc("/v1/validation/manual-tests/", server.withUserAuth(auth.PermissionPoliciesWrite, "validation_manual_test.update", "validation_manual_test", server.handleValidationManualTestRoute))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -4031,6 +4045,159 @@ func (s *Server) handleValidationEngagementRoute(w http.ResponseWriter, r *http.
 	default:
 		s.writeError(w, http.StatusNotFound, "validation_engagement_route_not_found", "the requested validation engagement route was not found")
 	}
+}
+
+func (s *Server) handleValidationAttackTraces(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		engagementID := strings.TrimSpace(r.URL.Query().Get("engagement_id"))
+
+		items, err := s.store.ListValidationAttackTracesForTenant(r.Context(), principal.OrganizationID, engagementID, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_validation_attack_traces_failed", "validation attack traces could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateValidationAttackTraceRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.EngagementID) == "" || strings.TrimSpace(request.Title) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "engagement_id and title are required")
+			return
+		}
+
+		item, err := s.store.CreateValidationAttackTraceForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_validation_attack_trace_failed", "validation attack trace could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleValidationManualTests(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		engagementID := strings.TrimSpace(r.URL.Query().Get("engagement_id"))
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+
+		items, err := s.store.ListValidationManualTestsForTenant(r.Context(), principal.OrganizationID, engagementID, status, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_validation_manual_tests_failed", "validation manual tests could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateValidationManualTestCaseRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.EngagementID) == "" || strings.TrimSpace(request.Title) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "engagement_id and title are required")
+			return
+		}
+
+		item, err := s.store.CreateValidationManualTestForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_validation_manual_test_failed", "validation manual test case could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleValidationManualTestRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		s.writeMethodNotAllowed(w)
+		return
+	}
+
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	testCaseID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/validation/manual-tests/"))
+	if testCaseID == "" || strings.Contains(testCaseID, "/") {
+		s.writeError(w, http.StatusNotFound, "validation_manual_test_not_found", "validation manual test case was not found")
+		return
+	}
+
+	defer r.Body.Close()
+
+	var request models.UpdateValidationManualTestCaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	item, found, err := s.store.UpdateValidationManualTestForTenant(r.Context(), principal.OrganizationID, testCaseID, principal.Email, request)
+	if err != nil {
+		if s.writeValidationEngagementMutationError(w, err) {
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, "update_validation_manual_test_failed", "validation manual test case could not be updated")
+		return
+	}
+	if !found {
+		s.writeError(w, http.StatusNotFound, "validation_manual_test_not_found", "validation manual test case was not found")
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {

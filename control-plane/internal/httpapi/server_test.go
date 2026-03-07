@@ -107,6 +107,8 @@ type stubAPIStore struct {
 	notifications            []models.NotificationEvent
 	notificationSweep        models.NotificationSweepResult
 	validationEngagements    []models.ValidationEngagement
+	validationAttackTraces   []models.ValidationAttackTrace
+	validationManualTests    []models.ValidationManualTestCase
 	validationEngagementErr  error
 	policy                   models.Policy
 	policies                 []models.Policy
@@ -1964,6 +1966,135 @@ func (s *stubAPIStore) CloseValidationEngagementForTenant(_ context.Context, _ s
 		return item, true, nil
 	}
 	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) ListValidationAttackTracesForTenant(_ context.Context, _ string, engagementID string, _ int) ([]models.ValidationAttackTrace, error) {
+	if s.validationEngagementErr != nil {
+		return nil, s.validationEngagementErr
+	}
+	if strings.TrimSpace(engagementID) == "" {
+		return s.validationAttackTraces, nil
+	}
+	filtered := make([]models.ValidationAttackTrace, 0, len(s.validationAttackTraces))
+	for _, item := range s.validationAttackTraces {
+		if strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) CreateValidationAttackTraceForTenant(_ context.Context, tenantID string, actor string, request models.CreateValidationAttackTraceRequest) (models.ValidationAttackTrace, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationAttackTrace{}, s.validationEngagementErr
+	}
+	now := time.Now().UTC()
+	item := models.ValidationAttackTrace{
+		ID:             fmt.Sprintf("validation-trace-%d", now.UnixNano()),
+		TenantID:       strings.TrimSpace(tenantID),
+		EngagementID:   strings.TrimSpace(request.EngagementID),
+		ScanJobID:      strings.TrimSpace(request.ScanJobID),
+		TaskID:         strings.TrimSpace(request.TaskID),
+		AdapterID:      strings.TrimSpace(request.AdapterID),
+		TargetKind:     strings.TrimSpace(request.TargetKind),
+		Target:         strings.TrimSpace(request.Target),
+		Title:          strings.TrimSpace(request.Title),
+		Summary:        strings.TrimSpace(request.Summary),
+		Severity:       strings.TrimSpace(request.Severity),
+		EvidenceRefs:   request.EvidenceRefs,
+		Artifacts:      request.Artifacts,
+		ReplayManifest: request.ReplayManifest,
+		CreatedBy:      strings.TrimSpace(actor),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	s.validationAttackTraces = append([]models.ValidationAttackTrace{item}, s.validationAttackTraces...)
+	return item, nil
+}
+
+func (s *stubAPIStore) ListValidationManualTestsForTenant(_ context.Context, _ string, engagementID string, status string, _ int) ([]models.ValidationManualTestCase, error) {
+	if s.validationEngagementErr != nil {
+		return nil, s.validationEngagementErr
+	}
+	filtered := make([]models.ValidationManualTestCase, 0, len(s.validationManualTests))
+	for _, item := range s.validationManualTests {
+		if strings.TrimSpace(engagementID) != "" && !strings.EqualFold(strings.TrimSpace(item.EngagementID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) CreateValidationManualTestForTenant(_ context.Context, tenantID string, actor string, request models.CreateValidationManualTestCaseRequest) (models.ValidationManualTestCase, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationManualTestCase{}, s.validationEngagementErr
+	}
+	now := time.Now().UTC()
+	item := models.ValidationManualTestCase{
+		ID:           fmt.Sprintf("validation-manual-test-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		EngagementID: strings.TrimSpace(request.EngagementID),
+		WSTGID:       strings.TrimSpace(request.WSTGID),
+		Category:     strings.TrimSpace(request.Category),
+		Title:        strings.TrimSpace(request.Title),
+		Status:       strings.TrimSpace(request.Status),
+		AssignedTo:   strings.TrimSpace(request.AssignedTo),
+		Notes:        strings.TrimSpace(request.Notes),
+		EvidenceRefs: request.EvidenceRefs,
+		CreatedBy:    strings.TrimSpace(actor),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if item.Status == "" {
+		item.Status = "not_started"
+	}
+	s.validationManualTests = append([]models.ValidationManualTestCase{item}, s.validationManualTests...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateValidationManualTestForTenant(_ context.Context, _ string, testCaseID string, actor string, request models.UpdateValidationManualTestCaseRequest) (models.ValidationManualTestCase, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationManualTestCase{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationManualTests {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(testCaseID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.WSTGID); value != "" {
+			item.WSTGID = value
+		}
+		if value := strings.TrimSpace(request.Category); value != "" {
+			item.Category = value
+		}
+		if value := strings.TrimSpace(request.Title); value != "" {
+			item.Title = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.AssignedTo); value != "" {
+			item.AssignedTo = value
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		if request.EvidenceRefs != nil {
+			item.EvidenceRefs = request.EvidenceRefs
+		}
+		if strings.EqualFold(strings.TrimSpace(item.Status), "passed") || strings.EqualFold(strings.TrimSpace(item.Status), "failed") {
+			now := time.Now().UTC()
+			item.CompletedBy = strings.TrimSpace(actor)
+			item.CompletedAt = &now
+		}
+		item.UpdatedAt = time.Now().UTC()
+		s.validationManualTests[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationManualTestCase{}, false, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {

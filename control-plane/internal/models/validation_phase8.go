@@ -53,3 +53,77 @@ type UpdateValidationEngagementRequest struct {
 type ValidationEngagementDecisionRequest struct {
 	Reason string `json:"reason"`
 }
+
+type ValidationAttackTrace struct {
+	ID             string         `json:"id"`
+	TenantID       string         `json:"tenant_id,omitempty"`
+	EngagementID   string         `json:"engagement_id"`
+	ScanJobID      string         `json:"scan_job_id,omitempty"`
+	TaskID         string         `json:"task_id,omitempty"`
+	AdapterID      string         `json:"adapter_id,omitempty"`
+	TargetKind     string         `json:"target_kind,omitempty"`
+	Target         string         `json:"target,omitempty"`
+	Title          string         `json:"title"`
+	Summary        string         `json:"summary,omitempty"`
+	Severity       string         `json:"severity,omitempty"`
+	EvidenceRefs   []string       `json:"evidence_refs,omitempty"`
+	Artifacts      map[string]any `json:"artifacts,omitempty"`
+	ReplayManifest map[string]any `json:"replay_manifest,omitempty"`
+	CreatedBy      string         `json:"created_by,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+type CreateValidationAttackTraceRequest struct {
+	EngagementID   string         `json:"engagement_id"`
+	ScanJobID      string         `json:"scan_job_id"`
+	TaskID         string         `json:"task_id"`
+	AdapterID      string         `json:"adapter_id"`
+	TargetKind     string         `json:"target_kind"`
+	Target         string         `json:"target"`
+	Title          string         `json:"title"`
+	Summary        string         `json:"summary"`
+	Severity       string         `json:"severity"`
+	EvidenceRefs   []string       `json:"evidence_refs"`
+	Artifacts      map[string]any `json:"artifacts,omitempty"`
+	ReplayManifest map[string]any `json:"replay_manifest,omitempty"`
+}
+
+type ValidationManualTestCase struct {
+	ID           string     `json:"id"`
+	TenantID     string     `json:"tenant_id,omitempty"`
+	EngagementID string     `json:"engagement_id"`
+	WSTGID       string     `json:"wstg_id,omitempty"`
+	Category     string     `json:"category,omitempty"`
+	Title        string     `json:"title"`
+	Status       string     `json:"status"`
+	AssignedTo   string     `json:"assigned_to,omitempty"`
+	Notes        string     `json:"notes,omitempty"`
+	EvidenceRefs []string   `json:"evidence_refs,omitempty"`
+	CompletedBy  string     `json:"completed_by,omitempty"`
+	CompletedAt  *time.Time `json:"completed_at,omitempty"`
+	CreatedBy    string     `json:"created_by,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type CreateValidationManualTestCaseRequest struct {
+	EngagementID string   `json:"engagement_id"`
+	WSTGID       string   `json:"wstg_id"`
+	Category     string   `json:"category"`
+	Title        string   `json:"title"`
+	Status       string   `json:"status"`
+	AssignedTo   string   `json:"assigned_to"`
+	Notes        string   `json:"notes"`
+	EvidenceRefs []string `json:"evidence_refs"`
+}
+
+type UpdateValidationManualTestCaseRequest struct {
+	WSTGID       string   `json:"wstg_id"`
+	Category     string   `json:"category"`
+	Title        string   `json:"title"`
+	Status       string   `json:"status"`
+	AssignedTo   string   `json:"assigned_to"`
+	Notes        string   `json:"notes"`
+	EvidenceRefs []string `json:"evidence_refs"`
+}

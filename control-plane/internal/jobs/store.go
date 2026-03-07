@@ -43,6 +43,8 @@ var (
 	webCoverageBaselineSequence     uint64
 	webRuntimeCoverageRunSequence   uint64
 	validationEngagementSequence    uint64
+	validationAttackTraceSequence   uint64
+	validationManualTestSequence    uint64
 	apiAssetSequence                uint64
 	apiEndpointSequence             uint64
 	externalAssetSequence           uint64
@@ -75,6 +77,7 @@ var (
 	ErrValidationEngagementInactive = errors.New("validation engagement is not active")
 	ErrValidationEngagementScope    = errors.New("validation engagement scope mismatch")
 	ErrValidationEngagementTool     = errors.New("validation engagement does not allow requested tool")
+	ErrValidationManualTestNotFound = errors.New("validation manual test case not found")
 	ErrCertificateAuthorityDisabled = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound  = errors.New("workload certificate not found")
 )
