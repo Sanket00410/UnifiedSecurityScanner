@@ -187,6 +187,10 @@ type apiStore interface {
 	UpdateRuntimeTelemetryConnectorForTenant(ctx context.Context, tenantID string, connectorID string, actor string, request models.UpdateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, bool, error)
 	ListRuntimeTelemetryEventsForTenant(ctx context.Context, tenantID string, query models.RuntimeTelemetryEventQuery) ([]models.RuntimeTelemetryEvent, error)
 	IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenantID string, request models.IngestRuntimeTelemetryEventRequest) (models.RuntimeTelemetryEvent, error)
+	ListComplianceControlMappingsForTenant(ctx context.Context, tenantID string, framework string, sourceID string, limit int) ([]models.ComplianceControlMapping, error)
+	CreateComplianceControlMappingForTenant(ctx context.Context, tenantID string, actor string, request models.CreateComplianceControlMappingRequest) (models.ComplianceControlMapping, error)
+	UpdateComplianceControlMappingForTenant(ctx context.Context, tenantID string, mappingID string, actor string, request models.UpdateComplianceControlMappingRequest) (models.ComplianceControlMapping, bool, error)
+	GetComplianceSummaryForTenant(ctx context.Context, tenantID string) (models.ComplianceSummary, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -438,6 +442,12 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionAssetsWrite,
 	}, "runtime_telemetry_events", "runtime_telemetry_event", server.handleRuntimeTelemetryEvents))
+	mux.HandleFunc("/v1/compliance/mappings", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionFindingsRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "compliance_mappings", "compliance_mapping", server.handleComplianceMappings))
+	mux.HandleFunc("/v1/compliance/mappings/", server.withUserAuth(auth.PermissionPoliciesWrite, "compliance_mapping.update", "compliance_mapping", server.handleComplianceMappingRoute))
+	mux.HandleFunc("/v1/compliance/summary", server.withUserAuth(auth.PermissionFindingsRead, "compliance.summary", "compliance_summary", server.handleComplianceSummary))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -5794,6 +5804,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/runtime/telemetry/connectors/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/runtime/telemetry/connectors/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/compliance/mappings/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/compliance/mappings/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

@@ -118,6 +118,8 @@ type stubAPIStore struct {
 	designControlMappings      []models.DesignControlMapping
 	runtimeTelemetryConnectors []models.RuntimeTelemetryConnector
 	runtimeTelemetryEvents     []models.RuntimeTelemetryEvent
+	complianceMappings         []models.ComplianceControlMapping
+	complianceSummary          models.ComplianceSummary
 	policy                     models.Policy
 	policies                   []models.Policy
 	policyVersions             []models.PolicyVersion
@@ -2754,6 +2756,94 @@ func (s *stubAPIStore) IngestRuntimeTelemetryEventForTenant(_ context.Context, t
 	}
 	s.runtimeTelemetryEvents = append([]models.RuntimeTelemetryEvent{item}, s.runtimeTelemetryEvents...)
 	return item, nil
+}
+
+func (s *stubAPIStore) ListComplianceControlMappingsForTenant(_ context.Context, _ string, framework string, sourceID string, _ int) ([]models.ComplianceControlMapping, error) {
+	items := make([]models.ComplianceControlMapping, 0, len(s.complianceMappings))
+	for _, item := range s.complianceMappings {
+		if strings.TrimSpace(framework) != "" && !strings.EqualFold(strings.TrimSpace(item.Framework), strings.TrimSpace(framework)) {
+			continue
+		}
+		if strings.TrimSpace(sourceID) != "" && !strings.EqualFold(strings.TrimSpace(item.SourceID), strings.TrimSpace(sourceID)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) CreateComplianceControlMappingForTenant(_ context.Context, tenantID string, actor string, request models.CreateComplianceControlMappingRequest) (models.ComplianceControlMapping, error) {
+	now := time.Now().UTC()
+	item := models.ComplianceControlMapping{
+		ID:           fmt.Sprintf("compliance-mapping-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		SourceKind:   strings.TrimSpace(request.SourceKind),
+		SourceID:     strings.TrimSpace(request.SourceID),
+		FindingID:    strings.TrimSpace(request.FindingID),
+		Framework:    strings.TrimSpace(request.Framework),
+		Category:     strings.TrimSpace(request.Category),
+		ControlID:    strings.TrimSpace(request.ControlID),
+		ControlTitle: strings.TrimSpace(request.ControlTitle),
+		Status:       strings.TrimSpace(request.Status),
+		EvidenceRef:  strings.TrimSpace(request.EvidenceRef),
+		Notes:        strings.TrimSpace(request.Notes),
+		CreatedBy:    strings.TrimSpace(actor),
+		UpdatedBy:    strings.TrimSpace(actor),
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if item.Status == "" {
+		item.Status = "identified"
+	}
+	s.complianceMappings = append([]models.ComplianceControlMapping{item}, s.complianceMappings...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateComplianceControlMappingForTenant(_ context.Context, _ string, mappingID string, actor string, request models.UpdateComplianceControlMappingRequest) (models.ComplianceControlMapping, bool, error) {
+	for idx, item := range s.complianceMappings {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(mappingID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Framework); value != "" {
+			item.Framework = value
+		}
+		if value := strings.TrimSpace(request.Category); value != "" {
+			item.Category = value
+		}
+		if value := strings.TrimSpace(request.ControlID); value != "" {
+			item.ControlID = value
+		}
+		if value := strings.TrimSpace(request.ControlTitle); value != "" {
+			item.ControlTitle = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.EvidenceRef); value != "" {
+			item.EvidenceRef = value
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.complianceMappings[idx] = item
+		return item, true, nil
+	}
+	return models.ComplianceControlMapping{}, false, nil
+}
+
+func (s *stubAPIStore) GetComplianceSummaryForTenant(context.Context, string) (models.ComplianceSummary, error) {
+	if s.complianceSummary.FrameworkTotals == nil {
+		s.complianceSummary.FrameworkTotals = map[string]int64{}
+	}
+	if s.complianceSummary.StatusTotals == nil {
+		s.complianceSummary.StatusTotals = map[string]int64{}
+	}
+	if s.complianceSummary.FrameworkStatus == nil {
+		s.complianceSummary.FrameworkStatus = map[string]map[string]int64{}
+	}
+	return s.complianceSummary, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {
