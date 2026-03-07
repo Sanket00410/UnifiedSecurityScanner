@@ -57,6 +57,7 @@ var (
 	detectionRulepackSequence        uint64
 	detectionRulepackVersionSequence uint64
 	detectionRulepackRolloutSequence uint64
+	detectionQualityRunSequence      uint64
 	aiTriageRequestSequence          uint64
 	runtimeFindingEnrichmentSequence uint64
 	apiAssetSequence                 uint64
@@ -106,6 +107,7 @@ var (
 	ErrComplianceMappingNotFound     = errors.New("compliance control mapping not found")
 	ErrDetectionRulepackNotFound     = errors.New("detection rulepack not found")
 	ErrDetectionVersionNotFound      = errors.New("detection rulepack version not found")
+	ErrDetectionQualityGateFailed    = errors.New("detection quality gate failed")
 	ErrAIPolicyModelDenied           = errors.New("ai model not permitted by policy")
 	ErrAIPolicyInputTooLarge         = errors.New("ai input exceeds policy limits")
 	ErrAIPolicyEvidenceRequired      = errors.New("ai evidence references are required by policy")

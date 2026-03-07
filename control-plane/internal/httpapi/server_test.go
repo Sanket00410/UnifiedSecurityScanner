@@ -127,6 +127,7 @@ type stubAPIStore struct {
 	detectionRulepacks         []models.DetectionRulepack
 	detectionRulepackVersions  []models.DetectionRulepackVersion
 	detectionRulepackRollouts  []models.DetectionRulepackRollout
+	detectionQualityRuns       []models.DetectionRulepackQualityRun
 	aiPolicy                   models.AIGatewayPolicy
 	aiTriageRequests           []models.AITriageRequest
 	policy                     models.Policy
@@ -3071,6 +3072,68 @@ func (s *stubAPIStore) ListDetectionRulepackRolloutsForTenant(_ context.Context,
 		}
 	}
 	return items, nil
+}
+
+func (s *stubAPIStore) ListDetectionRulepackQualityRunsForTenant(_ context.Context, _ string, rulepackID string, versionID string, _ int) ([]models.DetectionRulepackQualityRun, error) {
+	items := make([]models.DetectionRulepackQualityRun, 0, len(s.detectionQualityRuns))
+	for _, item := range s.detectionQualityRuns {
+		if !strings.EqualFold(strings.TrimSpace(item.RulepackID), strings.TrimSpace(rulepackID)) {
+			continue
+		}
+		if strings.TrimSpace(versionID) != "" && !strings.EqualFold(strings.TrimSpace(item.VersionID), strings.TrimSpace(versionID)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) RecordDetectionRulepackQualityRunForTenant(_ context.Context, tenantID string, rulepackID string, actor string, request models.RecordDetectionRulepackQualityRunRequest) (models.DetectionRulepackQualityRun, error) {
+	now := time.Now().UTC()
+	executedAt := now
+	if request.ExecutedAt != nil {
+		executedAt = request.ExecutedAt.UTC()
+	}
+
+	item := models.DetectionRulepackQualityRun{
+		ID:                 fmt.Sprintf("rulepack-quality-%d", now.UnixNano()),
+		TenantID:           strings.TrimSpace(tenantID),
+		RulepackID:         strings.TrimSpace(rulepackID),
+		VersionID:          strings.TrimSpace(request.VersionID),
+		BenchmarkName:      strings.TrimSpace(request.BenchmarkName),
+		DatasetRef:         strings.TrimSpace(request.DatasetRef),
+		RunStatus:          strings.TrimSpace(request.RunStatus),
+		QualityScore:       request.QualityScore,
+		TotalTests:         request.TotalTests,
+		PassedTests:        request.PassedTests,
+		FailedTests:        request.FailedTests,
+		FalsePositiveCount: request.FalsePositiveCount,
+		FalseNegativeCount: request.FalseNegativeCount,
+		RegressionCount:    request.RegressionCount,
+		SuppressionDelta:   request.SuppressionDelta,
+		Notes:              strings.TrimSpace(request.Notes),
+		ExecutedBy:         strings.TrimSpace(actor),
+		ExecutedAt:         executedAt,
+		CreatedAt:          now,
+	}
+	if item.RunStatus == "" {
+		if item.FailedTests == 0 && item.RegressionCount == 0 {
+			item.RunStatus = "passed"
+		} else {
+			item.RunStatus = "failed"
+		}
+	}
+	s.detectionQualityRuns = append([]models.DetectionRulepackQualityRun{item}, s.detectionQualityRuns...)
+
+	for idx := range s.detectionRulepackVersions {
+		if strings.EqualFold(strings.TrimSpace(s.detectionRulepackVersions[idx].RulepackID), strings.TrimSpace(rulepackID)) &&
+			strings.EqualFold(strings.TrimSpace(s.detectionRulepackVersions[idx].ID), strings.TrimSpace(item.VersionID)) {
+			s.detectionRulepackVersions[idx].QualityScore = item.QualityScore
+			break
+		}
+	}
+
+	return item, nil
 }
 
 func (s *stubAPIStore) GetAIGatewayPolicyForTenant(_ context.Context, tenantID string) (models.AIGatewayPolicy, bool, error) {

@@ -203,6 +203,8 @@ type apiStore interface {
 	CreateDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.CreateDetectionRulepackVersionRequest) (models.DetectionRulepackVersion, error)
 	PromoteDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, actor string, request models.PromoteDetectionRulepackVersionRequest) (models.DetectionRulepackRollout, bool, error)
 	ListDetectionRulepackRolloutsForTenant(ctx context.Context, tenantID string, rulepackID string, limit int) ([]models.DetectionRulepackRollout, error)
+	ListDetectionRulepackQualityRunsForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, limit int) ([]models.DetectionRulepackQualityRun, error)
+	RecordDetectionRulepackQualityRunForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.RecordDetectionRulepackQualityRunRequest) (models.DetectionRulepackQualityRun, error)
 	GetAIGatewayPolicyForTenant(ctx context.Context, tenantID string) (models.AIGatewayPolicy, bool, error)
 	UpsertAIGatewayPolicyForTenant(ctx context.Context, tenantID string, actor string, request models.UpsertAIGatewayPolicyRequest) (models.AIGatewayPolicy, error)
 	ListAITriageRequestsForTenant(ctx context.Context, tenantID string, requestKind string, limit int) ([]models.AITriageRequest, error)

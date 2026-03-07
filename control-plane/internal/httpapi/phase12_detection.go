@@ -129,6 +129,8 @@ func (s *Server) handleDetectionRulepackRoute(w http.ResponseWriter, r *http.Req
 		s.handleDetectionRulepackVersionsRoute(w, r, principal, rulepackID, parts[2:])
 	case "rollouts":
 		s.handleDetectionRulepackRolloutsRoute(w, r, principal, rulepackID, parts[2:])
+	case "quality-runs":
+		s.handleDetectionRulepackQualityRunsRoute(w, r, principal, rulepackID, parts[2:])
 	default:
 		s.writeError(w, http.StatusNotFound, "detection_rulepack_route_not_found", "the requested detection rulepack route was not found")
 	}
@@ -196,6 +198,10 @@ func (s *Server) handleDetectionRulepackVersionsRoute(w http.ResponseWriter, r *
 
 		item, found, err := s.store.PromoteDetectionRulepackVersionForTenant(r.Context(), principal.OrganizationID, rulepackID, versionID, principal.Email, request)
 		if err != nil {
+			if errors.Is(err, jobs.ErrDetectionQualityGateFailed) {
+				s.writeError(w, http.StatusConflict, "detection_quality_gate_failed", err.Error())
+				return
+			}
 			if s.writeDetectionMutationError(w, err) {
 				return
 			}
@@ -211,6 +217,71 @@ func (s *Server) handleDetectionRulepackVersionsRoute(w http.ResponseWriter, r *
 	}
 
 	s.writeError(w, http.StatusNotFound, "detection_rulepack_versions_route_not_found", "the requested detection rulepack versions route was not found")
+}
+
+func (s *Server) handleDetectionRulepackQualityRunsRoute(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal, rulepackID string, tail []string) {
+	if len(tail) != 0 {
+		s.writeError(w, http.StatusNotFound, "detection_rulepack_quality_runs_route_not_found", "the requested detection rulepack quality runs route was not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+
+		items, err := s.store.ListDetectionRulepackQualityRunsForTenant(
+			r.Context(),
+			principal.OrganizationID,
+			rulepackID,
+			strings.TrimSpace(r.URL.Query().Get("version_id")),
+			limit,
+		)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_detection_rulepack_quality_runs_failed", "detection rulepack quality runs could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.RecordDetectionRulepackQualityRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.VersionID) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "version_id is required")
+			return
+		}
+
+		item, err := s.store.RecordDetectionRulepackQualityRunForTenant(r.Context(), principal.OrganizationID, rulepackID, principal.Email, request)
+		if err != nil {
+			if errors.Is(err, jobs.ErrDetectionRulepackNotFound) {
+				s.writeError(w, http.StatusNotFound, "detection_rulepack_not_found", "detection rulepack was not found")
+				return
+			}
+			if errors.Is(err, jobs.ErrDetectionVersionNotFound) {
+				s.writeError(w, http.StatusNotFound, "detection_rulepack_version_not_found", "detection rulepack version was not found")
+				return
+			}
+			if s.writeDetectionMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_detection_rulepack_quality_run_failed", "detection rulepack quality run could not be recorded")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
 }
 
 func (s *Server) handleDetectionRulepackRolloutsRoute(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal, rulepackID string, tail []string) {

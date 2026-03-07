@@ -53,9 +53,11 @@ type CreateDetectionRulepackVersionRequest struct {
 }
 
 type PromoteDetectionRulepackVersionRequest struct {
-	Phase       string `json:"phase"`
-	TargetScope string `json:"target_scope"`
-	Notes       string `json:"notes"`
+	Phase              string  `json:"phase"`
+	TargetScope        string  `json:"target_scope"`
+	Notes              string  `json:"notes"`
+	RequireQualityGate *bool   `json:"require_quality_gate,omitempty"`
+	MinQualityScore    float64 `json:"min_quality_score,omitempty"`
 }
 
 type DetectionRulepackRollout struct {
@@ -71,4 +73,43 @@ type DetectionRulepackRollout struct {
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+type DetectionRulepackQualityRun struct {
+	ID                 string    `json:"id"`
+	TenantID           string    `json:"tenant_id,omitempty"`
+	RulepackID         string    `json:"rulepack_id"`
+	VersionID          string    `json:"version_id"`
+	BenchmarkName      string    `json:"benchmark_name,omitempty"`
+	DatasetRef         string    `json:"dataset_ref,omitempty"`
+	RunStatus          string    `json:"run_status"`
+	QualityScore       float64   `json:"quality_score"`
+	TotalTests         int64     `json:"total_tests"`
+	PassedTests        int64     `json:"passed_tests"`
+	FailedTests        int64     `json:"failed_tests"`
+	FalsePositiveCount int64     `json:"false_positive_count"`
+	FalseNegativeCount int64     `json:"false_negative_count"`
+	RegressionCount    int64     `json:"regression_count"`
+	SuppressionDelta   int64     `json:"suppression_delta"`
+	Notes              string    `json:"notes,omitempty"`
+	ExecutedBy         string    `json:"executed_by,omitempty"`
+	ExecutedAt         time.Time `json:"executed_at"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type RecordDetectionRulepackQualityRunRequest struct {
+	VersionID          string     `json:"version_id"`
+	BenchmarkName      string     `json:"benchmark_name"`
+	DatasetRef         string     `json:"dataset_ref"`
+	RunStatus          string     `json:"run_status"`
+	QualityScore       float64    `json:"quality_score"`
+	TotalTests         int64      `json:"total_tests"`
+	PassedTests        int64      `json:"passed_tests"`
+	FailedTests        int64      `json:"failed_tests"`
+	FalsePositiveCount int64      `json:"false_positive_count"`
+	FalseNegativeCount int64      `json:"false_negative_count"`
+	RegressionCount    int64      `json:"regression_count"`
+	SuppressionDelta   int64      `json:"suppression_delta"`
+	Notes              string     `json:"notes"`
+	ExecutedAt         *time.Time `json:"executed_at,omitempty"`
 }
