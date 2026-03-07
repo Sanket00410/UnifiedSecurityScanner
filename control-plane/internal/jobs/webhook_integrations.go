@@ -1,0 +1,689 @@
+package jobs
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"unifiedsecurityscanner/control-plane/internal/models"
+)
+
+type webhookIntegrationRecord struct {
+	integration     models.WebhookIntegration
+	secretEncrypted string
+}
+
+func (s *Store) ListWebhookIntegrationsForTenant(ctx context.Context, tenantID string, status string, eventType string, limit int) ([]models.WebhookIntegration, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	status = normalizeWebhookIntegrationStatus(status)
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+		FROM webhook_integrations
+		WHERE tenant_id = $1
+		  AND ($2 = '' OR status = $2)
+		ORDER BY updated_at DESC, id DESC
+		LIMIT $3
+	`, tenantID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list webhook integrations: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.WebhookIntegration, 0, limit)
+	for rows.Next() {
+		record, err := scanWebhookIntegrationRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan webhook integration row: %w", err)
+		}
+		if eventType != "" && !webhookAcceptsEvent(record.integration.EventTypes, eventType) {
+			continue
+		}
+		items = append(items, record.integration)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate webhook integration rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetWebhookIntegrationForTenant(ctx context.Context, tenantID string, webhookID string) (models.WebhookIntegration, bool, error) {
+	record, found, err := s.getWebhookIntegrationRecordForTenant(ctx, tenantID, webhookID)
+	if err != nil || !found {
+		return models.WebhookIntegration{}, found, err
+	}
+	return record.integration, true, nil
+}
+
+func (s *Store) CreateWebhookIntegrationForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebhookIntegrationRequest) (models.WebhookIntegration, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+
+	name := strings.TrimSpace(request.Name)
+	endpointURL := strings.TrimSpace(request.EndpointURL)
+	if name == "" || endpointURL == "" {
+		return models.WebhookIntegration{}, fmt.Errorf("name and endpoint_url are required")
+	}
+	if err := validateWebhookEndpointURL(endpointURL); err != nil {
+		return models.WebhookIntegration{}, err
+	}
+
+	status := normalizeWebhookIntegrationStatus(request.Status)
+	if status == "" {
+		status = "active"
+	}
+	eventTypes := normalizeWebhookEventTypes(request.EventTypes)
+	headers := sanitizeWebhookHeaders(request.Headers)
+
+	now := time.Now().UTC()
+	item := models.WebhookIntegration{
+		ID:            nextWebhookIntegrationID(),
+		TenantID:      tenantID,
+		Name:          name,
+		EndpointURL:   endpointURL,
+		EventTypes:    eventTypes,
+		Headers:       headers,
+		Status:        status,
+		SecretSet:     strings.TrimSpace(request.Secret) != "",
+		CreatedBy:     actor,
+		UpdatedBy:     actor,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		LastAttemptAt: nil,
+		LastSuccessAt: nil,
+	}
+	eventTypesJSON, err := json.Marshal(item.EventTypes)
+	if err != nil {
+		return models.WebhookIntegration{}, fmt.Errorf("marshal webhook event types: %w", err)
+	}
+	headersJSON, err := json.Marshal(item.Headers)
+	if err != nil {
+		return models.WebhookIntegration{}, fmt.Errorf("marshal webhook headers: %w", err)
+	}
+
+	secretEncrypted, err := s.encryptIngestionWebhookSecret(item.TenantID, item.ID, "webhook_integration", strings.TrimSpace(request.Secret))
+	if err != nil {
+		return models.WebhookIntegration{}, fmt.Errorf("encrypt webhook secret: %w", err)
+	}
+
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO webhook_integrations (
+			id, tenant_id, name, endpoint_url, event_types_json, headers_json, status, secret_encrypted,
+			last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			NULL, NULL, $9, $9, $10, $10
+		)
+		RETURNING id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		          secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+	`, item.ID, item.TenantID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status, secretEncrypted, item.CreatedBy, item.CreatedAt)
+
+	record, err := scanWebhookIntegrationRecord(row)
+	if err != nil {
+		return models.WebhookIntegration{}, fmt.Errorf("create webhook integration: %w", err)
+	}
+	return record.integration, nil
+}
+
+func (s *Store) UpdateWebhookIntegrationForTenant(ctx context.Context, tenantID string, webhookID string, actor string, request models.UpdateWebhookIntegrationRequest) (models.WebhookIntegration, bool, error) {
+	record, found, err := s.getWebhookIntegrationRecordForTenant(ctx, tenantID, webhookID)
+	if err != nil || !found {
+		return models.WebhookIntegration{}, found, err
+	}
+
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+	item := record.integration
+	if value := strings.TrimSpace(request.Name); value != "" {
+		item.Name = value
+	}
+	if value := strings.TrimSpace(request.EndpointURL); value != "" {
+		if err := validateWebhookEndpointURL(value); err != nil {
+			return models.WebhookIntegration{}, true, err
+		}
+		item.EndpointURL = value
+	}
+	if request.EventTypes != nil {
+		item.EventTypes = normalizeWebhookEventTypes(request.EventTypes)
+	}
+	if request.Headers != nil {
+		item.Headers = sanitizeWebhookHeaders(request.Headers)
+	}
+	if value := normalizeWebhookIntegrationStatus(request.Status); value != "" {
+		item.Status = value
+	}
+	item.UpdatedBy = actor
+	item.UpdatedAt = time.Now().UTC()
+
+	secretEncrypted := record.secretEncrypted
+	if strings.TrimSpace(request.Secret) != "" {
+		secretEncrypted, err = s.encryptIngestionWebhookSecret(item.TenantID, item.ID, "webhook_integration", strings.TrimSpace(request.Secret))
+		if err != nil {
+			return models.WebhookIntegration{}, true, fmt.Errorf("encrypt webhook secret: %w", err)
+		}
+		item.SecretSet = true
+	}
+	eventTypesJSON, err := json.Marshal(item.EventTypes)
+	if err != nil {
+		return models.WebhookIntegration{}, true, fmt.Errorf("marshal webhook event types: %w", err)
+	}
+	headersJSON, err := json.Marshal(item.Headers)
+	if err != nil {
+		return models.WebhookIntegration{}, true, fmt.Errorf("marshal webhook headers: %w", err)
+	}
+
+	row := s.pool.QueryRow(ctx, `
+		UPDATE webhook_integrations
+		SET name = $3,
+		    endpoint_url = $4,
+		    event_types_json = $5,
+		    headers_json = $6,
+		    status = $7,
+		    secret_encrypted = $8,
+		    updated_by = $9,
+		    updated_at = $10
+		WHERE tenant_id = $1
+		  AND id = $2
+		RETURNING id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		          secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+	`, item.TenantID, item.ID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status, secretEncrypted, item.UpdatedBy, item.UpdatedAt)
+	updatedRecord, err := scanWebhookIntegrationRecord(row)
+	if err != nil {
+		if isNoRows(err) {
+			return models.WebhookIntegration{}, false, nil
+		}
+		return models.WebhookIntegration{}, true, fmt.Errorf("update webhook integration: %w", err)
+	}
+	return updatedRecord.integration, true, nil
+}
+
+func (s *Store) ListWebhookDeliveriesForTenant(ctx context.Context, tenantID string, webhookID string, status string, limit int) ([]models.WebhookDelivery, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	webhookID = strings.TrimSpace(webhookID)
+	status = normalizeWebhookDeliveryStatus(status)
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, webhook_id, platform_event_id, event_type, status,
+		       response_status, response_body, error_message, attempted_at, delivered_at, created_at
+		FROM webhook_deliveries
+		WHERE tenant_id = $1
+		  AND ($2 = '' OR webhook_id = $2)
+		  AND ($3 = '' OR status = $3)
+		ORDER BY attempted_at DESC, id DESC
+		LIMIT $4
+	`, tenantID, webhookID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list webhook deliveries: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.WebhookDelivery, 0, limit)
+	for rows.Next() {
+		item, err := scanWebhookDelivery(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan webhook delivery row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate webhook delivery rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID string, actor string, request models.DispatchWebhookDeliveriesRequest) (models.DispatchWebhookDeliveriesResult, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+	limit := request.Limit
+	if limit <= 0 || limit > 2000 {
+		limit = 200
+	}
+
+	webhookID := strings.TrimSpace(request.WebhookID)
+	webhooks, err := s.listWebhookIntegrationRecordsForDispatch(ctx, tenantID, webhookID)
+	if err != nil {
+		return models.DispatchWebhookDeliveriesResult{}, err
+	}
+	if webhookID != "" && len(webhooks) == 0 {
+		return models.DispatchWebhookDeliveriesResult{}, ErrWebhookIntegrationNotFound
+	}
+	if len(webhooks) == 0 {
+		return models.DispatchWebhookDeliveriesResult{ByWebhook: map[string]int64{}}, nil
+	}
+
+	eventType := strings.ToLower(strings.TrimSpace(request.EventType))
+	events, err := s.ListPlatformEventsForTenant(ctx, tenantID, eventType, limit)
+	if err != nil {
+		return models.DispatchWebhookDeliveriesResult{}, err
+	}
+
+	result := models.DispatchWebhookDeliveriesResult{
+		ByWebhook: map[string]int64{},
+	}
+	if len(events) == 0 {
+		return result, nil
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, event := range events {
+		for _, webhook := range webhooks {
+			if !webhookAcceptsEvent(webhook.integration.EventTypes, event.EventType) {
+				result.Skipped++
+				continue
+			}
+
+			if !request.Replay {
+				exists, err := s.webhookDeliveryExists(ctx, tenantID, webhook.integration.ID, event.ID)
+				if err != nil {
+					return models.DispatchWebhookDeliveriesResult{}, err
+				}
+				if exists {
+					result.Skipped++
+					continue
+				}
+			}
+
+			result.Attempted++
+			delivery := models.WebhookDelivery{
+				ID:              nextWebhookDeliveryID(),
+				TenantID:        tenantID,
+				WebhookID:       webhook.integration.ID,
+				PlatformEventID: strings.TrimSpace(event.ID),
+				EventType:       strings.TrimSpace(event.EventType),
+				Status:          "failed",
+				AttemptedAt:     time.Now().UTC(),
+				CreatedAt:       time.Now().UTC(),
+			}
+
+			delivered, responseStatus, responseBody, errMessage := s.sendWebhookDelivery(ctx, client, webhook, event, delivery.ID)
+			delivery.ResponseStatus = responseStatus
+			delivery.ResponseBody = truncateWebhookText(responseBody, 2048)
+			delivery.ErrorMessage = truncateWebhookText(errMessage, 1024)
+			if delivered {
+				now := time.Now().UTC()
+				delivery.Status = "delivered"
+				delivery.DeliveredAt = &now
+			}
+
+			if err := s.insertWebhookDelivery(ctx, delivery); err != nil {
+				return models.DispatchWebhookDeliveriesResult{}, err
+			}
+			if err := s.updateWebhookDeliveryStatusSummary(ctx, tenantID, webhook.integration.ID, delivery.AttemptedAt, delivery.DeliveredAt); err != nil {
+				return models.DispatchWebhookDeliveriesResult{}, err
+			}
+
+			if delivered {
+				result.Delivered++
+				result.ByWebhook[webhook.integration.ID]++
+			} else {
+				result.Failed++
+			}
+		}
+	}
+
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      tenantID,
+		EventType:     "webhook.dispatch.completed",
+		SourceService: "control-plane",
+		AggregateType: "webhook_dispatch",
+		AggregateID:   actor,
+		Payload: map[string]any{
+			"attempted":  result.Attempted,
+			"delivered":  result.Delivered,
+			"failed":     result.Failed,
+			"skipped":    result.Skipped,
+			"event_type": eventType,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+
+	return result, nil
+}
+
+func (s *Store) listWebhookIntegrationRecordsForDispatch(ctx context.Context, tenantID string, webhookID string) ([]webhookIntegrationRecord, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	webhookID = strings.TrimSpace(webhookID)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+		FROM webhook_integrations
+		WHERE tenant_id = $1
+		  AND status = 'active'
+		  AND ($2 = '' OR id = $2)
+		ORDER BY updated_at DESC, id DESC
+	`, tenantID, webhookID)
+	if err != nil {
+		return nil, fmt.Errorf("list webhook integrations for dispatch: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]webhookIntegrationRecord, 0)
+	for rows.Next() {
+		record, err := scanWebhookIntegrationRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan webhook integration dispatch row: %w", err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate webhook integration dispatch rows: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) getWebhookIntegrationRecordForTenant(ctx context.Context, tenantID string, webhookID string) (webhookIntegrationRecord, bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	webhookID = strings.TrimSpace(webhookID)
+
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
+		FROM webhook_integrations
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, tenantID, webhookID)
+	record, err := scanWebhookIntegrationRecord(row)
+	if err != nil {
+		if isNoRows(err) {
+			return webhookIntegrationRecord{}, false, nil
+		}
+		return webhookIntegrationRecord{}, false, fmt.Errorf("get webhook integration: %w", err)
+	}
+	return record, true, nil
+}
+
+func (s *Store) sendWebhookDelivery(ctx context.Context, client *http.Client, webhook webhookIntegrationRecord, event models.PlatformEvent, deliveryID string) (bool, int, string, string) {
+	payload := map[string]any{
+		"delivery_id": deliveryID,
+		"webhook_id":  webhook.integration.ID,
+		"event":       event,
+		"sent_at":     time.Now().UTC(),
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return false, 0, "", fmt.Sprintf("marshal webhook payload: %v", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook.integration.EndpointURL, bytes.NewReader(encoded))
+	if err != nil {
+		return false, 0, "", fmt.Sprintf("create webhook request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "USS-Webhooks/1.0")
+	request.Header.Set("X-USS-Webhook-ID", webhook.integration.ID)
+	request.Header.Set("X-USS-Event-Type", event.EventType)
+	request.Header.Set("X-USS-Delivery-ID", deliveryID)
+	for key, value := range webhook.integration.Headers {
+		request.Header.Set(key, value)
+	}
+
+	if strings.TrimSpace(webhook.secretEncrypted) != "" {
+		secret, err := s.decryptIngestionWebhookSecret(webhook.integration.TenantID, webhook.integration.ID, "webhook_integration", webhook.secretEncrypted)
+		if err != nil {
+			return false, 0, "", fmt.Sprintf("decrypt webhook secret: %v", err)
+		}
+		signature := computeIngestionWebhookHMAC(secret, encoded, sha256.New)
+		request.Header.Set("X-USS-Signature", "sha256="+signature)
+	}
+
+	response, err := client.Do(request)
+	if err != nil {
+		return false, 0, "", fmt.Sprintf("perform webhook request: %v", err)
+	}
+	defer response.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+	bodyText := strings.TrimSpace(string(bodyBytes))
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return true, response.StatusCode, bodyText, ""
+	}
+	return false, response.StatusCode, bodyText, fmt.Sprintf("unexpected status code %d", response.StatusCode)
+}
+
+func (s *Store) webhookDeliveryExists(ctx context.Context, tenantID string, webhookID string, platformEventID string) (bool, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM webhook_deliveries
+			WHERE tenant_id = $1
+			  AND webhook_id = $2
+			  AND platform_event_id = $3
+		)
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(webhookID), strings.TrimSpace(platformEventID)).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check webhook delivery existence: %w", err)
+	}
+	return exists, nil
+}
+
+func (s *Store) insertWebhookDelivery(ctx context.Context, item models.WebhookDelivery) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO webhook_deliveries (
+			id, tenant_id, webhook_id, platform_event_id, event_type, status,
+			response_status, response_body, error_message, attempted_at, delivered_at, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11, $12
+		)
+	`, item.ID, item.TenantID, item.WebhookID, item.PlatformEventID, item.EventType, item.Status, item.ResponseStatus,
+		item.ResponseBody, item.ErrorMessage, item.AttemptedAt, item.DeliveredAt, item.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert webhook delivery: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) updateWebhookDeliveryStatusSummary(ctx context.Context, tenantID string, webhookID string, attemptedAt time.Time, deliveredAt *time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE webhook_integrations
+		SET last_attempt_at = $3,
+		    last_success_at = CASE
+		        WHEN $4 IS NOT NULL THEN $4
+		        ELSE last_success_at
+		    END,
+		    updated_at = $3
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(webhookID), attemptedAt, deliveredAt)
+	if err != nil {
+		return fmt.Errorf("update webhook integration delivery summary: %w", err)
+	}
+	return nil
+}
+
+func scanWebhookIntegrationRecord(row interface{ Scan(dest ...any) error }) (webhookIntegrationRecord, error) {
+	var (
+		record         webhookIntegrationRecord
+		eventTypesJSON []byte
+		headersJSON    []byte
+	)
+
+	err := row.Scan(
+		&record.integration.ID,
+		&record.integration.TenantID,
+		&record.integration.Name,
+		&record.integration.EndpointURL,
+		&eventTypesJSON,
+		&headersJSON,
+		&record.integration.Status,
+		&record.secretEncrypted,
+		&record.integration.LastAttemptAt,
+		&record.integration.LastSuccessAt,
+		&record.integration.CreatedBy,
+		&record.integration.UpdatedBy,
+		&record.integration.CreatedAt,
+		&record.integration.UpdatedAt,
+	)
+	if err != nil {
+		return webhookIntegrationRecord{}, err
+	}
+
+	if len(eventTypesJSON) > 0 {
+		if err := json.Unmarshal(eventTypesJSON, &record.integration.EventTypes); err != nil {
+			return webhookIntegrationRecord{}, fmt.Errorf("decode webhook event types: %w", err)
+		}
+	}
+	if len(headersJSON) > 0 {
+		if err := json.Unmarshal(headersJSON, &record.integration.Headers); err != nil {
+			return webhookIntegrationRecord{}, fmt.Errorf("decode webhook headers: %w", err)
+		}
+	}
+
+	record.integration.EventTypes = normalizeWebhookEventTypes(record.integration.EventTypes)
+	record.integration.Headers = sanitizeWebhookHeaders(record.integration.Headers)
+	record.integration.Status = normalizeWebhookIntegrationStatus(record.integration.Status)
+	record.integration.SecretSet = strings.TrimSpace(record.secretEncrypted) != ""
+	return record, nil
+}
+
+func scanWebhookDelivery(row interface{ Scan(dest ...any) error }) (models.WebhookDelivery, error) {
+	var item models.WebhookDelivery
+	err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.WebhookID,
+		&item.PlatformEventID,
+		&item.EventType,
+		&item.Status,
+		&item.ResponseStatus,
+		&item.ResponseBody,
+		&item.ErrorMessage,
+		&item.AttemptedAt,
+		&item.DeliveredAt,
+		&item.CreatedAt,
+	)
+	if err != nil {
+		return models.WebhookDelivery{}, err
+	}
+	item.Status = normalizeWebhookDeliveryStatus(item.Status)
+	return item, nil
+}
+
+func validateWebhookEndpointURL(value string) error {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("endpoint_url must be a valid URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("endpoint_url must use http or https")
+	}
+	if strings.TrimSpace(parsed.Host) == "" {
+		return fmt.Errorf("endpoint_url must include a host")
+	}
+	return nil
+}
+
+func normalizeWebhookIntegrationStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "active", "paused", "disabled":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeWebhookDeliveryStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "delivered", "failed":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeWebhookEventTypes(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func sanitizeWebhookHeaders(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		trimmedKey := strings.TrimSpace(key)
+		trimmedValue := strings.TrimSpace(value)
+		if trimmedKey == "" || trimmedValue == "" {
+			continue
+		}
+		lowerKey := strings.ToLower(trimmedKey)
+		if lowerKey == "content-length" || lowerKey == "host" {
+			continue
+		}
+		out[trimmedKey] = trimmedValue
+	}
+	return out
+}
+
+func webhookAcceptsEvent(eventTypes []string, eventType string) bool {
+	if len(eventTypes) == 0 {
+		return true
+	}
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	for _, value := range eventTypes {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "*" || normalized == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateWebhookText(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}
+
+func nextWebhookIntegrationID() string {
+	value := atomic.AddUint64(&webhookIntegrationSequence, 1)
+	return fmt.Sprintf("webhook-integration-%d-%06d", time.Now().UTC().Unix(), value)
+}
+
+func nextWebhookDeliveryID() string {
+	value := atomic.AddUint64(&webhookDeliverySequence, 1)
+	return fmt.Sprintf("webhook-delivery-%d-%06d", time.Now().UTC().Unix(), value)
+}

@@ -51,6 +51,8 @@ type stubAPIStore struct {
 	lastIngestionToken         string
 	lastIngestionRawBody       []byte
 	platformEvents             []models.PlatformEvent
+	webhookIntegrations        []models.WebhookIntegration
+	webhookDeliveries          []models.WebhookDelivery
 	tenantOpsSnapshot          models.TenantOperationsSnapshot
 	tenantExecutionControls    models.TenantExecutionControls
 	tenantExecutionErr         error
@@ -1018,6 +1020,194 @@ func (s *stubAPIStore) HandleIngestionWebhook(_ context.Context, sourceID string
 
 func (s *stubAPIStore) ListPlatformEventsForTenant(context.Context, string, string, int) ([]models.PlatformEvent, error) {
 	return s.platformEvents, nil
+}
+
+func (s *stubAPIStore) ListWebhookIntegrationsForTenant(_ context.Context, _ string, status string, eventType string, _ int) ([]models.WebhookIntegration, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+
+	items := make([]models.WebhookIntegration, 0, len(s.webhookIntegrations))
+	for _, item := range s.webhookIntegrations {
+		if status != "" && strings.ToLower(strings.TrimSpace(item.Status)) != status {
+			continue
+		}
+		if eventType != "" && !stubWebhookAcceptsEvent(item.EventTypes, eventType) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) GetWebhookIntegrationForTenant(_ context.Context, _ string, webhookID string) (models.WebhookIntegration, bool, error) {
+	webhookID = strings.TrimSpace(webhookID)
+	for _, item := range s.webhookIntegrations {
+		if strings.TrimSpace(item.ID) == webhookID {
+			return item, true, nil
+		}
+	}
+	return models.WebhookIntegration{}, false, nil
+}
+
+func (s *stubAPIStore) CreateWebhookIntegrationForTenant(_ context.Context, tenantID string, actor string, request models.CreateWebhookIntegrationRequest) (models.WebhookIntegration, error) {
+	now := time.Now().UTC()
+	name := strings.TrimSpace(request.Name)
+	endpointURL := strings.TrimSpace(request.EndpointURL)
+	if name == "" || endpointURL == "" {
+		return models.WebhookIntegration{}, fmt.Errorf("name and endpoint_url are required")
+	}
+
+	for _, existing := range s.webhookIntegrations {
+		if strings.EqualFold(strings.TrimSpace(existing.Name), name) {
+			return models.WebhookIntegration{}, fmt.Errorf("duplicate key value violates unique constraint")
+		}
+	}
+
+	item := models.WebhookIntegration{
+		ID:            fmt.Sprintf("webhook-integration-stub-%d", len(s.webhookIntegrations)+1),
+		TenantID:      strings.TrimSpace(tenantID),
+		Name:          name,
+		EndpointURL:   endpointURL,
+		EventTypes:    append([]string(nil), request.EventTypes...),
+		Headers:       request.Headers,
+		Status:        strings.ToLower(strings.TrimSpace(request.Status)),
+		SecretSet:     strings.TrimSpace(request.Secret) != "",
+		CreatedBy:     strings.TrimSpace(actor),
+		UpdatedBy:     strings.TrimSpace(actor),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		LastAttemptAt: nil,
+		LastSuccessAt: nil,
+	}
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	if item.EventTypes == nil {
+		item.EventTypes = []string{}
+	}
+	if item.Headers == nil {
+		item.Headers = map[string]string{}
+	}
+
+	s.webhookIntegrations = append(s.webhookIntegrations, item)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateWebhookIntegrationForTenant(_ context.Context, _ string, webhookID string, actor string, request models.UpdateWebhookIntegrationRequest) (models.WebhookIntegration, bool, error) {
+	webhookID = strings.TrimSpace(webhookID)
+	for index := range s.webhookIntegrations {
+		item := s.webhookIntegrations[index]
+		if strings.TrimSpace(item.ID) != webhookID {
+			continue
+		}
+
+		if value := strings.TrimSpace(request.Name); value != "" {
+			item.Name = value
+		}
+		if value := strings.TrimSpace(request.EndpointURL); value != "" {
+			item.EndpointURL = value
+		}
+		if request.EventTypes != nil {
+			item.EventTypes = append([]string(nil), request.EventTypes...)
+		}
+		if request.Headers != nil {
+			item.Headers = request.Headers
+		}
+		if value := strings.ToLower(strings.TrimSpace(request.Status)); value != "" {
+			item.Status = value
+		}
+		if strings.TrimSpace(request.Secret) != "" {
+			item.SecretSet = true
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+
+		s.webhookIntegrations[index] = item
+		return item, true, nil
+	}
+	return models.WebhookIntegration{}, false, nil
+}
+
+func (s *stubAPIStore) ListWebhookDeliveriesForTenant(_ context.Context, _ string, webhookID string, status string, _ int) ([]models.WebhookDelivery, error) {
+	webhookID = strings.TrimSpace(webhookID)
+	status = strings.ToLower(strings.TrimSpace(status))
+	items := make([]models.WebhookDelivery, 0, len(s.webhookDeliveries))
+	for _, item := range s.webhookDeliveries {
+		if webhookID != "" && strings.TrimSpace(item.WebhookID) != webhookID {
+			continue
+		}
+		if status != "" && strings.ToLower(strings.TrimSpace(item.Status)) != status {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) DispatchWebhookDeliveriesForTenant(_ context.Context, _ string, _ string, request models.DispatchWebhookDeliveriesRequest) (models.DispatchWebhookDeliveriesResult, error) {
+	webhookIDFilter := strings.TrimSpace(request.WebhookID)
+	eventTypeFilter := strings.ToLower(strings.TrimSpace(request.EventType))
+	webhooks := make([]models.WebhookIntegration, 0, len(s.webhookIntegrations))
+	for _, item := range s.webhookIntegrations {
+		if strings.ToLower(strings.TrimSpace(item.Status)) != "active" {
+			continue
+		}
+		if webhookIDFilter != "" && strings.TrimSpace(item.ID) != webhookIDFilter {
+			continue
+		}
+		webhooks = append(webhooks, item)
+	}
+	if webhookIDFilter != "" && len(webhooks) == 0 {
+		return models.DispatchWebhookDeliveriesResult{}, jobs.ErrWebhookIntegrationNotFound
+	}
+
+	result := models.DispatchWebhookDeliveriesResult{
+		ByWebhook: map[string]int64{},
+	}
+
+	for _, event := range s.platformEvents {
+		if eventTypeFilter != "" && strings.ToLower(strings.TrimSpace(event.EventType)) != eventTypeFilter {
+			continue
+		}
+		for _, webhook := range webhooks {
+			if !stubWebhookAcceptsEvent(webhook.EventTypes, event.EventType) {
+				result.Skipped++
+				continue
+			}
+			now := time.Now().UTC()
+			delivery := models.WebhookDelivery{
+				ID:              fmt.Sprintf("webhook-delivery-stub-%d", len(s.webhookDeliveries)+1),
+				WebhookID:       webhook.ID,
+				PlatformEventID: event.ID,
+				EventType:       event.EventType,
+				Status:          "delivered",
+				ResponseStatus:  http.StatusOK,
+				AttemptedAt:     now,
+				DeliveredAt:     &now,
+				CreatedAt:       now,
+			}
+			s.webhookDeliveries = append(s.webhookDeliveries, delivery)
+			result.Attempted++
+			result.Delivered++
+			result.ByWebhook[webhook.ID]++
+		}
+	}
+
+	return result, nil
+}
+
+func stubWebhookAcceptsEvent(eventTypes []string, eventType string) bool {
+	if len(eventTypes) == 0 {
+		return true
+	}
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	for _, candidate := range eventTypes {
+		normalized := strings.ToLower(strings.TrimSpace(candidate))
+		if normalized == "*" || normalized == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *stubAPIStore) GetTenantOperationsSnapshot(_ context.Context, tenantID string) (models.TenantOperationsSnapshot, error) {

@@ -36,6 +36,8 @@ var (
 	remediationEvidenceSequence      uint64
 	assignmentSequence               uint64
 	notificationSequence             uint64
+	webhookIntegrationSequence      uint64
+	webhookDeliverySequence         uint64
 	scanTargetSequence               uint64
 	webTargetSequence                uint64
 	webAuthProfileSequence           uint64
@@ -115,6 +117,7 @@ var (
 	ErrAIPolicyInputTooLarge         = errors.New("ai input exceeds policy limits")
 	ErrAIPolicyEvidenceRequired      = errors.New("ai evidence references are required by policy")
 	ErrAITriageRequestNotFound       = errors.New("ai triage request not found")
+	ErrWebhookIntegrationNotFound    = errors.New("webhook integration not found")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )

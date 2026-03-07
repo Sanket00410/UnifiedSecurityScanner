@@ -116,6 +116,12 @@ type apiStore interface {
 	ListIngestionEventsForTenant(ctx context.Context, tenantID string, sourceID string, limit int) ([]models.IngestionEvent, error)
 	HandleIngestionWebhook(ctx context.Context, sourceID string, rawToken string, request models.IngestionWebhookRequest, rawBody []byte) (models.IngestionWebhookResponse, error)
 	ListPlatformEventsForTenant(ctx context.Context, tenantID string, eventType string, limit int) ([]models.PlatformEvent, error)
+	ListWebhookIntegrationsForTenant(ctx context.Context, tenantID string, status string, eventType string, limit int) ([]models.WebhookIntegration, error)
+	GetWebhookIntegrationForTenant(ctx context.Context, tenantID string, webhookID string) (models.WebhookIntegration, bool, error)
+	CreateWebhookIntegrationForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebhookIntegrationRequest) (models.WebhookIntegration, error)
+	UpdateWebhookIntegrationForTenant(ctx context.Context, tenantID string, webhookID string, actor string, request models.UpdateWebhookIntegrationRequest) (models.WebhookIntegration, bool, error)
+	ListWebhookDeliveriesForTenant(ctx context.Context, tenantID string, webhookID string, status string, limit int) ([]models.WebhookDelivery, error)
+	DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID string, actor string, request models.DispatchWebhookDeliveriesRequest) (models.DispatchWebhookDeliveriesResult, error)
 	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
 	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
 	GetTenantExecutionControlsForTenant(ctx context.Context, tenantID string) (models.TenantExecutionControls, error)
@@ -332,6 +338,16 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "ingestion_source", "ingestion_source", server.handleIngestionSourceRoute))
 	mux.HandleFunc("/v1/ingestion/events", server.withUserAuth(auth.PermissionScanJobsRead, "ingestion_events.list", "ingestion_event", server.handleIngestionEvents))
 	mux.HandleFunc("/v1/events", server.withUserAuth(auth.PermissionScanJobsRead, "events.list", "platform_event", server.handlePlatformEvents))
+	mux.HandleFunc("/v1/integrations/webhooks", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "webhook_integrations", "webhook_integration", server.handleWebhookIntegrations))
+	mux.HandleFunc("/v1/integrations/webhooks/dispatch", server.withUserAuth(auth.PermissionPoliciesWrite, "webhook_delivery.dispatch", "webhook_dispatch", server.handleWebhookDispatch))
+	mux.HandleFunc("/v1/integrations/webhooks/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPut:  auth.PermissionPoliciesWrite,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "webhook_integration", "webhook_integration", server.handleWebhookIntegrationRoute))
 	mux.HandleFunc("/v1/tenant/operations", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet: auth.PermissionScanJobsRead,
 		http.MethodPut: auth.PermissionPoliciesWrite,
@@ -5791,6 +5807,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/ingestion/sources/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/ingestion/sources/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/integrations/webhooks/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/integrations/webhooks/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}
