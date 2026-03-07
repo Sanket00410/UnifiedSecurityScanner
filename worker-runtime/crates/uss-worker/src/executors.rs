@@ -1981,9 +1981,17 @@ fn append_zap_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
         args.push("-config".to_string());
         args.push(format!("spider.maxChildren={max_requests}"));
     }
+    if let Some(max_concurrency) = request_label_u64(request, "web_max_concurrency") {
+        args.push("-config".to_string());
+        args.push(format!("spider.threadCount={max_concurrency}"));
+    }
 }
 
 fn append_nuclei_policy_args(request: &AdapterRequest, args: &mut Vec<String>) {
+    if let Some(max_concurrency) = request_label_u64(request, "web_max_concurrency") {
+        args.push("-c".to_string());
+        args.push(max_concurrency.to_string());
+    }
     if let Some(rate_limit) = request_label_u64(request, "web_request_budget_per_minute") {
         args.push("-rate-limit".to_string());
         args.push(rate_limit.to_string());
@@ -2002,6 +2010,10 @@ fn append_browser_probe_policy_args(request: &AdapterRequest, args: &mut Vec<Str
     if let Some(rate_limit) = request_label_u64(request, "web_request_budget_per_minute") {
         args.push("--rate-limit".to_string());
         args.push(rate_limit.to_string());
+    }
+    if let Some(max_concurrency) = request_label_u64(request, "web_max_concurrency") {
+        args.push("--concurrency".to_string());
+        args.push(max_concurrency.to_string());
     }
 
     if let Some(login_url) = request.labels.get("web_auth_login_url") {
@@ -2067,7 +2079,7 @@ fn append_browser_probe_policy_args(request: &AdapterRequest, args: &mut Vec<Str
 }
 
 fn write_web_runtime_policy_snapshot(request: &AdapterRequest) -> Result<Option<PathBuf>, String> {
-    const POLICY_KEYS: [&str; 22] = [
+    const POLICY_KEYS: [&str; 23] = [
         "web_target_id",
         "web_target_type",
         "web_safe_mode",
@@ -2083,6 +2095,7 @@ fn write_web_runtime_policy_snapshot(request: &AdapterRequest) -> Result<Option<
         "web_auth_test_personas_json",
         "web_max_depth",
         "web_max_requests",
+        "web_max_concurrency",
         "web_request_budget_per_minute",
         "web_allow_paths",
         "web_deny_paths",
@@ -2163,6 +2176,9 @@ mod tests {
         request
             .labels
             .insert("web_max_requests".to_string(), "900".to_string());
+        request
+            .labels
+            .insert("web_max_concurrency".to_string(), "12".to_string());
 
         let mut args = vec!["-cmd".to_string()];
         append_zap_policy_args(&request, &mut args);
@@ -2170,11 +2186,15 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("spider.maxDepth=4"));
         assert!(joined.contains("spider.maxChildren=900"));
+        assert!(joined.contains("spider.threadCount=12"));
     }
 
     #[test]
     fn append_nuclei_policy_args_uses_rate_limit() {
         let mut request = base_request();
+        request
+            .labels
+            .insert("web_max_concurrency".to_string(), "10".to_string());
         request.labels.insert(
             "web_request_budget_per_minute".to_string(),
             "180".to_string(),
@@ -2184,6 +2204,7 @@ mod tests {
         append_nuclei_policy_args(&request, &mut args);
 
         let joined = args.join(" ");
+        assert!(joined.contains("-c 10"));
         assert!(joined.contains("-rate-limit 180"));
     }
 
@@ -2200,6 +2221,9 @@ mod tests {
             "web_request_budget_per_minute".to_string(),
             "220".to_string(),
         );
+        request
+            .labels
+            .insert("web_max_concurrency".to_string(), "16".to_string());
         request.labels.insert(
             "web_auth_login_url".to_string(),
             "https://app.example.com/login".to_string(),
@@ -2231,6 +2255,7 @@ mod tests {
         assert!(joined.contains("--max-depth 5"));
         assert!(joined.contains("--max-requests 1400"));
         assert!(joined.contains("--rate-limit 220"));
+        assert!(joined.contains("--concurrency 16"));
         assert!(joined.contains("--login-url https://app.example.com/login"));
         assert!(joined.contains("--auth-type form"));
         assert!(joined.contains("--username-secret-ref secret://phase7/web/username"));

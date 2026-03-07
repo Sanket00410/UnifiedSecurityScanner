@@ -120,6 +120,7 @@ func TestPhase7WebRuntimeRunGuardrailsAndAuthLabels(t *testing.T) {
 		"safe_mode":                 true,
 		"max_depth":                 3,
 		"max_requests":              600,
+		"max_concurrency":           10,
 		"request_budget_per_minute": 120,
 	}, http.StatusOK)
 	defer upsertPolicyResponse.Body.Close()
@@ -215,6 +216,7 @@ func TestPhase7WebRuntimeRunGuardrailsAndAuthLabels(t *testing.T) {
 			"safe_mode":                 false,
 			"max_depth":                 3,
 			"max_requests":              600,
+			"max_concurrency":           14,
 			"request_budget_per_minute": 120,
 		},
 		http.StatusOK,
@@ -329,6 +331,9 @@ func TestPhase7WebRuntimeRunGuardrailsAndAuthLabels(t *testing.T) {
 	}
 	if assignment.Labels["web_auth_password_secret_ref"] != "secret://phase7/web/password" {
 		t.Fatalf("expected password secret ref label, got %#v", assignment.Labels["web_auth_password_secret_ref"])
+	}
+	if assignment.Labels["web_max_concurrency"] != "14" {
+		t.Fatalf("expected web_max_concurrency label 14, got %#v", assignment.Labels["web_max_concurrency"])
 	}
 	if assignment.Labels["web_auth_username_secret_reference_id"] != usernameReference.ID {
 		t.Fatalf("expected username secret reference id label %s, got %#v", usernameReference.ID, assignment.Labels["web_auth_username_secret_reference_id"])

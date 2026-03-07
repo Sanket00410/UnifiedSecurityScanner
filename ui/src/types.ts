@@ -277,6 +277,7 @@ export type WebCrawlPolicy = {
   safe_mode: boolean;
   max_depth: number;
   max_requests: number;
+  max_concurrency: number;
   request_budget_per_minute: number;
   allow_paths?: string[];
   deny_paths?: string[];

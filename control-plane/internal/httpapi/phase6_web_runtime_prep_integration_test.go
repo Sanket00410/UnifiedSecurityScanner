@@ -104,6 +104,7 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 		"safe_mode":                 true,
 		"max_depth":                 4,
 		"max_requests":              1200,
+		"max_concurrency":           16,
 		"request_budget_per_minute": 180,
 		"allow_paths":               []string{"app.example.com/app/*", "app.example.com/api/*"},
 		"deny_paths":                []string{"app.example.com/logout"},
@@ -124,6 +125,9 @@ func TestPhase6WebTargetPrepFlow(t *testing.T) {
 	}
 	if crawlPolicy.AuthProfileID != createdProfile.ID {
 		t.Fatalf("expected auth profile id %s, got %s", createdProfile.ID, crawlPolicy.AuthProfileID)
+	}
+	if crawlPolicy.MaxConcurrency != 16 {
+		t.Fatalf("expected max_concurrency 16, got %d", crawlPolicy.MaxConcurrency)
 	}
 
 	coverageResponse, coverageBody := mustJSONRequest(t, client, http.MethodPut, testServer.URL+"/v1/web-targets/"+createdTarget.ID+"/coverage-baseline", cfg.BootstrapAdminToken, auth.WorkerSecretHeader, "", map[string]any{

@@ -358,7 +358,7 @@ func (s *Store) DeleteWebAuthProfileForTenant(ctx context.Context, tenantID stri
 func (s *Store) GetWebCrawlPolicyForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCrawlPolicy, bool, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, web_target_id, auth_profile_id, safe_mode, max_depth,
-		       max_requests, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
+		       max_requests, max_concurrency, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
 		       headers_json, created_by, updated_by, created_at, updated_at
 		FROM web_crawl_policies
 		WHERE tenant_id = $1 AND web_target_id = $2
@@ -412,6 +412,7 @@ func (s *Store) UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID stri
 		SafeMode:               true,
 		MaxDepth:               3,
 		MaxRequests:            500,
+		MaxConcurrency:         8,
 		RequestBudgetPerMinute: 120,
 		AllowPaths:             []string{},
 		DenyPaths:              []string{},
@@ -439,6 +440,9 @@ func (s *Store) UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID stri
 	if request.MaxRequests != nil {
 		item.MaxRequests = *request.MaxRequests
 	}
+	if request.MaxConcurrency != nil {
+		item.MaxConcurrency = *request.MaxConcurrency
+	}
 	if request.RequestBudgetPerMinute != nil {
 		item.RequestBudgetPerMinute = *request.RequestBudgetPerMinute
 	}
@@ -455,7 +459,7 @@ func (s *Store) UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID stri
 		item.Headers = request.Headers
 	}
 
-	if item.MaxDepth < 0 || item.MaxRequests < 0 || item.RequestBudgetPerMinute < 0 {
+	if item.MaxDepth < 0 || item.MaxRequests < 0 || item.MaxConcurrency < 0 || item.RequestBudgetPerMinute < 0 {
 		return models.WebCrawlPolicy{}, fmt.Errorf("crawl policy limits must be greater than or equal to zero")
 	}
 	if item.CreatedBy == "" {
@@ -473,18 +477,19 @@ func (s *Store) UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID stri
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO web_crawl_policies (
 			id, tenant_id, web_target_id, auth_profile_id, safe_mode, max_depth,
-			max_requests, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
+			max_requests, max_concurrency, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
 			headers_json, created_by, updated_by, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15, $15
+			$7, $8, $9, $10, $11, $12,
+			$13, $14, $15, $16, $16
 		)
 		ON CONFLICT (tenant_id, web_target_id) DO UPDATE SET
 			auth_profile_id = EXCLUDED.auth_profile_id,
 			safe_mode = EXCLUDED.safe_mode,
 			max_depth = EXCLUDED.max_depth,
 			max_requests = EXCLUDED.max_requests,
+			max_concurrency = EXCLUDED.max_concurrency,
 			request_budget_per_minute = EXCLUDED.request_budget_per_minute,
 			allow_paths = EXCLUDED.allow_paths,
 			deny_paths = EXCLUDED.deny_paths,
@@ -493,10 +498,10 @@ func (s *Store) UpsertWebCrawlPolicyForTenant(ctx context.Context, tenantID stri
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, web_target_id, auth_profile_id, safe_mode, max_depth,
-		          max_requests, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
+		          max_requests, max_concurrency, request_budget_per_minute, allow_paths, deny_paths, seed_urls,
 		          headers_json, created_by, updated_by, created_at, updated_at
 	`, item.ID, item.TenantID, item.WebTargetID, nullableString(item.AuthProfileID), item.SafeMode, item.MaxDepth,
-		item.MaxRequests, item.RequestBudgetPerMinute, item.AllowPaths, item.DenyPaths, item.SeedURLs,
+		item.MaxRequests, item.MaxConcurrency, item.RequestBudgetPerMinute, item.AllowPaths, item.DenyPaths, item.SeedURLs,
 		headersJSON, item.CreatedBy, item.UpdatedBy, item.CreatedAt)
 	updated, err := scanWebCrawlPolicy(row)
 	if err != nil {
@@ -869,6 +874,9 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 	if policy.MaxRequests > 0 {
 		taskLabels["web_max_requests"] = fmt.Sprintf("%d", policy.MaxRequests)
 	}
+	if policy.MaxConcurrency > 0 {
+		taskLabels["web_max_concurrency"] = fmt.Sprintf("%d", policy.MaxConcurrency)
+	}
 	if policy.RequestBudgetPerMinute > 0 {
 		taskLabels["web_request_budget_per_minute"] = fmt.Sprintf("%d", policy.RequestBudgetPerMinute)
 	}
@@ -1186,6 +1194,7 @@ func scanWebCrawlPolicy(row interface{ Scan(dest ...any) error }) (models.WebCra
 		&item.SafeMode,
 		&item.MaxDepth,
 		&item.MaxRequests,
+		&item.MaxConcurrency,
 		&item.RequestBudgetPerMinute,
 		&item.AllowPaths,
 		&item.DenyPaths,
@@ -1218,6 +1227,9 @@ func scanWebCrawlPolicy(row interface{ Scan(dest ...any) error }) (models.WebCra
 	}
 	if item.MaxRequests < 0 {
 		item.MaxRequests = 0
+	}
+	if item.MaxConcurrency < 0 {
+		item.MaxConcurrency = 0
 	}
 	if item.RequestBudgetPerMinute < 0 {
 		item.RequestBudgetPerMinute = 0

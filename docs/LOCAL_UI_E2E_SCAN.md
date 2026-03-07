@@ -97,6 +97,7 @@ Then opening `http://localhost:8080/` redirects to `/ui/`.
   - create or update **Web Auth Profiles** (form/bearer/basic with secret refs)
     - create matching secret references first via `/v1/secrets/references` for each `secret://...` path used by the profile
   - configure **Crawl Policy** per target (safe mode, limits, auth profile, allow/deny paths)
+    - includes explicit `max_concurrency` throttle control for runtime adapters
     - safe mode enforces web-safe tools only (`zap`, `zap-api`, `nuclei`)
     - restricted tools (`metasploit`, `sqlmap`, `nmap`) require disabling safe mode and policy approval
   - configure **Coverage Baseline** (expected routes/API/auth states + minimum percentages)

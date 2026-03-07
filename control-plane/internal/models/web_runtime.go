@@ -94,6 +94,7 @@ type WebCrawlPolicy struct {
 	SafeMode               bool           `json:"safe_mode"`
 	MaxDepth               int64          `json:"max_depth"`
 	MaxRequests            int64          `json:"max_requests"`
+	MaxConcurrency         int64          `json:"max_concurrency"`
 	RequestBudgetPerMinute int64          `json:"request_budget_per_minute"`
 	AllowPaths             []string       `json:"allow_paths,omitempty"`
 	DenyPaths              []string       `json:"deny_paths,omitempty"`
@@ -110,6 +111,7 @@ type UpsertWebCrawlPolicyRequest struct {
 	SafeMode               *bool          `json:"safe_mode"`
 	MaxDepth               *int64         `json:"max_depth"`
 	MaxRequests            *int64         `json:"max_requests"`
+	MaxConcurrency         *int64         `json:"max_concurrency"`
 	RequestBudgetPerMinute *int64         `json:"request_budget_per_minute"`
 	AllowPaths             []string       `json:"allow_paths"`
 	DenyPaths              []string       `json:"deny_paths"`

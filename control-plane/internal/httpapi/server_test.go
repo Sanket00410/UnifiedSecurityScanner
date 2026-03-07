@@ -354,6 +354,7 @@ func (s *stubAPIStore) UpsertWebCrawlPolicyForTenant(_ context.Context, tenantID
 			SafeMode:               true,
 			MaxDepth:               3,
 			MaxRequests:            500,
+			MaxConcurrency:         8,
 			RequestBudgetPerMinute: 120,
 			AllowPaths:             []string{},
 			DenyPaths:              []string{},
@@ -374,6 +375,9 @@ func (s *stubAPIStore) UpsertWebCrawlPolicyForTenant(_ context.Context, tenantID
 	}
 	if request.MaxRequests != nil {
 		item.MaxRequests = *request.MaxRequests
+	}
+	if request.MaxConcurrency != nil {
+		item.MaxConcurrency = *request.MaxConcurrency
 	}
 	if request.RequestBudgetPerMinute != nil {
 		item.RequestBudgetPerMinute = *request.RequestBudgetPerMinute

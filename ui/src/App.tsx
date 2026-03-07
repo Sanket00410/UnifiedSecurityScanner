@@ -1181,6 +1181,7 @@ export function App() {
           safe_mode: String(formData.get("safe_mode") || "true") === "true",
           max_depth: parseOptionalInt(formData.get("max_depth"), "max_depth"),
           max_requests: parseOptionalInt(formData.get("max_requests"), "max_requests"),
+          max_concurrency: parseOptionalInt(formData.get("max_concurrency"), "max_concurrency"),
           request_budget_per_minute: parseOptionalInt(formData.get("request_budget_per_minute"), "request_budget_per_minute"),
           allow_paths: splitCSV(formData.get("allow_paths")),
           deny_paths: splitCSV(formData.get("deny_paths")),
@@ -1983,6 +1984,7 @@ export function App() {
                 </select>
                 <input name="max_depth" type="number" min={0} step={1} placeholder="max depth" defaultValue={webCrawlPolicy?.max_depth ?? 4} />
                 <input name="max_requests" type="number" min={0} step={1} placeholder="max requests" defaultValue={webCrawlPolicy?.max_requests ?? 1200} />
+                <input name="max_concurrency" type="number" min={0} step={1} placeholder="max concurrency" defaultValue={webCrawlPolicy?.max_concurrency ?? 8} />
                 <input
                   name="request_budget_per_minute"
                   type="number"
