@@ -181,6 +181,12 @@ type apiStore interface {
 	ListDesignControlMappingsForTenant(ctx context.Context, tenantID string, reviewID string, framework string, limit int) ([]models.DesignControlMapping, error)
 	CreateDesignControlMappingForTenant(ctx context.Context, tenantID string, reviewID string, actor string, request models.CreateDesignControlMappingRequest) (models.DesignControlMapping, error)
 	UpdateDesignControlMappingForTenant(ctx context.Context, tenantID string, reviewID string, mappingID string, actor string, request models.UpdateDesignControlMappingRequest) (models.DesignControlMapping, bool, error)
+	ListRuntimeTelemetryConnectorsForTenant(ctx context.Context, tenantID string, connectorType string, limit int) ([]models.RuntimeTelemetryConnector, error)
+	GetRuntimeTelemetryConnectorForTenant(ctx context.Context, tenantID string, connectorID string) (models.RuntimeTelemetryConnector, bool, error)
+	CreateRuntimeTelemetryConnectorForTenant(ctx context.Context, tenantID string, actor string, request models.CreateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, error)
+	UpdateRuntimeTelemetryConnectorForTenant(ctx context.Context, tenantID string, connectorID string, actor string, request models.UpdateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, bool, error)
+	ListRuntimeTelemetryEventsForTenant(ctx context.Context, tenantID string, query models.RuntimeTelemetryEventQuery) ([]models.RuntimeTelemetryEvent, error)
+	IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenantID string, request models.IngestRuntimeTelemetryEventRequest) (models.RuntimeTelemetryEvent, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -420,6 +426,18 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionAssetsWrite,
 		http.MethodPost: auth.PermissionAssetsWrite,
 	}, "design_review", "design_review", server.handleDesignReviewRoute))
+	mux.HandleFunc("/v1/runtime/telemetry/connectors", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionAssetsRead,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "runtime_telemetry_connectors", "runtime_telemetry_connector", server.handleRuntimeTelemetryConnectors))
+	mux.HandleFunc("/v1/runtime/telemetry/connectors/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionAssetsRead,
+		http.MethodPut: auth.PermissionAssetsWrite,
+	}, "runtime_telemetry_connector", "runtime_telemetry_connector", server.handleRuntimeTelemetryConnectorRoute))
+	mux.HandleFunc("/v1/runtime/telemetry/events", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionFindingsRead,
+		http.MethodPost: auth.PermissionAssetsWrite,
+	}, "runtime_telemetry_events", "runtime_telemetry_event", server.handleRuntimeTelemetryEvents))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -5770,6 +5788,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return strings.TrimSpace(assetID)
 	case strings.HasPrefix(r.URL.Path, "/v1/design-reviews/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/design-reviews/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/runtime/telemetry/connectors/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/runtime/telemetry/connectors/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

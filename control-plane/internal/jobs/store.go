@@ -51,6 +51,8 @@ var (
 	designThreatSequence             uint64
 	designDataFlowSequence           uint64
 	designControlMappingSequence     uint64
+	telemetryConnectorSequence       uint64
+	telemetryEventSequence           uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
 	externalAssetSequence            uint64
@@ -94,6 +96,7 @@ var (
 	ErrDesignThreatNotFound          = errors.New("design threat not found")
 	ErrDesignDataFlowNotFound        = errors.New("design data flow model not found")
 	ErrDesignControlMappingNotFound  = errors.New("design control mapping not found")
+	ErrTelemetryConnectorNotFound    = errors.New("runtime telemetry connector not found")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )

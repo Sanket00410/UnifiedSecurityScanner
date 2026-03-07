@@ -20,113 +20,115 @@ import (
 )
 
 type stubAPIStore struct {
-	authPrincipal            models.AuthPrincipal
-	authenticated            bool
-	authErr                  error
-	createScanJobErr         error
-	createKMSKeyErr          error
-	kmsEncryptErr            error
-	kmsDecryptErr            error
-	kmsSignErr               error
-	kmsVerifyErr             error
-	createSecretReferenceErr error
-	issueSecretLeaseErr      error
-	issueWorkerCertErr       error
-	caBundleErr              error
-	scanPresets              []models.ScanPreset
-	scanEngineControls       []models.ScanEngineControl
-	webTargets               []models.WebTarget
-	webAuthProfiles          []models.WebAuthProfile
-	webCrawlPolicies         map[string]models.WebCrawlPolicy
-	webCoverageBaselines     map[string]models.WebCoverageBaseline
-	webRuntimeCoverageRuns   map[string][]models.WebRuntimeCoverageRun
-	scanTargets              []models.ScanTarget
-	kmsKeys                  []models.KMSKey
-	ingestionSources         []models.IngestionSource
-	ingestionEvents          []models.IngestionEvent
-	ingestionWebhookResponse models.IngestionWebhookResponse
-	ingestionWebhookErr      error
-	lastIngestionWebhookReq  models.IngestionWebhookRequest
-	lastIngestionSourceID    string
-	lastIngestionToken       string
-	lastIngestionRawBody     []byte
-	platformEvents           []models.PlatformEvent
-	tenantOpsSnapshot        models.TenantOperationsSnapshot
-	tenantExecutionControls  models.TenantExecutionControls
-	tenantExecutionErr       error
-	operationalMetrics       models.OperationalMetrics
-	findingSearchResult      models.FindingSearchResult
-	findingSearchErr         error
-	evidenceListResult       models.EvidenceListResult
-	evidenceListErr          error
-	evidenceObject           models.EvidenceObject
-	evidenceObjectFound      bool
-	evidenceIntegrity        models.EvidenceIntegrityVerification
-	evidenceIntegrityFound   bool
-	evidenceRetentionRuns    []models.EvidenceRetentionRun
-	evidenceRetentionRun     models.EvidenceRetentionRun
-	evidenceRetentionErr     error
-	backupSnapshots          []models.BackupSnapshot
-	recoveryDrills           []models.RecoveryDrill
-	backupDRErr              error
-	secretReferences         []models.SecretReference
-	secretLeases             []models.SecretLease
-	kmsEncryptResponse       models.KMSEncryptResponse
-	kmsDecryptResponse       models.KMSDecryptResponse
-	kmsSignResponse          models.KMSSignResponse
-	kmsVerifyResponse        models.KMSVerifyResponse
-	issuedSecretLease        models.IssuedSecretLease
-	workloadCertificates     []models.WorkloadCertificate
-	issuedWorkerCertificate  models.IssuedWorkerCertificate
-	caBundle                 models.CertificateAuthorityBundle
-	tenantConfigEntries      []models.TenantConfigEntry
-	tenantConfigErr          error
-	findings                 []models.CanonicalFinding
-	auditEvents              []models.AuditEvent
-	apiTokens                []models.APIToken
-	assetContextEvents       []models.AssetContextEvent
-	assetProfile             models.AssetProfile
-	assetSummaries           []models.AssetSummary
-	apiAssets                []models.APIAsset
-	apiEndpointsByAsset      map[string][]models.APIEndpoint
-	importOpenAPIErr         error
-	importGraphQLErr         error
-	externalAssets           []models.ExternalAsset
-	externalAssetErr         error
-	assetControls            []models.CompensatingControl
-	syncedAssets             models.SyncAssetProfilesResult
-	findingWaivers           []models.FindingWaiver
-	riskSummary              models.RiskSummary
-	remediation              models.RemediationAction
-	remediationActivities    []models.RemediationActivity
-	remediationEvidence      []models.RemediationEvidence
-	remediationAssignments   []models.RemediationAssignmentRequest
-	remediationVerifications []models.RemediationVerification
-	remediationExceptions    []models.RemediationException
-	remediationTickets       []models.RemediationTicketLink
-	notifications            []models.NotificationEvent
-	notificationSweep        models.NotificationSweepResult
-	validationEngagements    []models.ValidationEngagement
-	validationEnvelopes      []models.ValidationExecutionEnvelope
-	validationPlanSteps      []models.ValidationPlanStep
-	validationAttackTraces   []models.ValidationAttackTrace
-	validationManualTests    []models.ValidationManualTestCase
-	validationEngagementErr  error
-	designReviews            []models.DesignReview
-	designThreats            []models.DesignThreat
-	designDataFlows          []models.DesignDataFlowModel
-	designControlMappings    []models.DesignControlMapping
-	policy                   models.Policy
-	policies                 []models.Policy
-	policyVersions           []models.PolicyVersion
-	policyApprovals          []models.PolicyApproval
-	scanJob                  models.ScanJob
-	createdOIDC              models.CreatedAPIToken
-	oidcProvider             string
-	oidcSubject              string
-	oidcEmail                string
-	oidcDisplayName          string
-	registerResponse         models.WorkerRegistrationResponse
+	authPrincipal              models.AuthPrincipal
+	authenticated              bool
+	authErr                    error
+	createScanJobErr           error
+	createKMSKeyErr            error
+	kmsEncryptErr              error
+	kmsDecryptErr              error
+	kmsSignErr                 error
+	kmsVerifyErr               error
+	createSecretReferenceErr   error
+	issueSecretLeaseErr        error
+	issueWorkerCertErr         error
+	caBundleErr                error
+	scanPresets                []models.ScanPreset
+	scanEngineControls         []models.ScanEngineControl
+	webTargets                 []models.WebTarget
+	webAuthProfiles            []models.WebAuthProfile
+	webCrawlPolicies           map[string]models.WebCrawlPolicy
+	webCoverageBaselines       map[string]models.WebCoverageBaseline
+	webRuntimeCoverageRuns     map[string][]models.WebRuntimeCoverageRun
+	scanTargets                []models.ScanTarget
+	kmsKeys                    []models.KMSKey
+	ingestionSources           []models.IngestionSource
+	ingestionEvents            []models.IngestionEvent
+	ingestionWebhookResponse   models.IngestionWebhookResponse
+	ingestionWebhookErr        error
+	lastIngestionWebhookReq    models.IngestionWebhookRequest
+	lastIngestionSourceID      string
+	lastIngestionToken         string
+	lastIngestionRawBody       []byte
+	platformEvents             []models.PlatformEvent
+	tenantOpsSnapshot          models.TenantOperationsSnapshot
+	tenantExecutionControls    models.TenantExecutionControls
+	tenantExecutionErr         error
+	operationalMetrics         models.OperationalMetrics
+	findingSearchResult        models.FindingSearchResult
+	findingSearchErr           error
+	evidenceListResult         models.EvidenceListResult
+	evidenceListErr            error
+	evidenceObject             models.EvidenceObject
+	evidenceObjectFound        bool
+	evidenceIntegrity          models.EvidenceIntegrityVerification
+	evidenceIntegrityFound     bool
+	evidenceRetentionRuns      []models.EvidenceRetentionRun
+	evidenceRetentionRun       models.EvidenceRetentionRun
+	evidenceRetentionErr       error
+	backupSnapshots            []models.BackupSnapshot
+	recoveryDrills             []models.RecoveryDrill
+	backupDRErr                error
+	secretReferences           []models.SecretReference
+	secretLeases               []models.SecretLease
+	kmsEncryptResponse         models.KMSEncryptResponse
+	kmsDecryptResponse         models.KMSDecryptResponse
+	kmsSignResponse            models.KMSSignResponse
+	kmsVerifyResponse          models.KMSVerifyResponse
+	issuedSecretLease          models.IssuedSecretLease
+	workloadCertificates       []models.WorkloadCertificate
+	issuedWorkerCertificate    models.IssuedWorkerCertificate
+	caBundle                   models.CertificateAuthorityBundle
+	tenantConfigEntries        []models.TenantConfigEntry
+	tenantConfigErr            error
+	findings                   []models.CanonicalFinding
+	auditEvents                []models.AuditEvent
+	apiTokens                  []models.APIToken
+	assetContextEvents         []models.AssetContextEvent
+	assetProfile               models.AssetProfile
+	assetSummaries             []models.AssetSummary
+	apiAssets                  []models.APIAsset
+	apiEndpointsByAsset        map[string][]models.APIEndpoint
+	importOpenAPIErr           error
+	importGraphQLErr           error
+	externalAssets             []models.ExternalAsset
+	externalAssetErr           error
+	assetControls              []models.CompensatingControl
+	syncedAssets               models.SyncAssetProfilesResult
+	findingWaivers             []models.FindingWaiver
+	riskSummary                models.RiskSummary
+	remediation                models.RemediationAction
+	remediationActivities      []models.RemediationActivity
+	remediationEvidence        []models.RemediationEvidence
+	remediationAssignments     []models.RemediationAssignmentRequest
+	remediationVerifications   []models.RemediationVerification
+	remediationExceptions      []models.RemediationException
+	remediationTickets         []models.RemediationTicketLink
+	notifications              []models.NotificationEvent
+	notificationSweep          models.NotificationSweepResult
+	validationEngagements      []models.ValidationEngagement
+	validationEnvelopes        []models.ValidationExecutionEnvelope
+	validationPlanSteps        []models.ValidationPlanStep
+	validationAttackTraces     []models.ValidationAttackTrace
+	validationManualTests      []models.ValidationManualTestCase
+	validationEngagementErr    error
+	designReviews              []models.DesignReview
+	designThreats              []models.DesignThreat
+	designDataFlows            []models.DesignDataFlowModel
+	designControlMappings      []models.DesignControlMapping
+	runtimeTelemetryConnectors []models.RuntimeTelemetryConnector
+	runtimeTelemetryEvents     []models.RuntimeTelemetryEvent
+	policy                     models.Policy
+	policies                   []models.Policy
+	policyVersions             []models.PolicyVersion
+	policyApprovals            []models.PolicyApproval
+	scanJob                    models.ScanJob
+	createdOIDC                models.CreatedAPIToken
+	oidcProvider               string
+	oidcSubject                string
+	oidcEmail                  string
+	oidcDisplayName            string
+	registerResponse           models.WorkerRegistrationResponse
 }
 
 func (s *stubAPIStore) Ping(context.Context) error {
@@ -2627,6 +2629,131 @@ func (s *stubAPIStore) UpdateDesignControlMappingForTenant(_ context.Context, _ 
 		return item, true, nil
 	}
 	return models.DesignControlMapping{}, false, nil
+}
+
+func (s *stubAPIStore) ListRuntimeTelemetryConnectorsForTenant(_ context.Context, _ string, connectorType string, _ int) ([]models.RuntimeTelemetryConnector, error) {
+	if strings.TrimSpace(connectorType) == "" {
+		return s.runtimeTelemetryConnectors, nil
+	}
+	items := make([]models.RuntimeTelemetryConnector, 0, len(s.runtimeTelemetryConnectors))
+	for _, item := range s.runtimeTelemetryConnectors {
+		if strings.EqualFold(strings.TrimSpace(item.ConnectorType), strings.TrimSpace(connectorType)) {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) GetRuntimeTelemetryConnectorForTenant(_ context.Context, _ string, connectorID string) (models.RuntimeTelemetryConnector, bool, error) {
+	for _, item := range s.runtimeTelemetryConnectors {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(connectorID)) {
+			return item, true, nil
+		}
+	}
+	return models.RuntimeTelemetryConnector{}, false, nil
+}
+
+func (s *stubAPIStore) CreateRuntimeTelemetryConnectorForTenant(_ context.Context, tenantID string, actor string, request models.CreateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, error) {
+	now := time.Now().UTC()
+	item := models.RuntimeTelemetryConnector{
+		ID:            fmt.Sprintf("telemetry-connector-%d", now.UnixNano()),
+		TenantID:      strings.TrimSpace(tenantID),
+		Name:          strings.TrimSpace(request.Name),
+		ConnectorType: strings.TrimSpace(request.ConnectorType),
+		Status:        strings.TrimSpace(request.Status),
+		Config:        request.Config,
+		CreatedBy:     strings.TrimSpace(actor),
+		UpdatedBy:     strings.TrimSpace(actor),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if item.Status == "" {
+		item.Status = "draft"
+	}
+	if item.Config == nil {
+		item.Config = map[string]any{}
+	}
+	s.runtimeTelemetryConnectors = append([]models.RuntimeTelemetryConnector{item}, s.runtimeTelemetryConnectors...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateRuntimeTelemetryConnectorForTenant(_ context.Context, _ string, connectorID string, actor string, request models.UpdateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, bool, error) {
+	for idx, item := range s.runtimeTelemetryConnectors {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(connectorID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Name); value != "" {
+			item.Name = value
+		}
+		if value := strings.TrimSpace(request.ConnectorType); value != "" {
+			item.ConnectorType = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if request.Config != nil {
+			item.Config = request.Config
+		}
+		if request.LastSyncAt != nil {
+			item.LastSyncAt = request.LastSyncAt
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.runtimeTelemetryConnectors[idx] = item
+		return item, true, nil
+	}
+	return models.RuntimeTelemetryConnector{}, false, nil
+}
+
+func (s *stubAPIStore) ListRuntimeTelemetryEventsForTenant(_ context.Context, _ string, query models.RuntimeTelemetryEventQuery) ([]models.RuntimeTelemetryEvent, error) {
+	items := make([]models.RuntimeTelemetryEvent, 0, len(s.runtimeTelemetryEvents))
+	for _, item := range s.runtimeTelemetryEvents {
+		if strings.TrimSpace(query.ConnectorID) != "" && !strings.EqualFold(strings.TrimSpace(item.ConnectorID), strings.TrimSpace(query.ConnectorID)) {
+			continue
+		}
+		if strings.TrimSpace(query.EventType) != "" && !strings.EqualFold(strings.TrimSpace(item.EventType), strings.TrimSpace(query.EventType)) {
+			continue
+		}
+		if strings.TrimSpace(query.AssetID) != "" && !strings.EqualFold(strings.TrimSpace(item.AssetID), strings.TrimSpace(query.AssetID)) {
+			continue
+		}
+		if strings.TrimSpace(query.FindingID) != "" && !strings.EqualFold(strings.TrimSpace(item.FindingID), strings.TrimSpace(query.FindingID)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) IngestRuntimeTelemetryEventForTenant(_ context.Context, tenantID string, request models.IngestRuntimeTelemetryEventRequest) (models.RuntimeTelemetryEvent, error) {
+	now := time.Now().UTC()
+	observedAt := now
+	if request.ObservedAt != nil {
+		observedAt = request.ObservedAt.UTC()
+	}
+	item := models.RuntimeTelemetryEvent{
+		ID:           fmt.Sprintf("telemetry-event-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		ConnectorID:  strings.TrimSpace(request.ConnectorID),
+		SourceKind:   strings.TrimSpace(request.SourceKind),
+		SourceRef:    strings.TrimSpace(request.SourceRef),
+		AssetID:      strings.TrimSpace(request.AssetID),
+		FindingID:    strings.TrimSpace(request.FindingID),
+		EventType:    strings.TrimSpace(request.EventType),
+		Severity:     strings.TrimSpace(request.Severity),
+		ObservedAt:   observedAt,
+		Payload:      request.Payload,
+		EvidenceRefs: request.EvidenceRefs,
+		CreatedAt:    now,
+	}
+	if item.Severity == "" {
+		item.Severity = "info"
+	}
+	if item.Payload == nil {
+		item.Payload = map[string]any{}
+	}
+	s.runtimeTelemetryEvents = append([]models.RuntimeTelemetryEvent{item}, s.runtimeTelemetryEvents...)
+	return item, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {
