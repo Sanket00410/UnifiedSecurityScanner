@@ -120,6 +120,9 @@ type stubAPIStore struct {
 	runtimeTelemetryEvents     []models.RuntimeTelemetryEvent
 	complianceMappings         []models.ComplianceControlMapping
 	complianceSummary          models.ComplianceSummary
+	detectionRulepacks         []models.DetectionRulepack
+	detectionRulepackVersions  []models.DetectionRulepackVersion
+	detectionRulepackRollouts  []models.DetectionRulepackRollout
 	policy                     models.Policy
 	policies                   []models.Policy
 	policyVersions             []models.PolicyVersion
@@ -2844,6 +2847,185 @@ func (s *stubAPIStore) GetComplianceSummaryForTenant(context.Context, string) (m
 		s.complianceSummary.FrameworkStatus = map[string]map[string]int64{}
 	}
 	return s.complianceSummary, nil
+}
+
+func (s *stubAPIStore) ListDetectionRulepacksForTenant(_ context.Context, _ string, engine string, status string, _ int) ([]models.DetectionRulepack, error) {
+	items := make([]models.DetectionRulepack, 0, len(s.detectionRulepacks))
+	for _, item := range s.detectionRulepacks {
+		if strings.TrimSpace(engine) != "" && !strings.EqualFold(strings.TrimSpace(item.Engine), strings.TrimSpace(engine)) {
+			continue
+		}
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) GetDetectionRulepackForTenant(_ context.Context, _ string, rulepackID string) (models.DetectionRulepack, bool, error) {
+	for _, item := range s.detectionRulepacks {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(rulepackID)) {
+			return item, true, nil
+		}
+	}
+	return models.DetectionRulepack{}, false, nil
+}
+
+func (s *stubAPIStore) CreateDetectionRulepackForTenant(_ context.Context, tenantID string, actor string, request models.CreateDetectionRulepackRequest) (models.DetectionRulepack, error) {
+	now := time.Now().UTC()
+	item := models.DetectionRulepack{
+		ID:             fmt.Sprintf("rulepack-%d", now.UnixNano()),
+		TenantID:       strings.TrimSpace(tenantID),
+		Name:           strings.TrimSpace(request.Name),
+		Engine:         strings.TrimSpace(request.Engine),
+		Status:         strings.TrimSpace(request.Status),
+		Description:    strings.TrimSpace(request.Description),
+		CurrentVersion: "",
+		CreatedBy:      strings.TrimSpace(actor),
+		UpdatedBy:      strings.TrimSpace(actor),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if item.Status == "" {
+		item.Status = "draft"
+	}
+	s.detectionRulepacks = append([]models.DetectionRulepack{item}, s.detectionRulepacks...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateDetectionRulepackForTenant(_ context.Context, _ string, rulepackID string, actor string, request models.UpdateDetectionRulepackRequest) (models.DetectionRulepack, bool, error) {
+	for idx, item := range s.detectionRulepacks {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(rulepackID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Name); value != "" {
+			item.Name = value
+		}
+		if value := strings.TrimSpace(request.Engine); value != "" {
+			item.Engine = value
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.Description); value != "" {
+			item.Description = value
+		}
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.detectionRulepacks[idx] = item
+		return item, true, nil
+	}
+	return models.DetectionRulepack{}, false, nil
+}
+
+func (s *stubAPIStore) ListDetectionRulepackVersionsForTenant(_ context.Context, _ string, rulepackID string, _ int) ([]models.DetectionRulepackVersion, error) {
+	items := make([]models.DetectionRulepackVersion, 0, len(s.detectionRulepackVersions))
+	for _, item := range s.detectionRulepackVersions {
+		if strings.EqualFold(strings.TrimSpace(item.RulepackID), strings.TrimSpace(rulepackID)) {
+			items = append(items, item)
+		}
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) CreateDetectionRulepackVersionForTenant(_ context.Context, tenantID string, rulepackID string, actor string, request models.CreateDetectionRulepackVersionRequest) (models.DetectionRulepackVersion, error) {
+	now := time.Now().UTC()
+	item := models.DetectionRulepackVersion{
+		ID:           fmt.Sprintf("rulepack-version-%d", now.UnixNano()),
+		TenantID:     strings.TrimSpace(tenantID),
+		RulepackID:   strings.TrimSpace(rulepackID),
+		VersionTag:   strings.TrimSpace(request.VersionTag),
+		ContentRef:   strings.TrimSpace(request.ContentRef),
+		Checksum:     strings.TrimSpace(request.Checksum),
+		Status:       strings.TrimSpace(request.Status),
+		QualityScore: request.QualityScore,
+		CreatedAt:    now,
+	}
+	if item.Status == "" {
+		item.Status = "draft"
+	}
+	if item.Status == "active" || item.Status == "canary" {
+		item.PublishedBy = strings.TrimSpace(actor)
+		item.PublishedAt = &now
+	}
+	s.detectionRulepackVersions = append([]models.DetectionRulepackVersion{item}, s.detectionRulepackVersions...)
+	return item, nil
+}
+
+func (s *stubAPIStore) PromoteDetectionRulepackVersionForTenant(_ context.Context, tenantID string, rulepackID string, versionID string, actor string, request models.PromoteDetectionRulepackVersionRequest) (models.DetectionRulepackRollout, bool, error) {
+	var version models.DetectionRulepackVersion
+	foundVersion := false
+	for idx, item := range s.detectionRulepackVersions {
+		if !strings.EqualFold(strings.TrimSpace(item.RulepackID), strings.TrimSpace(rulepackID)) ||
+			!strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(versionID)) {
+			continue
+		}
+		foundVersion = true
+		version = item
+		phase := strings.TrimSpace(request.Phase)
+		if phase == "" {
+			phase = "canary"
+		}
+		if strings.EqualFold(phase, "active") || strings.EqualFold(phase, "rollback") {
+			item.Status = "active"
+		} else {
+			item.Status = "canary"
+		}
+		now := time.Now().UTC()
+		item.PublishedBy = strings.TrimSpace(actor)
+		item.PublishedAt = &now
+		s.detectionRulepackVersions[idx] = item
+		version = item
+		break
+	}
+	if !foundVersion {
+		return models.DetectionRulepackRollout{}, false, nil
+	}
+
+	for idx, item := range s.detectionRulepacks {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(rulepackID)) {
+			continue
+		}
+		item.CurrentVersion = version.VersionTag
+		item.Status = "active"
+		item.UpdatedBy = strings.TrimSpace(actor)
+		item.UpdatedAt = time.Now().UTC()
+		s.detectionRulepacks[idx] = item
+		break
+	}
+
+	now := time.Now().UTC()
+	phase := strings.TrimSpace(request.Phase)
+	if phase == "" {
+		phase = "canary"
+	}
+	rollout := models.DetectionRulepackRollout{
+		ID:          fmt.Sprintf("rulepack-rollout-%d", now.UnixNano()),
+		TenantID:    strings.TrimSpace(tenantID),
+		RulepackID:  strings.TrimSpace(rulepackID),
+		VersionID:   strings.TrimSpace(versionID),
+		Phase:       phase,
+		Status:      "completed",
+		TargetScope: strings.TrimSpace(request.TargetScope),
+		Notes:       strings.TrimSpace(request.Notes),
+		StartedBy:   strings.TrimSpace(actor),
+		StartedAt:   now,
+		CompletedAt: &now,
+		CreatedAt:   now,
+	}
+	s.detectionRulepackRollouts = append([]models.DetectionRulepackRollout{rollout}, s.detectionRulepackRollouts...)
+	return rollout, true, nil
+}
+
+func (s *stubAPIStore) ListDetectionRulepackRolloutsForTenant(_ context.Context, _ string, rulepackID string, _ int) ([]models.DetectionRulepackRollout, error) {
+	items := make([]models.DetectionRulepackRollout, 0, len(s.detectionRulepackRollouts))
+	for _, item := range s.detectionRulepackRollouts {
+		if strings.EqualFold(strings.TrimSpace(item.RulepackID), strings.TrimSpace(rulepackID)) {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {

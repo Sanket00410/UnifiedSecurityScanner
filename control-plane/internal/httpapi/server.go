@@ -191,6 +191,14 @@ type apiStore interface {
 	CreateComplianceControlMappingForTenant(ctx context.Context, tenantID string, actor string, request models.CreateComplianceControlMappingRequest) (models.ComplianceControlMapping, error)
 	UpdateComplianceControlMappingForTenant(ctx context.Context, tenantID string, mappingID string, actor string, request models.UpdateComplianceControlMappingRequest) (models.ComplianceControlMapping, bool, error)
 	GetComplianceSummaryForTenant(ctx context.Context, tenantID string) (models.ComplianceSummary, error)
+	ListDetectionRulepacksForTenant(ctx context.Context, tenantID string, engine string, status string, limit int) ([]models.DetectionRulepack, error)
+	GetDetectionRulepackForTenant(ctx context.Context, tenantID string, rulepackID string) (models.DetectionRulepack, bool, error)
+	CreateDetectionRulepackForTenant(ctx context.Context, tenantID string, actor string, request models.CreateDetectionRulepackRequest) (models.DetectionRulepack, error)
+	UpdateDetectionRulepackForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.UpdateDetectionRulepackRequest) (models.DetectionRulepack, bool, error)
+	ListDetectionRulepackVersionsForTenant(ctx context.Context, tenantID string, rulepackID string, limit int) ([]models.DetectionRulepackVersion, error)
+	CreateDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.CreateDetectionRulepackVersionRequest) (models.DetectionRulepackVersion, error)
+	PromoteDetectionRulepackVersionForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, actor string, request models.PromoteDetectionRulepackVersionRequest) (models.DetectionRulepackRollout, bool, error)
+	ListDetectionRulepackRolloutsForTenant(ctx context.Context, tenantID string, rulepackID string, limit int) ([]models.DetectionRulepackRollout, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -448,6 +456,15 @@ func New(cfg config.Config, store apiStore) *Server {
 	}, "compliance_mappings", "compliance_mapping", server.handleComplianceMappings))
 	mux.HandleFunc("/v1/compliance/mappings/", server.withUserAuth(auth.PermissionPoliciesWrite, "compliance_mapping.update", "compliance_mapping", server.handleComplianceMappingRoute))
 	mux.HandleFunc("/v1/compliance/summary", server.withUserAuth(auth.PermissionFindingsRead, "compliance.summary", "compliance_summary", server.handleComplianceSummary))
+	mux.HandleFunc("/v1/detection/rulepacks", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "detection_rulepacks", "detection_rulepack", server.handleDetectionRulepacks))
+	mux.HandleFunc("/v1/detection/rulepacks/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPut:  auth.PermissionPoliciesWrite,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "detection_rulepack", "detection_rulepack", server.handleDetectionRulepackRoute))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -5810,6 +5827,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/compliance/mappings/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/compliance/mappings/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/detection/rulepacks/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/detection/rulepacks/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

@@ -54,6 +54,9 @@ var (
 	telemetryConnectorSequence       uint64
 	telemetryEventSequence           uint64
 	complianceMappingSequence        uint64
+	detectionRulepackSequence        uint64
+	detectionRulepackVersionSequence uint64
+	detectionRulepackRolloutSequence uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
 	externalAssetSequence            uint64
@@ -99,6 +102,8 @@ var (
 	ErrDesignControlMappingNotFound  = errors.New("design control mapping not found")
 	ErrTelemetryConnectorNotFound    = errors.New("runtime telemetry connector not found")
 	ErrComplianceMappingNotFound     = errors.New("compliance control mapping not found")
+	ErrDetectionRulepackNotFound     = errors.New("detection rulepack not found")
+	ErrDetectionVersionNotFound      = errors.New("detection rulepack version not found")
 	ErrCertificateAuthorityDisabled  = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound   = errors.New("workload certificate not found")
 )
