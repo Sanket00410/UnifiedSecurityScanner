@@ -18,7 +18,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	scheduler := jobs.NewScheduler(cfg.SchedulerInterval, logger)
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		logger.Fatalf("scheduler store init failed: %v", err)
+	}
+	defer store.Close()
+
+	scheduler := jobs.NewScheduler(cfg.SchedulerInterval, logger, store, cfg.WebhookDispatchLimitPerTenant)
 	if err := scheduler.Run(ctx); err != nil {
 		logger.Fatalf("scheduler failed: %v", err)
 	}

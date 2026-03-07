@@ -21,6 +21,12 @@ type webhookIntegrationRecord struct {
 	secretEncrypted string
 }
 
+const (
+	webhookMaxDeliveryAttempts = 3
+	webhookRetryBaseDelay      = 1 * time.Second
+	webhookRetryMaxDelay       = 30 * time.Second
+)
+
 func (s *Store) ListWebhookIntegrationsForTenant(ctx context.Context, tenantID string, status string, eventType string, limit int) ([]models.WebhookIntegration, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	status = normalizeWebhookIntegrationStatus(status)
@@ -224,8 +230,8 @@ func (s *Store) ListWebhookDeliveriesForTenant(ctx context.Context, tenantID str
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, tenant_id, webhook_id, platform_event_id, event_type, status,
-		       response_status, response_body, error_message, attempted_at, delivered_at, created_at
+		SELECT id, tenant_id, webhook_id, platform_event_id, event_type, status, attempt_count,
+		       response_status, response_body, error_message, attempted_at, next_attempt_at, delivered_at, dead_lettered_at, created_at
 		FROM webhook_deliveries
 		WHERE tenant_id = $1
 		  AND ($2 = '' OR webhook_id = $2)
@@ -289,6 +295,7 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	now := time.Now().UTC()
 	for _, event := range events {
 		for _, webhook := range webhooks {
 			if !webhookAcceptsEvent(webhook.integration.EventTypes, event.EventType) {
@@ -296,17 +303,41 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 				continue
 			}
 
+			attemptCount := 1
 			if !request.Replay {
-				exists, err := s.webhookDeliveryExists(ctx, tenantID, webhook.integration.ID, event.ID)
+				existing, found, err := s.getLatestWebhookDeliveryForEvent(ctx, tenantID, webhook.integration.ID, event.ID)
 				if err != nil {
 					return models.DispatchWebhookDeliveriesResult{}, err
 				}
-				if exists {
-					result.Skipped++
-					continue
+
+				if found {
+					switch existing.Status {
+					case "delivered", "dead_letter":
+						result.Skipped++
+						continue
+					case "scheduled_retry":
+						if existing.NextAttemptAt != nil && existing.NextAttemptAt.After(now) {
+							result.Skipped++
+							continue
+						}
+					}
+					if existing.AttemptCount >= webhookMaxDeliveryAttempts {
+						result.Skipped++
+						continue
+					}
+					attemptCount = existing.AttemptCount + 1
+				}
+			} else {
+				existing, found, err := s.getLatestWebhookDeliveryForEvent(ctx, tenantID, webhook.integration.ID, event.ID)
+				if err != nil {
+					return models.DispatchWebhookDeliveriesResult{}, err
+				}
+				if found {
+					attemptCount = existing.AttemptCount + 1
 				}
 			}
 
+			attemptedAt := time.Now().UTC()
 			result.Attempted++
 			delivery := models.WebhookDelivery{
 				ID:              nextWebhookDeliveryID(),
@@ -315,8 +346,9 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 				PlatformEventID: strings.TrimSpace(event.ID),
 				EventType:       strings.TrimSpace(event.EventType),
 				Status:          "failed",
-				AttemptedAt:     time.Now().UTC(),
-				CreatedAt:       time.Now().UTC(),
+				AttemptCount:    attemptCount,
+				AttemptedAt:     attemptedAt,
+				CreatedAt:       attemptedAt,
 			}
 
 			delivered, responseStatus, responseBody, errMessage := s.sendWebhookDelivery(ctx, client, webhook, event, delivery.ID)
@@ -324,15 +356,27 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 			delivery.ResponseBody = truncateWebhookText(responseBody, 2048)
 			delivery.ErrorMessage = truncateWebhookText(errMessage, 1024)
 			if delivered {
-				now := time.Now().UTC()
+				successAt := time.Now().UTC()
 				delivery.Status = "delivered"
-				delivery.DeliveredAt = &now
+				delivery.DeliveredAt = &successAt
+				delivery.NextAttemptAt = nil
+				delivery.DeadLetteredAt = nil
+			} else if request.Replay {
+				delivery.Status = "failed"
+			} else if attemptCount >= webhookMaxDeliveryAttempts {
+				deadLetteredAt := time.Now().UTC()
+				delivery.Status = "dead_letter"
+				delivery.DeadLetteredAt = &deadLetteredAt
+			} else {
+				nextAttempt := attemptedAt.Add(webhookRetryDelay(attemptCount))
+				delivery.Status = "scheduled_retry"
+				delivery.NextAttemptAt = &nextAttempt
 			}
 
 			if err := s.insertWebhookDelivery(ctx, delivery); err != nil {
 				return models.DispatchWebhookDeliveriesResult{}, err
 			}
-			if err := s.updateWebhookDeliveryStatusSummary(ctx, tenantID, webhook.integration.ID, delivery.AttemptedAt, delivery.DeliveredAt); err != nil {
+			if err := s.updateWebhookDeliveryStatusSummary(ctx, tenantID, webhook.integration.ID, attemptedAt, delivery.DeliveredAt); err != nil {
 				return models.DispatchWebhookDeliveriesResult{}, err
 			}
 
@@ -362,6 +406,115 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 	})
 
 	return result, nil
+}
+
+func (s *Store) DispatchWebhookDeliveriesForAllTenants(ctx context.Context, actor string, limitPerTenant int) (models.DispatchWebhookDeliveriesSweepResult, error) {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+	if limitPerTenant <= 0 || limitPerTenant > 2000 {
+		limitPerTenant = 200
+	}
+
+	tenantIDs, err := s.listActiveWebhookTenantIDs(ctx)
+	if err != nil {
+		return models.DispatchWebhookDeliveriesSweepResult{}, err
+	}
+
+	out := models.DispatchWebhookDeliveriesSweepResult{
+		ByTenant: map[string]models.DispatchTenantSummary{},
+	}
+
+	for _, tenantID := range tenantIDs {
+		result, err := s.DispatchWebhookDeliveriesForTenant(ctx, tenantID, actor, models.DispatchWebhookDeliveriesRequest{
+			Limit: limitPerTenant,
+		})
+		if err != nil {
+			return models.DispatchWebhookDeliveriesSweepResult{}, err
+		}
+
+		summary := models.DispatchTenantSummary{
+			Attempted: result.Attempted,
+			Delivered: result.Delivered,
+			Failed:    result.Failed,
+			Skipped:   result.Skipped,
+		}
+		out.ByTenant[tenantID] = summary
+		out.TenantsEvaluated++
+		out.Attempted += result.Attempted
+		out.Delivered += result.Delivered
+		out.Failed += result.Failed
+		out.Skipped += result.Skipped
+	}
+
+	return out, nil
+}
+
+func (s *Store) listActiveWebhookTenantIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT tenant_id
+		FROM webhook_integrations
+		WHERE status = 'active'
+		ORDER BY tenant_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list active webhook tenant ids: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0)
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, fmt.Errorf("scan active webhook tenant id: %w", err)
+		}
+		tenantID = strings.TrimSpace(tenantID)
+		if tenantID == "" {
+			continue
+		}
+		out = append(out, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active webhook tenant ids: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) getLatestWebhookDeliveryForEvent(ctx context.Context, tenantID string, webhookID string, platformEventID string) (models.WebhookDelivery, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, webhook_id, platform_event_id, event_type, status, attempt_count,
+		       response_status, response_body, error_message, attempted_at, next_attempt_at, delivered_at, dead_lettered_at, created_at
+		FROM webhook_deliveries
+		WHERE tenant_id = $1
+		  AND webhook_id = $2
+		  AND platform_event_id = $3
+		ORDER BY attempted_at DESC, id DESC
+		LIMIT 1
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(webhookID), strings.TrimSpace(platformEventID))
+	item, err := scanWebhookDelivery(row)
+	if err != nil {
+		if isNoRows(err) {
+			return models.WebhookDelivery{}, false, nil
+		}
+		return models.WebhookDelivery{}, false, fmt.Errorf("get latest webhook delivery: %w", err)
+	}
+	return item, true, nil
+}
+
+func webhookRetryDelay(attemptCount int) time.Duration {
+	if attemptCount <= 1 {
+		return webhookRetryBaseDelay
+	}
+
+	delay := webhookRetryBaseDelay
+	for i := 1; i < attemptCount; i++ {
+		delay *= 2
+		if delay >= webhookRetryMaxDelay {
+			return webhookRetryMaxDelay
+		}
+	}
+	return delay
 }
 
 func (s *Store) listWebhookIntegrationRecordsForDispatch(ctx context.Context, tenantID string, webhookID string) ([]webhookIntegrationRecord, error) {
@@ -465,33 +618,17 @@ func (s *Store) sendWebhookDelivery(ctx context.Context, client *http.Client, we
 	return false, response.StatusCode, bodyText, fmt.Sprintf("unexpected status code %d", response.StatusCode)
 }
 
-func (s *Store) webhookDeliveryExists(ctx context.Context, tenantID string, webhookID string, platformEventID string) (bool, error) {
-	var exists bool
-	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1
-			FROM webhook_deliveries
-			WHERE tenant_id = $1
-			  AND webhook_id = $2
-			  AND platform_event_id = $3
-		)
-	`, strings.TrimSpace(tenantID), strings.TrimSpace(webhookID), strings.TrimSpace(platformEventID)).Scan(&exists); err != nil {
-		return false, fmt.Errorf("check webhook delivery existence: %w", err)
-	}
-	return exists, nil
-}
-
 func (s *Store) insertWebhookDelivery(ctx context.Context, item models.WebhookDelivery) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO webhook_deliveries (
-			id, tenant_id, webhook_id, platform_event_id, event_type, status,
-			response_status, response_body, error_message, attempted_at, delivered_at, created_at
+			id, tenant_id, webhook_id, platform_event_id, event_type, status, attempt_count,
+			response_status, response_body, error_message, attempted_at, next_attempt_at, delivered_at, dead_lettered_at, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13, $14, $15
 		)
-	`, item.ID, item.TenantID, item.WebhookID, item.PlatformEventID, item.EventType, item.Status, item.ResponseStatus,
-		item.ResponseBody, item.ErrorMessage, item.AttemptedAt, item.DeliveredAt, item.CreatedAt)
+	`, item.ID, item.TenantID, item.WebhookID, item.PlatformEventID, item.EventType, item.Status, item.AttemptCount, item.ResponseStatus,
+		item.ResponseBody, item.ErrorMessage, item.AttemptedAt, item.NextAttemptAt, item.DeliveredAt, item.DeadLetteredAt, item.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert webhook delivery: %w", err)
 	}
@@ -570,11 +707,14 @@ func scanWebhookDelivery(row interface{ Scan(dest ...any) error }) (models.Webho
 		&item.PlatformEventID,
 		&item.EventType,
 		&item.Status,
+		&item.AttemptCount,
 		&item.ResponseStatus,
 		&item.ResponseBody,
 		&item.ErrorMessage,
 		&item.AttemptedAt,
+		&item.NextAttemptAt,
 		&item.DeliveredAt,
+		&item.DeadLetteredAt,
 		&item.CreatedAt,
 	)
 	if err != nil {
@@ -609,7 +749,7 @@ func normalizeWebhookIntegrationStatus(value string) string {
 
 func normalizeWebhookDeliveryStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "delivered", "failed":
+	case "delivered", "failed", "scheduled_retry", "dead_letter":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

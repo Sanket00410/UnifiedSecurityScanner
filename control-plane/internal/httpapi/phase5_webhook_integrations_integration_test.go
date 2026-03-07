@@ -254,3 +254,157 @@ func TestPhase5WebhookIntegrationsDispatchFlow(t *testing.T) {
 		t.Fatalf("expected delivered status, got %s", listDeliveriesPayload.Items[0].Status)
 	}
 }
+
+func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase5_webhook_retry_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase5-webhook-retry-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+	failedCallbacks := int64(0)
+	callbackReceiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.Body.Close()
+		failedCallbacks++
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"downstream_unavailable"}`))
+	}))
+	defer callbackReceiver.Close()
+
+	createWebhookResponse, createWebhookBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/integrations/webhooks",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"name":         "phase5-webhook-dead-letter",
+			"endpoint_url": callbackReceiver.URL,
+			"event_types":  []string{"scan_job.created"},
+			"status":       "active",
+			"secret":       "phase5-dead-letter-secret",
+		},
+		http.StatusCreated,
+	)
+	defer createWebhookResponse.Body.Close()
+
+	var webhook models.WebhookIntegration
+	decodeJSONResponse(t, createWebhookBody, &webhook)
+	if strings.TrimSpace(webhook.ID) == "" {
+		t.Fatal("expected webhook integration id")
+	}
+
+	createJobResponse, createJobBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/scan-jobs",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"target_kind":  "repo",
+			"target":       "https://example.com/org/retry-repo.git",
+			"profile":      "quick",
+			"requested_by": "phase5-webhook-retry-it",
+			"tools":        []string{"semgrep"},
+		},
+		http.StatusAccepted,
+	)
+	defer createJobResponse.Body.Close()
+
+	var createdJob models.ScanJob
+	decodeJSONResponse(t, createJobBody, &createdJob)
+	if strings.TrimSpace(createdJob.ID) == "" {
+		t.Fatal("expected created scan job id")
+	}
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		dispatchResponse, dispatchBody := mustJSONRequest(
+			t,
+			client,
+			http.MethodPost,
+			testServer.URL+"/v1/integrations/webhooks/dispatch",
+			cfg.BootstrapAdminToken,
+			auth.WorkerSecretHeader,
+			"",
+			map[string]any{
+				"event_type": "scan_job.created",
+				"limit":      100,
+			},
+			http.StatusOK,
+		)
+		defer dispatchResponse.Body.Close()
+
+		var dispatchResult models.DispatchWebhookDeliveriesResult
+		decodeJSONResponse(t, dispatchBody, &dispatchResult)
+		if dispatchResult.Attempted < 1 {
+			t.Fatalf("attempt %d: expected dispatch attempt > 0, got %d", attempt, dispatchResult.Attempted)
+		}
+		if attempt < 3 {
+			time.Sleep((1 << attempt) * time.Second)
+		}
+	}
+
+	listDeliveriesResponse, listDeliveriesBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/integrations/webhooks/"+webhook.ID+"/deliveries?limit=20",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer listDeliveriesResponse.Body.Close()
+
+	var listDeliveriesPayload struct {
+		Items []models.WebhookDelivery `json:"items"`
+	}
+	decodeJSONResponse(t, listDeliveriesBody, &listDeliveriesPayload)
+	if len(listDeliveriesPayload.Items) < 3 {
+		t.Fatalf("expected at least 3 delivery attempts, got %d", len(listDeliveriesPayload.Items))
+	}
+
+	latest := listDeliveriesPayload.Items[0]
+	if latest.Status != "dead_letter" {
+		t.Fatalf("expected latest delivery status dead_letter, got %s", latest.Status)
+	}
+	if latest.AttemptCount != 3 {
+		t.Fatalf("expected dead-letter attempt_count 3, got %d", latest.AttemptCount)
+	}
+	if latest.DeadLetteredAt == nil {
+		t.Fatal("expected dead_lettered_at to be set on dead_letter delivery")
+	}
+}

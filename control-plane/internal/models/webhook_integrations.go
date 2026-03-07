@@ -44,11 +44,14 @@ type WebhookDelivery struct {
 	PlatformEventID string     `json:"platform_event_id"`
 	EventType       string     `json:"event_type"`
 	Status          string     `json:"status"`
+	AttemptCount    int        `json:"attempt_count"`
 	ResponseStatus  int        `json:"response_status,omitempty"`
 	ResponseBody    string     `json:"response_body,omitempty"`
 	ErrorMessage    string     `json:"error_message,omitempty"`
 	AttemptedAt     time.Time  `json:"attempted_at"`
+	NextAttemptAt   *time.Time `json:"next_attempt_at,omitempty"`
 	DeliveredAt     *time.Time `json:"delivered_at,omitempty"`
+	DeadLetteredAt  *time.Time `json:"dead_lettered_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
@@ -65,4 +68,20 @@ type DispatchWebhookDeliveriesResult struct {
 	Failed    int64            `json:"failed"`
 	Skipped   int64            `json:"skipped"`
 	ByWebhook map[string]int64 `json:"by_webhook"`
+}
+
+type DispatchWebhookDeliveriesSweepResult struct {
+	TenantsEvaluated int64                            `json:"tenants_evaluated"`
+	Attempted        int64                            `json:"attempted"`
+	Delivered        int64                            `json:"delivered"`
+	Failed           int64                            `json:"failed"`
+	Skipped          int64                            `json:"skipped"`
+	ByTenant         map[string]DispatchTenantSummary `json:"by_tenant"`
+}
+
+type DispatchTenantSummary struct {
+	Attempted int64 `json:"attempted"`
+	Delivered int64 `json:"delivered"`
+	Failed    int64 `json:"failed"`
+	Skipped   int64 `json:"skipped"`
 }
