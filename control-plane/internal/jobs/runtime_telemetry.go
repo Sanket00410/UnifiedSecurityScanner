@@ -239,15 +239,6 @@ func (s *Store) IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenant
 	}
 
 	connectorID := strings.TrimSpace(request.ConnectorID)
-	if connectorID != "" {
-		_, found, err := s.GetRuntimeTelemetryConnectorForTenant(ctx, tenantID, connectorID)
-		if err != nil {
-			return models.RuntimeTelemetryEvent{}, err
-		}
-		if !found {
-			return models.RuntimeTelemetryEvent{}, ErrTelemetryConnectorNotFound
-		}
-	}
 
 	observedAt := time.Now().UTC()
 	if request.ObservedAt != nil {
@@ -282,7 +273,30 @@ func (s *Store) IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenant
 		return models.RuntimeTelemetryEvent{}, fmt.Errorf("marshal runtime telemetry event evidence refs: %w", err)
 	}
 
-	row := s.pool.QueryRow(ctx, `
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.RuntimeTelemetryEvent{}, fmt.Errorf("begin runtime telemetry ingest tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if connectorID != "" {
+		var connectorExists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1
+				FROM runtime_telemetry_connectors
+				WHERE tenant_id = $1
+				  AND id = $2
+			)
+		`, tenantID, connectorID).Scan(&connectorExists); err != nil {
+			return models.RuntimeTelemetryEvent{}, fmt.Errorf("validate runtime telemetry connector: %w", err)
+		}
+		if !connectorExists {
+			return models.RuntimeTelemetryEvent{}, ErrTelemetryConnectorNotFound
+		}
+	}
+
+	row := tx.QueryRow(ctx, `
 		INSERT INTO runtime_telemetry_events (
 			id, tenant_id, connector_id, source_kind, source_ref, asset_id,
 			finding_id, event_type, severity, observed_at, payload_json,
@@ -301,6 +315,50 @@ func (s *Store) IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenant
 	created, err := scanRuntimeTelemetryEvent(row)
 	if err != nil {
 		return models.RuntimeTelemetryEvent{}, fmt.Errorf("create runtime telemetry event: %w", err)
+	}
+
+	if strings.TrimSpace(created.AssetID) != "" {
+		metadata := map[string]any{
+			"runtime_event_id": created.ID,
+			"event_type":       created.EventType,
+			"severity":         created.Severity,
+			"source_kind":      created.SourceKind,
+			"source_ref":       created.SourceRef,
+			"connector_id":     created.ConnectorID,
+			"finding_id":       created.FindingID,
+		}
+		if len(created.EvidenceRefs) > 0 {
+			metadata["evidence_refs"] = created.EvidenceRefs
+		}
+		if len(created.Payload) > 0 {
+			metadata["payload"] = created.Payload
+		}
+
+		if err := publishPlatformEventTx(ctx, tx, models.PlatformEvent{
+			TenantID:      tenantID,
+			EventType:     "asset_context.runtime",
+			SourceService: "control-plane",
+			AggregateType: "asset",
+			AggregateID:   strings.TrimSpace(created.AssetID),
+			Payload: map[string]any{
+				"asset_id":   strings.TrimSpace(created.AssetID),
+				"asset_type": inferRuntimeAssetType(created.SourceKind),
+				"event_kind": "runtime",
+				"source":     strings.TrimSpace(created.SourceKind),
+				"metadata":   metadata,
+			},
+			CreatedAt: created.CreatedAt,
+		}); err != nil {
+			return models.RuntimeTelemetryEvent{}, err
+		}
+	}
+
+	if _, err := enrichFindingFromRuntimeEventTx(ctx, tx, created); err != nil {
+		return models.RuntimeTelemetryEvent{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.RuntimeTelemetryEvent{}, fmt.Errorf("commit runtime telemetry ingest tx: %w", err)
 	}
 	return created, nil
 }
@@ -432,6 +490,21 @@ func cloneRuntimeTelemetryMap(values map[string]any) map[string]any {
 		out[trimmed] = value
 	}
 	return out
+}
+
+func inferRuntimeAssetType(sourceKind string) string {
+	switch strings.ToLower(strings.TrimSpace(sourceKind)) {
+	case "api_gateway":
+		return "api"
+	case "waf", "cdn", "reverse_proxy":
+		return "domain"
+	case "service_mesh", "edr", "xdr":
+		return "host"
+	case "cloud_audit":
+		return "cloud_account"
+	default:
+		return "asset"
+	}
 }
 
 func nextRuntimeTelemetryConnectorID() string {

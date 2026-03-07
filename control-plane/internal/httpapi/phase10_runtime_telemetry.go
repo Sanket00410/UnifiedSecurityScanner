@@ -177,6 +177,54 @@ func (s *Server) handleRuntimeTelemetryEvents(w http.ResponseWriter, r *http.Req
 	}
 }
 
+func (s *Server) handleRuntimeTelemetryEnrichments(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		items, err := s.store.ListRuntimeFindingEnrichmentsForTenant(r.Context(), principal.OrganizationID, strings.TrimSpace(r.URL.Query().Get("finding_id")), limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_runtime_finding_enrichments_failed", "runtime finding enrichments could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	case http.MethodPost:
+		limit := 500
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		result, err := s.store.BackfillRuntimeFindingEnrichmentForTenant(r.Context(), principal.OrganizationID, limit)
+		if err != nil {
+			if s.writeRuntimeTelemetryMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "runtime_enrichment_backfill_failed", "runtime enrichment backfill could not be completed")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, result)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
 func (s *Server) writeRuntimeTelemetryMutationError(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false

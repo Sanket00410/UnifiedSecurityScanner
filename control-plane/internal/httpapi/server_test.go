@@ -118,6 +118,8 @@ type stubAPIStore struct {
 	designControlMappings      []models.DesignControlMapping
 	runtimeTelemetryConnectors []models.RuntimeTelemetryConnector
 	runtimeTelemetryEvents     []models.RuntimeTelemetryEvent
+	runtimeFindingEnrichments  []models.RuntimeFindingEnrichment
+	runtimeEnrichmentBackfill  models.RuntimeEnrichmentBackfillResult
 	complianceMappings         []models.ComplianceControlMapping
 	complianceSummary          models.ComplianceSummary
 	detectionRulepacks         []models.DetectionRulepack
@@ -2761,6 +2763,25 @@ func (s *stubAPIStore) IngestRuntimeTelemetryEventForTenant(_ context.Context, t
 	}
 	s.runtimeTelemetryEvents = append([]models.RuntimeTelemetryEvent{item}, s.runtimeTelemetryEvents...)
 	return item, nil
+}
+
+func (s *stubAPIStore) ListRuntimeFindingEnrichmentsForTenant(_ context.Context, _ string, findingID string, _ int) ([]models.RuntimeFindingEnrichment, error) {
+	if strings.TrimSpace(findingID) == "" {
+		return s.runtimeFindingEnrichments, nil
+	}
+
+	items := make([]models.RuntimeFindingEnrichment, 0, len(s.runtimeFindingEnrichments))
+	for _, item := range s.runtimeFindingEnrichments {
+		if !strings.EqualFold(strings.TrimSpace(item.FindingID), strings.TrimSpace(findingID)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) BackfillRuntimeFindingEnrichmentForTenant(_ context.Context, _ string, _ int) (models.RuntimeEnrichmentBackfillResult, error) {
+	return s.runtimeEnrichmentBackfill, nil
 }
 
 func (s *stubAPIStore) ListComplianceControlMappingsForTenant(_ context.Context, _ string, framework string, sourceID string, _ int) ([]models.ComplianceControlMapping, error) {

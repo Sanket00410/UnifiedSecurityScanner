@@ -187,6 +187,8 @@ type apiStore interface {
 	UpdateRuntimeTelemetryConnectorForTenant(ctx context.Context, tenantID string, connectorID string, actor string, request models.UpdateRuntimeTelemetryConnectorRequest) (models.RuntimeTelemetryConnector, bool, error)
 	ListRuntimeTelemetryEventsForTenant(ctx context.Context, tenantID string, query models.RuntimeTelemetryEventQuery) ([]models.RuntimeTelemetryEvent, error)
 	IngestRuntimeTelemetryEventForTenant(ctx context.Context, tenantID string, request models.IngestRuntimeTelemetryEventRequest) (models.RuntimeTelemetryEvent, error)
+	ListRuntimeFindingEnrichmentsForTenant(ctx context.Context, tenantID string, findingID string, limit int) ([]models.RuntimeFindingEnrichment, error)
+	BackfillRuntimeFindingEnrichmentForTenant(ctx context.Context, tenantID string, limit int) (models.RuntimeEnrichmentBackfillResult, error)
 	ListComplianceControlMappingsForTenant(ctx context.Context, tenantID string, framework string, sourceID string, limit int) ([]models.ComplianceControlMapping, error)
 	CreateComplianceControlMappingForTenant(ctx context.Context, tenantID string, actor string, request models.CreateComplianceControlMappingRequest) (models.ComplianceControlMapping, error)
 	UpdateComplianceControlMappingForTenant(ctx context.Context, tenantID string, mappingID string, actor string, request models.UpdateComplianceControlMappingRequest) (models.ComplianceControlMapping, bool, error)
@@ -454,6 +456,10 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionAssetsWrite,
 	}, "runtime_telemetry_events", "runtime_telemetry_event", server.handleRuntimeTelemetryEvents))
+	mux.HandleFunc("/v1/runtime/telemetry/enrichments", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionFindingsRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "runtime_telemetry_enrichments", "runtime_finding_enrichment", server.handleRuntimeTelemetryEnrichments))
 	mux.HandleFunc("/v1/compliance/mappings", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionFindingsRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,

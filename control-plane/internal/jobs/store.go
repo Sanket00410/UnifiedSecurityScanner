@@ -58,6 +58,7 @@ var (
 	detectionRulepackVersionSequence uint64
 	detectionRulepackRolloutSequence uint64
 	aiTriageRequestSequence          uint64
+	runtimeFindingEnrichmentSequence uint64
 	apiAssetSequence                 uint64
 	apiEndpointSequence              uint64
 	externalAssetSequence            uint64
