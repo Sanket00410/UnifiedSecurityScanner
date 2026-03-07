@@ -398,3 +398,173 @@ func TestPhase12DetectionPromotionRequiresQualityGate(t *testing.T) {
 		t.Fatalf("expected active rollout after quality gate, got %s", rollout.Phase)
 	}
 }
+
+func TestPhase12DetectionDistributionFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed integration test in short mode")
+	}
+
+	adminURL := strings.TrimSpace(os.Getenv("USS_TEST_DATABASE_ADMIN_URL"))
+	if adminURL == "" {
+		adminURL = "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+	}
+
+	dbName := fmt.Sprintf("uss_phase12_detection_distribution_it_%d", time.Now().UTC().UnixNano())
+	testDatabaseURL, cleanup := createIntegrationDatabase(t, adminURL, dbName)
+	defer cleanup()
+
+	cfg := config.Load()
+	cfg.DatabaseURL = testDatabaseURL
+	cfg.DatabaseMaxConns = 2
+	cfg.DatabaseMinConns = 0
+	cfg.WorkerSharedSecret = "phase12-detection-distribution-secret"
+	cfg.KMSMasterKey = cfg.WorkerSharedSecret
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := jobs.NewStore(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create integration store: %v", err)
+	}
+	defer store.Close()
+
+	server := New(cfg, store)
+	testServer := httptest.NewServer(server.httpServer.Handler)
+	defer testServer.Close()
+
+	client := testServer.Client()
+
+	createRulepackResponse, createRulepackBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/detection/rulepacks",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"name":        "Trivy Stable Registry Pack",
+			"engine":      "trivy",
+			"status":      "active",
+			"description": "trivy enterprise baseline pack",
+		},
+		http.StatusCreated,
+	)
+	defer createRulepackResponse.Body.Close()
+	var rulepack models.DetectionRulepack
+	decodeJSONResponse(t, createRulepackBody, &rulepack)
+
+	createVersionResponse, createVersionBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/detection/rulepacks/"+rulepack.ID+"/versions",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"version_tag":   "2026.03.09",
+			"content_ref":   "s3://rulepacks/trivy/2026.03.09.tar.zst",
+			"checksum":      "sha256:phase12distributionchecksum",
+			"status":        "canary",
+			"quality_score": 0.91,
+		},
+		http.StatusCreated,
+	)
+	defer createVersionResponse.Body.Close()
+	var version models.DetectionRulepackVersion
+	decodeJSONResponse(t, createVersionBody, &version)
+
+	createDistributionResponse, createDistributionBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/detection/distributions",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"rulepack_id":     rulepack.ID,
+			"version_id":      version.ID,
+			"target_kind":     "worker_pool",
+			"target_ref":      "linux-prod-runners",
+			"rollout_channel": "canary",
+			"status":          "queued",
+			"artifact_ref":    "s3://rulepacks/trivy/2026.03.09.tar.zst",
+			"signature_ref":   "s3://rulepacks/trivy/2026.03.09.sig",
+			"error_message":   "",
+		},
+		http.StatusCreated,
+	)
+	defer createDistributionResponse.Body.Close()
+	var distribution models.DetectionContentDistribution
+	decodeJSONResponse(t, createDistributionBody, &distribution)
+	if strings.TrimSpace(distribution.ID) == "" {
+		t.Fatal("expected detection content distribution id")
+	}
+	if distribution.Status != "queued" {
+		t.Fatalf("expected queued distribution status, got %s", distribution.Status)
+	}
+
+	listDistributionsResponse, listDistributionsBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/detection/distributions?rulepack_id="+rulepack.ID+"&version_id="+version.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer listDistributionsResponse.Body.Close()
+	var listDistributionsPayload struct {
+		Items []models.DetectionContentDistribution `json:"items"`
+	}
+	decodeJSONResponse(t, listDistributionsBody, &listDistributionsPayload)
+	if len(listDistributionsPayload.Items) != 1 {
+		t.Fatalf("expected 1 detection distribution, got %d", len(listDistributionsPayload.Items))
+	}
+
+	deliveredAt := time.Now().UTC()
+	updateDistributionResponse, updateDistributionBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPut,
+		testServer.URL+"/v1/detection/distributions/"+distribution.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"status":       "delivered",
+			"delivered_at": deliveredAt.Format(time.RFC3339Nano),
+		},
+		http.StatusOK,
+	)
+	defer updateDistributionResponse.Body.Close()
+	decodeJSONResponse(t, updateDistributionBody, &distribution)
+	if distribution.Status != "delivered" {
+		t.Fatalf("expected delivered distribution status, got %s", distribution.Status)
+	}
+	if distribution.DeliveredAt == nil {
+		t.Fatal("expected distribution delivered_at to be set")
+	}
+
+	getDistributionResponse, getDistributionBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/detection/distributions/"+distribution.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer getDistributionResponse.Body.Close()
+	decodeJSONResponse(t, getDistributionBody, &distribution)
+	if distribution.ID == "" || distribution.Status != "delivered" {
+		t.Fatalf("unexpected distribution payload after get: %#v", distribution)
+	}
+}

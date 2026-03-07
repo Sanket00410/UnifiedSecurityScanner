@@ -205,6 +205,10 @@ type apiStore interface {
 	ListDetectionRulepackRolloutsForTenant(ctx context.Context, tenantID string, rulepackID string, limit int) ([]models.DetectionRulepackRollout, error)
 	ListDetectionRulepackQualityRunsForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, limit int) ([]models.DetectionRulepackQualityRun, error)
 	RecordDetectionRulepackQualityRunForTenant(ctx context.Context, tenantID string, rulepackID string, actor string, request models.RecordDetectionRulepackQualityRunRequest) (models.DetectionRulepackQualityRun, error)
+	ListDetectionContentDistributionsForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, status string, limit int) ([]models.DetectionContentDistribution, error)
+	GetDetectionContentDistributionForTenant(ctx context.Context, tenantID string, distributionID string) (models.DetectionContentDistribution, bool, error)
+	CreateDetectionContentDistributionForTenant(ctx context.Context, tenantID string, actor string, request models.CreateDetectionContentDistributionRequest) (models.DetectionContentDistribution, error)
+	UpdateDetectionContentDistributionForTenant(ctx context.Context, tenantID string, distributionID string, actor string, request models.UpdateDetectionContentDistributionRequest) (models.DetectionContentDistribution, bool, error)
 	GetAIGatewayPolicyForTenant(ctx context.Context, tenantID string) (models.AIGatewayPolicy, bool, error)
 	UpsertAIGatewayPolicyForTenant(ctx context.Context, tenantID string, actor string, request models.UpsertAIGatewayPolicyRequest) (models.AIGatewayPolicy, error)
 	ListAITriageRequestsForTenant(ctx context.Context, tenantID string, requestKind string, limit int) ([]models.AITriageRequest, error)
@@ -481,6 +485,14 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionPoliciesWrite,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "detection_rulepack", "detection_rulepack", server.handleDetectionRulepackRoute))
+	mux.HandleFunc("/v1/detection/distributions", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "detection_distributions", "detection_distribution", server.handleDetectionDistributions))
+	mux.HandleFunc("/v1/detection/distributions/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet: auth.PermissionPoliciesRead,
+		http.MethodPut: auth.PermissionPoliciesWrite,
+	}, "detection_distribution", "detection_distribution", server.handleDetectionDistributionRoute))
 	mux.HandleFunc("/v1/ai/policy", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet: auth.PermissionPoliciesRead,
 		http.MethodPut: auth.PermissionPoliciesWrite,
@@ -5861,6 +5873,12 @@ func (s *Server) resourceIDFromRequest(r *http.Request) string {
 		return path
 	case strings.HasPrefix(r.URL.Path, "/v1/detection/rulepacks/"):
 		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/detection/rulepacks/"))
+		if idx := strings.Index(path, "/"); idx >= 0 {
+			return strings.TrimSpace(path[:idx])
+		}
+		return path
+	case strings.HasPrefix(r.URL.Path, "/v1/detection/distributions/"):
+		path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/detection/distributions/"))
 		if idx := strings.Index(path, "/"); idx >= 0 {
 			return strings.TrimSpace(path[:idx])
 		}

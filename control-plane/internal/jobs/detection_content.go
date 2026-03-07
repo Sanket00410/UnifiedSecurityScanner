@@ -650,6 +650,222 @@ func (s *Store) RecordDetectionRulepackQualityRunForTenant(ctx context.Context, 
 	return created, nil
 }
 
+func (s *Store) ListDetectionContentDistributionsForTenant(ctx context.Context, tenantID string, rulepackID string, versionID string, status string, limit int) ([]models.DetectionContentDistribution, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	rulepackID = strings.TrimSpace(rulepackID)
+	versionID = strings.TrimSpace(versionID)
+	status = normalizeDetectionDistributionStatus(status)
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, tenant_id, rulepack_id, version_id, target_kind, target_ref,
+		       rollout_channel, status, artifact_ref, signature_ref, error_message,
+		       delivered_by, delivered_at, created_at, updated_at
+		FROM detection_content_distributions
+		WHERE tenant_id = $1
+		  AND ($2 = '' OR rulepack_id = $2)
+		  AND ($3 = '' OR version_id = $3)
+		  AND ($4 = '' OR status = $4)
+		ORDER BY updated_at DESC, id DESC
+		LIMIT $5
+	`, tenantID, rulepackID, versionID, status, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list detection distributions: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]models.DetectionContentDistribution, 0, limit)
+	for rows.Next() {
+		item, err := scanDetectionContentDistribution(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan detection distribution row: %w", err)
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate detection distribution rows: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) GetDetectionContentDistributionForTenant(ctx context.Context, tenantID string, distributionID string) (models.DetectionContentDistribution, bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	distributionID = strings.TrimSpace(distributionID)
+
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, rulepack_id, version_id, target_kind, target_ref,
+		       rollout_channel, status, artifact_ref, signature_ref, error_message,
+		       delivered_by, delivered_at, created_at, updated_at
+		FROM detection_content_distributions
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, tenantID, distributionID)
+
+	item, err := scanDetectionContentDistribution(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.DetectionContentDistribution{}, false, nil
+		}
+		return models.DetectionContentDistribution{}, false, fmt.Errorf("get detection distribution: %w", err)
+	}
+	return item, true, nil
+}
+
+func (s *Store) CreateDetectionContentDistributionForTenant(ctx context.Context, tenantID string, actor string, request models.CreateDetectionContentDistributionRequest) (models.DetectionContentDistribution, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+
+	rulepackID := strings.TrimSpace(request.RulepackID)
+	versionID := strings.TrimSpace(request.VersionID)
+	targetKind := normalizeDetectionDistributionTargetKind(request.TargetKind)
+	targetRef := strings.TrimSpace(request.TargetRef)
+	if rulepackID == "" || versionID == "" || targetKind == "" || targetRef == "" {
+		return models.DetectionContentDistribution{}, fmt.Errorf("rulepack_id, version_id, target_kind, and target_ref are required")
+	}
+
+	rolloutChannel := normalizeDetectionDistributionChannel(request.RolloutChannel)
+	if rolloutChannel == "" {
+		rolloutChannel = "canary"
+	}
+	status := normalizeDetectionDistributionStatus(request.Status)
+	if status == "" {
+		status = "queued"
+	}
+
+	now := time.Now().UTC()
+	item := models.DetectionContentDistribution{
+		ID:             nextDetectionDistributionID(),
+		TenantID:       tenantID,
+		RulepackID:     rulepackID,
+		VersionID:      versionID,
+		TargetKind:     targetKind,
+		TargetRef:      targetRef,
+		RolloutChannel: rolloutChannel,
+		Status:         status,
+		ArtifactRef:    strings.TrimSpace(request.ArtifactRef),
+		SignatureRef:   strings.TrimSpace(request.SignatureRef),
+		ErrorMessage:   strings.TrimSpace(request.ErrorMessage),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if item.Status == "delivered" {
+		item.DeliveredAt = &now
+		item.DeliveredBy = actor
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return models.DetectionContentDistribution{}, fmt.Errorf("begin detection distribution create tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, foundRulepack, err := getDetectionRulepackTx(ctx, tx, tenantID, rulepackID)
+	if err != nil {
+		return models.DetectionContentDistribution{}, err
+	}
+	if !foundRulepack {
+		return models.DetectionContentDistribution{}, ErrDetectionRulepackNotFound
+	}
+	_, foundVersion, err := getDetectionRulepackVersionTx(ctx, tx, tenantID, rulepackID, versionID)
+	if err != nil {
+		return models.DetectionContentDistribution{}, err
+	}
+	if !foundVersion {
+		return models.DetectionContentDistribution{}, ErrDetectionVersionNotFound
+	}
+
+	row := tx.QueryRow(ctx, `
+		INSERT INTO detection_content_distributions (
+			id, tenant_id, rulepack_id, version_id, target_kind, target_ref,
+			rollout_channel, status, artifact_ref, signature_ref, error_message,
+			delivered_by, delivered_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6,
+			$7, $8, $9, $10, $11,
+			$12, $13, $14, $14
+		)
+		RETURNING id, tenant_id, rulepack_id, version_id, target_kind, target_ref,
+		          rollout_channel, status, artifact_ref, signature_ref, error_message,
+		          delivered_by, delivered_at, created_at, updated_at
+	`, item.ID, item.TenantID, item.RulepackID, item.VersionID, item.TargetKind, item.TargetRef,
+		item.RolloutChannel, item.Status, item.ArtifactRef, item.SignatureRef, item.ErrorMessage,
+		item.DeliveredBy, item.DeliveredAt, item.CreatedAt)
+	created, err := scanDetectionContentDistribution(row)
+	if err != nil {
+		return models.DetectionContentDistribution{}, fmt.Errorf("create detection distribution: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return models.DetectionContentDistribution{}, fmt.Errorf("commit detection distribution create tx: %w", err)
+	}
+	return created, nil
+}
+
+func (s *Store) UpdateDetectionContentDistributionForTenant(ctx context.Context, tenantID string, distributionID string, actor string, request models.UpdateDetectionContentDistributionRequest) (models.DetectionContentDistribution, bool, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	distributionID = strings.TrimSpace(distributionID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+
+	status := normalizeDetectionDistributionStatus(request.Status)
+	if status == "" {
+		status = "delivering"
+	}
+	now := time.Now().UTC()
+
+	item, found, err := s.GetDetectionContentDistributionForTenant(ctx, tenantID, distributionID)
+	if err != nil || !found {
+		return models.DetectionContentDistribution{}, found, err
+	}
+
+	item.Status = status
+	if strings.TrimSpace(request.ErrorMessage) != "" {
+		item.ErrorMessage = strings.TrimSpace(request.ErrorMessage)
+	} else if item.Status == "delivered" {
+		item.ErrorMessage = ""
+	}
+
+	if item.Status == "delivered" {
+		deliveredAt := now
+		if request.DeliveredAt != nil {
+			deliveredAt = request.DeliveredAt.UTC()
+		}
+		item.DeliveredAt = &deliveredAt
+		item.DeliveredBy = actor
+	}
+	item.UpdatedAt = now
+
+	row := s.pool.QueryRow(ctx, `
+		UPDATE detection_content_distributions
+		SET status = $3,
+		    error_message = $4,
+		    delivered_by = $5,
+		    delivered_at = $6,
+		    updated_at = $7
+		WHERE tenant_id = $1
+		  AND id = $2
+		RETURNING id, tenant_id, rulepack_id, version_id, target_kind, target_ref,
+		          rollout_channel, status, artifact_ref, signature_ref, error_message,
+		          delivered_by, delivered_at, created_at, updated_at
+	`, tenantID, distributionID, item.Status, item.ErrorMessage, item.DeliveredBy, item.DeliveredAt, item.UpdatedAt)
+
+	updated, err := scanDetectionContentDistribution(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.DetectionContentDistribution{}, false, nil
+		}
+		return models.DetectionContentDistribution{}, true, fmt.Errorf("update detection distribution: %w", err)
+	}
+	return updated, true, nil
+}
+
 type detectionReader interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
@@ -790,6 +1006,34 @@ func scanDetectionRulepackQualityRun(row interface{ Scan(dest ...any) error }) (
 	return item, nil
 }
 
+func scanDetectionContentDistribution(row interface{ Scan(dest ...any) error }) (models.DetectionContentDistribution, error) {
+	var item models.DetectionContentDistribution
+	err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.RulepackID,
+		&item.VersionID,
+		&item.TargetKind,
+		&item.TargetRef,
+		&item.RolloutChannel,
+		&item.Status,
+		&item.ArtifactRef,
+		&item.SignatureRef,
+		&item.ErrorMessage,
+		&item.DeliveredBy,
+		&item.DeliveredAt,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return models.DetectionContentDistribution{}, err
+	}
+	item.TargetKind = normalizeDetectionDistributionTargetKind(item.TargetKind)
+	item.RolloutChannel = normalizeDetectionDistributionChannel(item.RolloutChannel)
+	item.Status = normalizeDetectionDistributionStatus(item.Status)
+	return item, nil
+}
+
 func normalizeDetectionEngine(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "semgrep", "trivy", "gitleaks", "checkov", "zap", "nmap", "metasploit", "custom":
@@ -838,6 +1082,33 @@ func normalizeDetectionRolloutStatus(value string) string {
 func normalizeDetectionQualityRunStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "passed", "failed", "error":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeDetectionDistributionTargetKind(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "worker_pool", "tenant", "runner_group", "airgap_bundle":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeDetectionDistributionChannel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "canary", "stable", "rollback":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeDetectionDistributionStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "queued", "delivering", "delivered", "failed":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
@@ -917,4 +1188,9 @@ func nextDetectionRulepackRolloutID() string {
 func nextDetectionQualityRunID() string {
 	value := atomic.AddUint64(&detectionQualityRunSequence, 1)
 	return fmt.Sprintf("rulepack-quality-%d-%06d", time.Now().UTC().Unix(), value)
+}
+
+func nextDetectionDistributionID() string {
+	value := atomic.AddUint64(&detectionDistributionSequence, 1)
+	return fmt.Sprintf("rulepack-distribution-%d-%06d", time.Now().UTC().Unix(), value)
 }

@@ -113,3 +113,39 @@ type RecordDetectionRulepackQualityRunRequest struct {
 	Notes              string     `json:"notes"`
 	ExecutedAt         *time.Time `json:"executed_at,omitempty"`
 }
+
+type DetectionContentDistribution struct {
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenant_id,omitempty"`
+	RulepackID     string     `json:"rulepack_id"`
+	VersionID      string     `json:"version_id"`
+	TargetKind     string     `json:"target_kind"`
+	TargetRef      string     `json:"target_ref"`
+	RolloutChannel string     `json:"rollout_channel"`
+	Status         string     `json:"status"`
+	ArtifactRef    string     `json:"artifact_ref,omitempty"`
+	SignatureRef   string     `json:"signature_ref,omitempty"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
+	DeliveredBy    string     `json:"delivered_by,omitempty"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+type CreateDetectionContentDistributionRequest struct {
+	RulepackID     string `json:"rulepack_id"`
+	VersionID      string `json:"version_id"`
+	TargetKind     string `json:"target_kind"`
+	TargetRef      string `json:"target_ref"`
+	RolloutChannel string `json:"rollout_channel"`
+	Status         string `json:"status"`
+	ArtifactRef    string `json:"artifact_ref"`
+	SignatureRef   string `json:"signature_ref"`
+	ErrorMessage   string `json:"error_message"`
+}
+
+type UpdateDetectionContentDistributionRequest struct {
+	Status       string     `json:"status"`
+	ErrorMessage string     `json:"error_message"`
+	DeliveredAt  *time.Time `json:"delivered_at,omitempty"`
+}

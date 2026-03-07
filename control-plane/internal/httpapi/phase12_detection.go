@@ -312,6 +312,117 @@ func (s *Server) handleDetectionRulepackRolloutsRoute(w http.ResponseWriter, r *
 	s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) handleDetectionDistributions(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		items, err := s.store.ListDetectionContentDistributionsForTenant(
+			r.Context(),
+			principal.OrganizationID,
+			strings.TrimSpace(r.URL.Query().Get("rulepack_id")),
+			strings.TrimSpace(r.URL.Query().Get("version_id")),
+			strings.TrimSpace(r.URL.Query().Get("status")),
+			limit,
+		)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_detection_distributions_failed", "detection distributions could not be loaded")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	case http.MethodPost:
+		defer r.Body.Close()
+		var request models.CreateDetectionContentDistributionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		item, err := s.store.CreateDetectionContentDistributionForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if errors.Is(err, jobs.ErrDetectionRulepackNotFound) {
+				s.writeError(w, http.StatusNotFound, "detection_rulepack_not_found", "detection rulepack was not found")
+				return
+			}
+			if errors.Is(err, jobs.ErrDetectionVersionNotFound) {
+				s.writeError(w, http.StatusNotFound, "detection_rulepack_version_not_found", "detection rulepack version was not found")
+				return
+			}
+			if s.writeDetectionMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_detection_distribution_failed", "detection distribution could not be created")
+			return
+		}
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleDetectionDistributionRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	distributionID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/detection/distributions/"))
+	if distributionID == "" {
+		s.writeError(w, http.StatusNotFound, "detection_distribution_not_found", "detection distribution was not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		item, found, err := s.store.GetDetectionContentDistributionForTenant(r.Context(), principal.OrganizationID, distributionID)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "get_detection_distribution_failed", "detection distribution could not be loaded")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "detection_distribution_not_found", "detection distribution was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case http.MethodPut:
+		defer r.Body.Close()
+
+		var request models.UpdateDetectionContentDistributionRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		item, found, err := s.store.UpdateDetectionContentDistributionForTenant(r.Context(), principal.OrganizationID, distributionID, principal.Email, request)
+		if err != nil {
+			if s.writeDetectionMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "update_detection_distribution_failed", "detection distribution could not be updated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "detection_distribution_not_found", "detection distribution was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
 func (s *Server) writeDetectionMutationError(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false

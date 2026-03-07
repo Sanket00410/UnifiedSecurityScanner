@@ -128,6 +128,7 @@ type stubAPIStore struct {
 	detectionRulepackVersions  []models.DetectionRulepackVersion
 	detectionRulepackRollouts  []models.DetectionRulepackRollout
 	detectionQualityRuns       []models.DetectionRulepackQualityRun
+	detectionDistributions     []models.DetectionContentDistribution
 	aiPolicy                   models.AIGatewayPolicy
 	aiTriageRequests           []models.AITriageRequest
 	policy                     models.Policy
@@ -3134,6 +3135,86 @@ func (s *stubAPIStore) RecordDetectionRulepackQualityRunForTenant(_ context.Cont
 	}
 
 	return item, nil
+}
+
+func (s *stubAPIStore) ListDetectionContentDistributionsForTenant(_ context.Context, _ string, rulepackID string, versionID string, status string, _ int) ([]models.DetectionContentDistribution, error) {
+	items := make([]models.DetectionContentDistribution, 0, len(s.detectionDistributions))
+	for _, item := range s.detectionDistributions {
+		if strings.TrimSpace(rulepackID) != "" && !strings.EqualFold(strings.TrimSpace(item.RulepackID), strings.TrimSpace(rulepackID)) {
+			continue
+		}
+		if strings.TrimSpace(versionID) != "" && !strings.EqualFold(strings.TrimSpace(item.VersionID), strings.TrimSpace(versionID)) {
+			continue
+		}
+		if strings.TrimSpace(status) != "" && !strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (s *stubAPIStore) GetDetectionContentDistributionForTenant(_ context.Context, _ string, distributionID string) (models.DetectionContentDistribution, bool, error) {
+	for _, item := range s.detectionDistributions {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(distributionID)) {
+			return item, true, nil
+		}
+	}
+	return models.DetectionContentDistribution{}, false, nil
+}
+
+func (s *stubAPIStore) CreateDetectionContentDistributionForTenant(_ context.Context, tenantID string, actor string, request models.CreateDetectionContentDistributionRequest) (models.DetectionContentDistribution, error) {
+	now := time.Now().UTC()
+	item := models.DetectionContentDistribution{
+		ID:             fmt.Sprintf("rulepack-distribution-%d", now.UnixNano()),
+		TenantID:       strings.TrimSpace(tenantID),
+		RulepackID:     strings.TrimSpace(request.RulepackID),
+		VersionID:      strings.TrimSpace(request.VersionID),
+		TargetKind:     strings.TrimSpace(request.TargetKind),
+		TargetRef:      strings.TrimSpace(request.TargetRef),
+		RolloutChannel: strings.TrimSpace(request.RolloutChannel),
+		Status:         strings.TrimSpace(request.Status),
+		ArtifactRef:    strings.TrimSpace(request.ArtifactRef),
+		SignatureRef:   strings.TrimSpace(request.SignatureRef),
+		ErrorMessage:   strings.TrimSpace(request.ErrorMessage),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if item.RolloutChannel == "" {
+		item.RolloutChannel = "canary"
+	}
+	if item.Status == "" {
+		item.Status = "queued"
+	}
+	if item.Status == "delivered" {
+		item.DeliveredAt = &now
+		item.DeliveredBy = strings.TrimSpace(actor)
+	}
+	s.detectionDistributions = append([]models.DetectionContentDistribution{item}, s.detectionDistributions...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateDetectionContentDistributionForTenant(_ context.Context, _ string, distributionID string, actor string, request models.UpdateDetectionContentDistributionRequest) (models.DetectionContentDistribution, bool, error) {
+	for idx, item := range s.detectionDistributions {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(distributionID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Status); value != "" {
+			item.Status = value
+		}
+		if value := strings.TrimSpace(request.ErrorMessage); value != "" {
+			item.ErrorMessage = value
+		}
+		if request.DeliveredAt != nil {
+			deliveredAt := request.DeliveredAt.UTC()
+			item.DeliveredAt = &deliveredAt
+			item.DeliveredBy = strings.TrimSpace(actor)
+		}
+		item.UpdatedAt = time.Now().UTC()
+		s.detectionDistributions[idx] = item
+		return item, true, nil
+	}
+	return models.DetectionContentDistribution{}, false, nil
 }
 
 func (s *stubAPIStore) GetAIGatewayPolicyForTenant(_ context.Context, tenantID string) (models.AIGatewayPolicy, bool, error) {
