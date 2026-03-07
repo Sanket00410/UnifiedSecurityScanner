@@ -710,29 +710,7 @@ func (s *Store) CreateWebRuntimeCoverageRunForTenant(ctx context.Context, tenant
 		return models.WebRuntimeCoverageRun{}, fmt.Errorf("coverage discovered counts must be greater than or equal to zero")
 	}
 
-	row := s.pool.QueryRow(ctx, `
-		INSERT INTO web_runtime_coverage_runs (
-			id, tenant_id, web_target_id, scan_job_id, route_coverage, api_coverage, auth_coverage,
-			discovered_route_count, discovered_api_operation_count, discovered_auth_state_count,
-			evidence_ref, created_by, created_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10,
-			$11, $12, $13
-		)
-		RETURNING id, tenant_id, web_target_id, scan_job_id, route_coverage, api_coverage, auth_coverage,
-		          discovered_route_count, discovered_api_operation_count, discovered_auth_state_count,
-		          evidence_ref, created_by, created_at
-	`, item.ID, item.TenantID, item.WebTargetID, item.ScanJobID, item.RouteCoverage, item.APICoverage, item.AuthCoverage,
-		item.DiscoveredRouteCount, item.DiscoveredAPIOperationCount, item.DiscoveredAuthStateCount,
-		item.EvidenceRef, item.CreatedBy, item.CreatedAt)
-
-	created, err := scanWebRuntimeCoverageRun(row)
-	if err != nil {
-		return models.WebRuntimeCoverageRun{}, fmt.Errorf("create web runtime coverage run: %w", err)
-	}
-
-	return created, nil
+	return createWebRuntimeCoverageRunTx(ctx, s.pool, item)
 }
 
 func (s *Store) GetWebCoverageStatusForTenant(ctx context.Context, tenantID string, targetID string) (models.WebCoverageStatus, error) {

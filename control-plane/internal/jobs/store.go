@@ -597,8 +597,9 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var task models.TaskContext
+	var taskLabelsJSON []byte
 	err = tx.QueryRow(ctx, `
-		SELECT id, scan_job_id, tenant_id, adapter_id, target_kind, target
+		SELECT id, scan_job_id, tenant_id, adapter_id, target_kind, target, labels_json
 		FROM scan_job_tasks
 		WHERE id = $1
 	`, strings.TrimSpace(submission.TaskID)).Scan(
@@ -608,12 +609,20 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 		&task.AdapterID,
 		&task.TargetKind,
 		&task.Target,
+		&taskLabelsJSON,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrTaskNotFound
 		}
 		return fmt.Errorf("load task for finalize: %w", err)
+	}
+
+	taskLabels := map[string]string{}
+	if len(taskLabelsJSON) > 0 {
+		if err := json.Unmarshal(taskLabelsJSON, &taskLabels); err != nil {
+			return fmt.Errorf("unmarshal task labels for finalize: %w", err)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -644,6 +653,10 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 	if err != nil {
 		return err
 	}
+	coverageRunIngested, err := ingestWebRuntimeCoverageRunTx(ctx, tx, task, taskLabels, submission, now)
+	if err != nil {
+		return err
+	}
 
 	if err := recomputeScanJobStatusTx(ctx, tx, task.ScanJobID, now); err != nil {
 		return err
@@ -662,6 +675,7 @@ func (s *Store) FinalizeTask(ctx context.Context, submission models.TaskResultSu
 			"reported_finding_count":    len(submission.ReportedFindings),
 			"reported_evidence_count":   len(submission.EvidencePaths),
 			"registered_evidence_count": registeredEvidenceCount,
+			"coverage_run_ingested":     coverageRunIngested,
 		},
 		CreatedAt: now,
 	}); err != nil {
