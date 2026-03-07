@@ -128,6 +128,9 @@ func TestPhase5WebhookIntegrationsDispatchFlow(t *testing.T) {
 	if strings.TrimSpace(webhook.ID) == "" {
 		t.Fatal("expected webhook integration id")
 	}
+	if webhook.RetryMaxAttempts != 2 {
+		t.Fatalf("expected retry_max_attempts 2, got %d", webhook.RetryMaxAttempts)
+	}
 
 	createJobResponse, createJobBody := mustJSONRequest(
 		t,
@@ -308,11 +311,14 @@ func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
 		auth.WorkerSecretHeader,
 		"",
 		map[string]any{
-			"name":         "phase5-webhook-dead-letter",
-			"endpoint_url": callbackReceiver.URL,
-			"event_types":  []string{"scan_job.created"},
-			"status":       "active",
-			"secret":       "phase5-dead-letter-secret",
+			"name":                     "phase5-webhook-dead-letter",
+			"endpoint_url":             callbackReceiver.URL,
+			"event_types":              []string{"scan_job.created"},
+			"status":                   "active",
+			"retry_max_attempts":       2,
+			"retry_base_delay_seconds": 1,
+			"retry_max_delay_seconds":  1,
+			"secret":                   "phase5-dead-letter-secret",
 		},
 		http.StatusCreated,
 	)
@@ -349,7 +355,7 @@ func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
 		t.Fatal("expected created scan job id")
 	}
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= 2; attempt++ {
 		dispatchResponse, dispatchBody := mustJSONRequest(
 			t,
 			client,
@@ -371,8 +377,8 @@ func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
 		if dispatchResult.Attempted < 1 {
 			t.Fatalf("attempt %d: expected dispatch attempt > 0, got %d", attempt, dispatchResult.Attempted)
 		}
-		if attempt < 3 {
-			time.Sleep((1 << attempt) * time.Second)
+		if attempt < 2 {
+			time.Sleep(1200 * time.Millisecond)
 		}
 	}
 
@@ -393,16 +399,16 @@ func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
 		Items []models.WebhookDelivery `json:"items"`
 	}
 	decodeJSONResponse(t, listDeliveriesBody, &listDeliveriesPayload)
-	if len(listDeliveriesPayload.Items) < 3 {
-		t.Fatalf("expected at least 3 delivery attempts, got %d", len(listDeliveriesPayload.Items))
+	if len(listDeliveriesPayload.Items) < 2 {
+		t.Fatalf("expected at least 2 delivery attempts, got %d", len(listDeliveriesPayload.Items))
 	}
 
 	latest := listDeliveriesPayload.Items[0]
 	if latest.Status != "dead_letter" {
 		t.Fatalf("expected latest delivery status dead_letter, got %s", latest.Status)
 	}
-	if latest.AttemptCount != 3 {
-		t.Fatalf("expected dead-letter attempt_count 3, got %d", latest.AttemptCount)
+	if latest.AttemptCount != 2 {
+		t.Fatalf("expected dead-letter attempt_count 2, got %d", latest.AttemptCount)
 	}
 	if latest.DeadLetteredAt == nil {
 		t.Fatal("expected dead_lettered_at to be set on dead_letter delivery")

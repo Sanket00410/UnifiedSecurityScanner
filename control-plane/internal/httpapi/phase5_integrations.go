@@ -252,7 +252,9 @@ func (s *Server) writeWebhookIntegrationMutationError(w http.ResponseWriter, err
 	case strings.Contains(lower, "is required"),
 		strings.Contains(lower, "must be a valid url"),
 		strings.Contains(lower, "must use http or https"),
-		strings.Contains(lower, "must include a host"):
+		strings.Contains(lower, "must include a host"),
+		strings.Contains(lower, "must be between"),
+		strings.Contains(lower, "must be greater than or equal"):
 		s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
 		return true
 	case strings.Contains(lower, "duplicate key"),

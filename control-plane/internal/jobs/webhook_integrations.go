@@ -22,9 +22,13 @@ type webhookIntegrationRecord struct {
 }
 
 const (
-	webhookMaxDeliveryAttempts = 3
-	webhookRetryBaseDelay      = 1 * time.Second
-	webhookRetryMaxDelay       = 30 * time.Second
+	defaultWebhookRetryMaxAttempts      = 3
+	defaultWebhookRetryBaseDelaySeconds = 1
+	defaultWebhookRetryMaxDelaySeconds  = 30
+	minWebhookRetryMaxAttempts          = 1
+	maxWebhookRetryMaxAttempts          = 10
+	minWebhookRetryDelaySeconds         = 1
+	maxWebhookRetryDelaySeconds         = 86400
 )
 
 func (s *Store) ListWebhookIntegrationsForTenant(ctx context.Context, tenantID string, status string, eventType string, limit int) ([]models.WebhookIntegration, error) {
@@ -37,6 +41,7 @@ func (s *Store) ListWebhookIntegrationsForTenant(ctx context.Context, tenantID s
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds,
 		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
 		FROM webhook_integrations
 		WHERE tenant_id = $1
@@ -96,23 +101,34 @@ func (s *Store) CreateWebhookIntegrationForTenant(ctx context.Context, tenantID 
 	}
 	eventTypes := normalizeWebhookEventTypes(request.EventTypes)
 	headers := sanitizeWebhookHeaders(request.Headers)
+	retryMaxAttempts, retryBaseDelaySeconds, retryMaxDelaySeconds, err := normalizeWebhookRetryPolicy(
+		request.RetryMaxAttempts,
+		request.RetryBaseDelaySeconds,
+		request.RetryMaxDelaySeconds,
+	)
+	if err != nil {
+		return models.WebhookIntegration{}, err
+	}
 
 	now := time.Now().UTC()
 	item := models.WebhookIntegration{
-		ID:            nextWebhookIntegrationID(),
-		TenantID:      tenantID,
-		Name:          name,
-		EndpointURL:   endpointURL,
-		EventTypes:    eventTypes,
-		Headers:       headers,
-		Status:        status,
-		SecretSet:     strings.TrimSpace(request.Secret) != "",
-		CreatedBy:     actor,
-		UpdatedBy:     actor,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		LastAttemptAt: nil,
-		LastSuccessAt: nil,
+		ID:                    nextWebhookIntegrationID(),
+		TenantID:              tenantID,
+		Name:                  name,
+		EndpointURL:           endpointURL,
+		EventTypes:            eventTypes,
+		Headers:               headers,
+		Status:                status,
+		RetryMaxAttempts:      retryMaxAttempts,
+		RetryBaseDelaySeconds: retryBaseDelaySeconds,
+		RetryMaxDelaySeconds:  retryMaxDelaySeconds,
+		SecretSet:             strings.TrimSpace(request.Secret) != "",
+		CreatedBy:             actor,
+		UpdatedBy:             actor,
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		LastAttemptAt:         nil,
+		LastSuccessAt:         nil,
 	}
 	eventTypesJSON, err := json.Marshal(item.EventTypes)
 	if err != nil {
@@ -130,15 +146,19 @@ func (s *Store) CreateWebhookIntegrationForTenant(ctx context.Context, tenantID 
 
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO webhook_integrations (
-			id, tenant_id, name, endpoint_url, event_types_json, headers_json, status, secret_encrypted,
+			id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+			retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds, secret_encrypted,
 			last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8,
-			NULL, NULL, $9, $9, $10, $10
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			NULL, NULL, $12, $12, $13, $13
 		)
 		RETURNING id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		          retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds,
 		          secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
-	`, item.ID, item.TenantID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status, secretEncrypted, item.CreatedBy, item.CreatedAt)
+	`, item.ID, item.TenantID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status,
+		item.RetryMaxAttempts, item.RetryBaseDelaySeconds, item.RetryMaxDelaySeconds, secretEncrypted, item.CreatedBy, item.CreatedAt)
 
 	record, err := scanWebhookIntegrationRecord(row)
 	if err != nil {
@@ -176,6 +196,29 @@ func (s *Store) UpdateWebhookIntegrationForTenant(ctx context.Context, tenantID 
 	if value := normalizeWebhookIntegrationStatus(request.Status); value != "" {
 		item.Status = value
 	}
+	nextRetryMaxAttempts := item.RetryMaxAttempts
+	if request.RetryMaxAttempts > 0 {
+		nextRetryMaxAttempts = request.RetryMaxAttempts
+	}
+	nextRetryBaseDelaySeconds := item.RetryBaseDelaySeconds
+	if request.RetryBaseDelaySeconds > 0 {
+		nextRetryBaseDelaySeconds = request.RetryBaseDelaySeconds
+	}
+	nextRetryMaxDelaySeconds := item.RetryMaxDelaySeconds
+	if request.RetryMaxDelaySeconds > 0 {
+		nextRetryMaxDelaySeconds = request.RetryMaxDelaySeconds
+	}
+	nextRetryMaxAttempts, nextRetryBaseDelaySeconds, nextRetryMaxDelaySeconds, err = normalizeWebhookRetryPolicy(
+		nextRetryMaxAttempts,
+		nextRetryBaseDelaySeconds,
+		nextRetryMaxDelaySeconds,
+	)
+	if err != nil {
+		return models.WebhookIntegration{}, true, err
+	}
+	item.RetryMaxAttempts = nextRetryMaxAttempts
+	item.RetryBaseDelaySeconds = nextRetryBaseDelaySeconds
+	item.RetryMaxDelaySeconds = nextRetryMaxDelaySeconds
 	item.UpdatedBy = actor
 	item.UpdatedAt = time.Now().UTC()
 
@@ -203,14 +246,19 @@ func (s *Store) UpdateWebhookIntegrationForTenant(ctx context.Context, tenantID 
 		    event_types_json = $5,
 		    headers_json = $6,
 		    status = $7,
-		    secret_encrypted = $8,
-		    updated_by = $9,
-		    updated_at = $10
+		    retry_max_attempts = $8,
+		    retry_base_delay_seconds = $9,
+		    retry_max_delay_seconds = $10,
+		    secret_encrypted = $11,
+		    updated_by = $12,
+		    updated_at = $13
 		WHERE tenant_id = $1
 		  AND id = $2
 		RETURNING id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		          retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds,
 		          secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
-	`, item.TenantID, item.ID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status, secretEncrypted, item.UpdatedBy, item.UpdatedAt)
+	`, item.TenantID, item.ID, item.Name, item.EndpointURL, eventTypesJSON, headersJSON, item.Status,
+		item.RetryMaxAttempts, item.RetryBaseDelaySeconds, item.RetryMaxDelaySeconds, secretEncrypted, item.UpdatedBy, item.UpdatedAt)
 	updatedRecord, err := scanWebhookIntegrationRecord(row)
 	if err != nil {
 		if isNoRows(err) {
@@ -321,7 +369,7 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 							continue
 						}
 					}
-					if existing.AttemptCount >= webhookMaxDeliveryAttempts {
+					if existing.AttemptCount >= webhook.integration.RetryMaxAttempts {
 						result.Skipped++
 						continue
 					}
@@ -363,12 +411,16 @@ func (s *Store) DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID
 				delivery.DeadLetteredAt = nil
 			} else if request.Replay {
 				delivery.Status = "failed"
-			} else if attemptCount >= webhookMaxDeliveryAttempts {
+			} else if attemptCount >= webhook.integration.RetryMaxAttempts {
 				deadLetteredAt := time.Now().UTC()
 				delivery.Status = "dead_letter"
 				delivery.DeadLetteredAt = &deadLetteredAt
 			} else {
-				nextAttempt := attemptedAt.Add(webhookRetryDelay(attemptCount))
+				nextAttempt := attemptedAt.Add(webhookRetryDelay(
+					attemptCount,
+					webhook.integration.RetryBaseDelaySeconds,
+					webhook.integration.RetryMaxDelaySeconds,
+				))
 				delivery.Status = "scheduled_retry"
 				delivery.NextAttemptAt = &nextAttempt
 			}
@@ -502,16 +554,25 @@ func (s *Store) getLatestWebhookDeliveryForEvent(ctx context.Context, tenantID s
 	return item, true, nil
 }
 
-func webhookRetryDelay(attemptCount int) time.Duration {
-	if attemptCount <= 1 {
-		return webhookRetryBaseDelay
+func webhookRetryDelay(attemptCount int, baseDelaySeconds int, maxDelaySeconds int) time.Duration {
+	if baseDelaySeconds < minWebhookRetryDelaySeconds {
+		baseDelaySeconds = minWebhookRetryDelaySeconds
+	}
+	if maxDelaySeconds < baseDelaySeconds {
+		maxDelaySeconds = baseDelaySeconds
 	}
 
-	delay := webhookRetryBaseDelay
+	baseDelay := time.Duration(baseDelaySeconds) * time.Second
+	maxDelay := time.Duration(maxDelaySeconds) * time.Second
+	if attemptCount <= 1 {
+		return baseDelay
+	}
+
+	delay := baseDelay
 	for i := 1; i < attemptCount; i++ {
 		delay *= 2
-		if delay >= webhookRetryMaxDelay {
-			return webhookRetryMaxDelay
+		if delay >= maxDelay {
+			return maxDelay
 		}
 	}
 	return delay
@@ -523,6 +584,7 @@ func (s *Store) listWebhookIntegrationRecordsForDispatch(ctx context.Context, te
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds,
 		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
 		FROM webhook_integrations
 		WHERE tenant_id = $1
@@ -555,6 +617,7 @@ func (s *Store) getWebhookIntegrationRecordForTenant(ctx context.Context, tenant
 
 	row := s.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, name, endpoint_url, event_types_json, headers_json, status,
+		       retry_max_attempts, retry_base_delay_seconds, retry_max_delay_seconds,
 		       secret_encrypted, last_attempt_at, last_success_at, created_by, updated_by, created_at, updated_at
 		FROM webhook_integrations
 		WHERE tenant_id = $1
@@ -668,6 +731,9 @@ func scanWebhookIntegrationRecord(row interface{ Scan(dest ...any) error }) (web
 		&eventTypesJSON,
 		&headersJSON,
 		&record.integration.Status,
+		&record.integration.RetryMaxAttempts,
+		&record.integration.RetryBaseDelaySeconds,
+		&record.integration.RetryMaxDelaySeconds,
 		&record.secretEncrypted,
 		&record.integration.LastAttemptAt,
 		&record.integration.LastSuccessAt,
@@ -694,6 +760,14 @@ func scanWebhookIntegrationRecord(row interface{ Scan(dest ...any) error }) (web
 	record.integration.EventTypes = normalizeWebhookEventTypes(record.integration.EventTypes)
 	record.integration.Headers = sanitizeWebhookHeaders(record.integration.Headers)
 	record.integration.Status = normalizeWebhookIntegrationStatus(record.integration.Status)
+	record.integration.RetryMaxAttempts, record.integration.RetryBaseDelaySeconds, record.integration.RetryMaxDelaySeconds, err = normalizeWebhookRetryPolicy(
+		record.integration.RetryMaxAttempts,
+		record.integration.RetryBaseDelaySeconds,
+		record.integration.RetryMaxDelaySeconds,
+	)
+	if err != nil {
+		return webhookIntegrationRecord{}, err
+	}
 	record.integration.SecretSet = strings.TrimSpace(record.secretEncrypted) != ""
 	return record, nil
 }
@@ -754,6 +828,34 @@ func normalizeWebhookDeliveryStatus(value string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeWebhookRetryPolicy(maxAttempts int, baseDelaySeconds int, maxDelaySeconds int) (int, int, int, error) {
+	if maxAttempts <= 0 {
+		maxAttempts = defaultWebhookRetryMaxAttempts
+	}
+	if maxAttempts < minWebhookRetryMaxAttempts || maxAttempts > maxWebhookRetryMaxAttempts {
+		return 0, 0, 0, fmt.Errorf("retry_max_attempts must be between %d and %d", minWebhookRetryMaxAttempts, maxWebhookRetryMaxAttempts)
+	}
+
+	if baseDelaySeconds <= 0 {
+		baseDelaySeconds = defaultWebhookRetryBaseDelaySeconds
+	}
+	if baseDelaySeconds < minWebhookRetryDelaySeconds || baseDelaySeconds > maxWebhookRetryDelaySeconds {
+		return 0, 0, 0, fmt.Errorf("retry_base_delay_seconds must be between %d and %d", minWebhookRetryDelaySeconds, maxWebhookRetryDelaySeconds)
+	}
+
+	if maxDelaySeconds <= 0 {
+		maxDelaySeconds = defaultWebhookRetryMaxDelaySeconds
+	}
+	if maxDelaySeconds < minWebhookRetryDelaySeconds || maxDelaySeconds > maxWebhookRetryDelaySeconds {
+		return 0, 0, 0, fmt.Errorf("retry_max_delay_seconds must be between %d and %d", minWebhookRetryDelaySeconds, maxWebhookRetryDelaySeconds)
+	}
+	if maxDelaySeconds < baseDelaySeconds {
+		return 0, 0, 0, fmt.Errorf("retry_max_delay_seconds must be greater than or equal to retry_base_delay_seconds")
+	}
+
+	return maxAttempts, baseDelaySeconds, maxDelaySeconds, nil
 }
 
 func normalizeWebhookEventTypes(values []string) []string {

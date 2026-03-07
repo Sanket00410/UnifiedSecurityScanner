@@ -1064,20 +1064,23 @@ func (s *stubAPIStore) CreateWebhookIntegrationForTenant(_ context.Context, tena
 	}
 
 	item := models.WebhookIntegration{
-		ID:            fmt.Sprintf("webhook-integration-stub-%d", len(s.webhookIntegrations)+1),
-		TenantID:      strings.TrimSpace(tenantID),
-		Name:          name,
-		EndpointURL:   endpointURL,
-		EventTypes:    append([]string(nil), request.EventTypes...),
-		Headers:       request.Headers,
-		Status:        strings.ToLower(strings.TrimSpace(request.Status)),
-		SecretSet:     strings.TrimSpace(request.Secret) != "",
-		CreatedBy:     strings.TrimSpace(actor),
-		UpdatedBy:     strings.TrimSpace(actor),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		LastAttemptAt: nil,
-		LastSuccessAt: nil,
+		ID:                    fmt.Sprintf("webhook-integration-stub-%d", len(s.webhookIntegrations)+1),
+		TenantID:              strings.TrimSpace(tenantID),
+		Name:                  name,
+		EndpointURL:           endpointURL,
+		EventTypes:            append([]string(nil), request.EventTypes...),
+		Headers:               request.Headers,
+		Status:                strings.ToLower(strings.TrimSpace(request.Status)),
+		RetryMaxAttempts:      request.RetryMaxAttempts,
+		RetryBaseDelaySeconds: request.RetryBaseDelaySeconds,
+		RetryMaxDelaySeconds:  request.RetryMaxDelaySeconds,
+		SecretSet:             strings.TrimSpace(request.Secret) != "",
+		CreatedBy:             strings.TrimSpace(actor),
+		UpdatedBy:             strings.TrimSpace(actor),
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		LastAttemptAt:         nil,
+		LastSuccessAt:         nil,
 	}
 	if item.Status == "" {
 		item.Status = "active"
@@ -1087,6 +1090,15 @@ func (s *stubAPIStore) CreateWebhookIntegrationForTenant(_ context.Context, tena
 	}
 	if item.Headers == nil {
 		item.Headers = map[string]string{}
+	}
+	if item.RetryMaxAttempts <= 0 {
+		item.RetryMaxAttempts = 3
+	}
+	if item.RetryBaseDelaySeconds <= 0 {
+		item.RetryBaseDelaySeconds = 1
+	}
+	if item.RetryMaxDelaySeconds <= 0 {
+		item.RetryMaxDelaySeconds = 30
 	}
 
 	s.webhookIntegrations = append(s.webhookIntegrations, item)
@@ -1118,6 +1130,15 @@ func (s *stubAPIStore) UpdateWebhookIntegrationForTenant(_ context.Context, _ st
 		}
 		if strings.TrimSpace(request.Secret) != "" {
 			item.SecretSet = true
+		}
+		if request.RetryMaxAttempts > 0 {
+			item.RetryMaxAttempts = request.RetryMaxAttempts
+		}
+		if request.RetryBaseDelaySeconds > 0 {
+			item.RetryBaseDelaySeconds = request.RetryBaseDelaySeconds
+		}
+		if request.RetryMaxDelaySeconds > 0 {
+			item.RetryMaxDelaySeconds = request.RetryMaxDelaySeconds
 		}
 		item.UpdatedBy = strings.TrimSpace(actor)
 		item.UpdatedAt = time.Now().UTC()

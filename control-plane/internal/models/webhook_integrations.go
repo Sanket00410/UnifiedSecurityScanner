@@ -3,38 +3,47 @@ package models
 import "time"
 
 type WebhookIntegration struct {
-	ID            string            `json:"id"`
-	TenantID      string            `json:"tenant_id,omitempty"`
-	Name          string            `json:"name"`
-	EndpointURL   string            `json:"endpoint_url"`
-	EventTypes    []string          `json:"event_types,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	Status        string            `json:"status"`
-	SecretSet     bool              `json:"secret_set"`
-	LastAttemptAt *time.Time        `json:"last_attempt_at,omitempty"`
-	LastSuccessAt *time.Time        `json:"last_success_at,omitempty"`
-	CreatedBy     string            `json:"created_by,omitempty"`
-	UpdatedBy     string            `json:"updated_by,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	ID                    string            `json:"id"`
+	TenantID              string            `json:"tenant_id,omitempty"`
+	Name                  string            `json:"name"`
+	EndpointURL           string            `json:"endpoint_url"`
+	EventTypes            []string          `json:"event_types,omitempty"`
+	Headers               map[string]string `json:"headers,omitempty"`
+	Status                string            `json:"status"`
+	RetryMaxAttempts      int               `json:"retry_max_attempts"`
+	RetryBaseDelaySeconds int               `json:"retry_base_delay_seconds"`
+	RetryMaxDelaySeconds  int               `json:"retry_max_delay_seconds"`
+	SecretSet             bool              `json:"secret_set"`
+	LastAttemptAt         *time.Time        `json:"last_attempt_at,omitempty"`
+	LastSuccessAt         *time.Time        `json:"last_success_at,omitempty"`
+	CreatedBy             string            `json:"created_by,omitempty"`
+	UpdatedBy             string            `json:"updated_by,omitempty"`
+	CreatedAt             time.Time         `json:"created_at"`
+	UpdatedAt             time.Time         `json:"updated_at"`
 }
 
 type CreateWebhookIntegrationRequest struct {
-	Name        string            `json:"name"`
-	EndpointURL string            `json:"endpoint_url"`
-	EventTypes  []string          `json:"event_types"`
-	Headers     map[string]string `json:"headers"`
-	Status      string            `json:"status"`
-	Secret      string            `json:"secret"`
+	Name                  string            `json:"name"`
+	EndpointURL           string            `json:"endpoint_url"`
+	EventTypes            []string          `json:"event_types"`
+	Headers               map[string]string `json:"headers"`
+	Status                string            `json:"status"`
+	RetryMaxAttempts      int               `json:"retry_max_attempts"`
+	RetryBaseDelaySeconds int               `json:"retry_base_delay_seconds"`
+	RetryMaxDelaySeconds  int               `json:"retry_max_delay_seconds"`
+	Secret                string            `json:"secret"`
 }
 
 type UpdateWebhookIntegrationRequest struct {
-	Name        string            `json:"name"`
-	EndpointURL string            `json:"endpoint_url"`
-	EventTypes  []string          `json:"event_types"`
-	Headers     map[string]string `json:"headers"`
-	Status      string            `json:"status"`
-	Secret      string            `json:"secret"`
+	Name                  string            `json:"name"`
+	EndpointURL           string            `json:"endpoint_url"`
+	EventTypes            []string          `json:"event_types"`
+	Headers               map[string]string `json:"headers"`
+	Status                string            `json:"status"`
+	RetryMaxAttempts      int               `json:"retry_max_attempts"`
+	RetryBaseDelaySeconds int               `json:"retry_base_delay_seconds"`
+	RetryMaxDelaySeconds  int               `json:"retry_max_delay_seconds"`
+	Secret                string            `json:"secret"`
 }
 
 type WebhookDelivery struct {
