@@ -825,10 +825,23 @@ func (s *Store) RunWebTargetForTenant(ctx context.Context, tenantID string, targ
 		return models.WebTarget{}, models.ScanJob{}, true, err
 	}
 
-	taskLabels := map[string]string{
-		"web_target_id":   strings.TrimSpace(target.ID),
-		"web_target_type": strings.TrimSpace(target.TargetType),
-		"web_safe_mode":   strconv.FormatBool(policy.SafeMode),
+	taskLabels := map[string]string{}
+	for key, value := range request.TaskLabels {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		normalizedValue := strings.TrimSpace(value)
+		if normalizedKey == "" || normalizedValue == "" {
+			continue
+		}
+		taskLabels[normalizedKey] = normalizedValue
+	}
+	taskLabels["web_target_id"] = strings.TrimSpace(target.ID)
+	taskLabels["web_target_type"] = strings.TrimSpace(target.TargetType)
+	taskLabels["web_safe_mode"] = strconv.FormatBool(policy.SafeMode)
+	if value := strings.TrimSpace(stringLabelFromAny(target.Labels["validation_engagement_id"])); value != "" {
+		taskLabels["validation_engagement_id"] = value
+	}
+	if value := strings.TrimSpace(request.ValidationEngagementID); value != "" {
+		taskLabels["validation_engagement_id"] = value
 	}
 	if strings.TrimSpace(policy.AuthProfileID) != "" {
 		taskLabels["web_auth_profile_id"] = strings.TrimSpace(policy.AuthProfileID)

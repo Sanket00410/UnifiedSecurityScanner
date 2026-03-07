@@ -254,6 +254,25 @@ func (s *Store) RunScanTargetForTenant(ctx context.Context, tenantID string, tar
 		tools = defaultToolsForTargetKind(target.TargetKind)
 	}
 
+	taskLabels := map[string]string{}
+	for key, value := range request.TaskLabels {
+		normalizedKey := strings.ToLower(strings.TrimSpace(key))
+		normalizedValue := strings.TrimSpace(value)
+		if normalizedKey == "" || normalizedValue == "" {
+			continue
+		}
+		taskLabels[normalizedKey] = normalizedValue
+	}
+	if value := strings.TrimSpace(stringLabelFromAny(target.Labels["validation_engagement_id"])); value != "" {
+		taskLabels["validation_engagement_id"] = value
+	}
+	if value := strings.TrimSpace(request.ValidationEngagementID); value != "" {
+		taskLabels["validation_engagement_id"] = value
+	}
+	if len(taskLabels) == 0 {
+		taskLabels = nil
+	}
+
 	job, err := s.CreateForTenant(ctx, strings.TrimSpace(tenantID), models.CreateScanJobRequest{
 		TenantID:    strings.TrimSpace(tenantID),
 		TargetKind:  target.TargetKind,
@@ -261,6 +280,7 @@ func (s *Store) RunScanTargetForTenant(ctx context.Context, tenantID string, tar
 		Profile:     profile,
 		RequestedBy: strings.TrimSpace(actor),
 		Tools:       tools,
+		TaskLabels:  taskLabels,
 	})
 	if err != nil {
 		return models.ScanTarget{}, models.ScanJob{}, true, err
@@ -416,4 +436,13 @@ func scanTargetFromRow(row interface{ Scan(dest ...any) error }) (models.ScanTar
 func nextScanTargetID() string {
 	sequence := atomic.AddUint64(&scanTargetSequence, 1)
 	return fmt.Sprintf("scan-target-%d-%06d", time.Now().UTC().Unix(), sequence)
+}
+
+func stringLabelFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	default:
+		return ""
+	}
 }

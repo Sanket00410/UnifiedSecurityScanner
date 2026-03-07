@@ -42,6 +42,7 @@ var (
 	webCrawlPolicySequence          uint64
 	webCoverageBaselineSequence     uint64
 	webRuntimeCoverageRunSequence   uint64
+	validationEngagementSequence    uint64
 	apiAssetSequence                uint64
 	apiEndpointSequence             uint64
 	externalAssetSequence           uint64
@@ -69,6 +70,11 @@ var (
 	ErrSecretReferenceNotFound      = errors.New("secret reference not found")
 	ErrSecretLeaseNotFound          = errors.New("secret lease not found")
 	ErrSecretLeaseExpired           = errors.New("secret lease expired")
+	ErrValidationEngagementRequired = errors.New("validation engagement required")
+	ErrValidationEngagementNotFound = errors.New("validation engagement not found")
+	ErrValidationEngagementInactive = errors.New("validation engagement is not active")
+	ErrValidationEngagementScope    = errors.New("validation engagement scope mismatch")
+	ErrValidationEngagementTool     = errors.New("validation engagement does not allow requested tool")
 	ErrCertificateAuthorityDisabled = errors.New("certificate authority is not configured")
 	ErrWorkloadCertificateNotFound  = errors.New("workload certificate not found")
 )
@@ -258,6 +264,20 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 		}
 	}
 
+	validationContext, err := resolveValidationEngagementContextTx(
+		ctx,
+		tx,
+		job.TenantID,
+		job.TargetKind,
+		job.Target,
+		tools,
+		request.TaskLabels,
+		now,
+	)
+	if err != nil {
+		return models.ScanJob{}, err
+	}
+
 	_, err = tx.Exec(ctx, `
 		INSERT INTO scan_jobs (
 			id, tenant_id, target_kind, target, profile, requested_by,
@@ -288,6 +308,19 @@ func (s *Store) Create(ctx context.Context, request models.CreateScanJobRequest)
 				continue
 			}
 			labels[normalizedKey] = normalizedValue
+		}
+		if validationContext != nil {
+			for key, value := range validationContext.Labels {
+				normalizedKey := strings.ToLower(strings.TrimSpace(key))
+				normalizedValue := strings.TrimSpace(value)
+				if normalizedKey == "" || normalizedValue == "" {
+					continue
+				}
+				if normalizedKey == "scan_job_id" || normalizedKey == "profile" {
+					continue
+				}
+				labels[normalizedKey] = normalizedValue
+			}
 		}
 		maxRuntimeSeconds := maxRuntimeForTool(tool)
 		if control, exists := engineControls[tool]; exists {
@@ -1073,6 +1106,18 @@ func claimAssignmentsTx(
 		}
 		if len(assignments) >= limit {
 			break
+		}
+		if err := ensureValidationEngagementForDispatchTx(
+			ctx,
+			tx,
+			task.tenantID,
+			task.targetKind,
+			task.target,
+			task.adapterID,
+			task.labels,
+			now,
+		); err != nil {
+			continue
 		}
 		if err := attachWebAuthSecretLeasesTx(ctx, tx, task.tenantID, task.taskID, workerID, task.labels, task.maxRuntimeSeconds, secretLeaseMaxTTL, now); err != nil {
 			return nil, err

@@ -106,6 +106,8 @@ type stubAPIStore struct {
 	remediationTickets       []models.RemediationTicketLink
 	notifications            []models.NotificationEvent
 	notificationSweep        models.NotificationSweepResult
+	validationEngagements    []models.ValidationEngagement
+	validationEngagementErr  error
 	policy                   models.Policy
 	policies                 []models.Policy
 	policyVersions           []models.PolicyVersion
@@ -1806,6 +1808,162 @@ func (s *stubAPIStore) CreateCompensatingControlForTenant(context.Context, strin
 		return models.CompensatingControl{}, nil
 	}
 	return s.assetControls[0], nil
+}
+
+func (s *stubAPIStore) ListValidationEngagementsForTenant(_ context.Context, _ string, status string, _ int) ([]models.ValidationEngagement, error) {
+	if s.validationEngagementErr != nil {
+		return nil, s.validationEngagementErr
+	}
+	if strings.TrimSpace(status) == "" {
+		return s.validationEngagements, nil
+	}
+	filtered := make([]models.ValidationEngagement, 0, len(s.validationEngagements))
+	for _, item := range s.validationEngagements {
+		if strings.EqualFold(strings.TrimSpace(item.Status), strings.TrimSpace(status)) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *stubAPIStore) GetValidationEngagementForTenant(_ context.Context, _ string, engagementID string) (models.ValidationEngagement, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, false, s.validationEngagementErr
+	}
+	for _, item := range s.validationEngagements {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(engagementID)) {
+			return item, true, nil
+		}
+	}
+	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) CreateValidationEngagementForTenant(_ context.Context, tenantID string, actor string, request models.CreateValidationEngagementRequest) (models.ValidationEngagement, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, s.validationEngagementErr
+	}
+	now := time.Now().UTC()
+	item := models.ValidationEngagement{
+		ID:                     fmt.Sprintf("validation-engagement-%d", now.UnixNano()),
+		TenantID:               strings.TrimSpace(tenantID),
+		Name:                   strings.TrimSpace(request.Name),
+		Status:                 "draft",
+		TargetKind:             strings.TrimSpace(request.TargetKind),
+		Target:                 strings.TrimSpace(request.Target),
+		PolicyPackRef:          strings.TrimSpace(request.PolicyPackRef),
+		AllowedTools:           request.AllowedTools,
+		RequiresManualApproval: true,
+		Notes:                  strings.TrimSpace(request.Notes),
+		RequestedBy:            strings.TrimSpace(actor),
+		StartAt:                request.StartAt,
+		EndAt:                  request.EndAt,
+		CreatedAt:              now,
+		UpdatedAt:              now,
+	}
+	if request.RequiresManualApproval != nil {
+		item.RequiresManualApproval = *request.RequiresManualApproval
+	}
+	s.validationEngagements = append([]models.ValidationEngagement{item}, s.validationEngagements...)
+	return item, nil
+}
+
+func (s *stubAPIStore) UpdateValidationEngagementForTenant(_ context.Context, _ string, engagementID string, _ string, request models.UpdateValidationEngagementRequest) (models.ValidationEngagement, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEngagements {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		if value := strings.TrimSpace(request.Name); value != "" {
+			item.Name = value
+		}
+		if value := strings.TrimSpace(request.TargetKind); value != "" {
+			item.TargetKind = value
+		}
+		if value := strings.TrimSpace(request.Target); value != "" {
+			item.Target = value
+		}
+		if value := strings.TrimSpace(request.PolicyPackRef); value != "" {
+			item.PolicyPackRef = value
+		}
+		if request.AllowedTools != nil {
+			item.AllowedTools = request.AllowedTools
+		}
+		if request.RequiresManualApproval != nil {
+			item.RequiresManualApproval = *request.RequiresManualApproval
+		}
+		if value := strings.TrimSpace(request.Notes); value != "" {
+			item.Notes = value
+		}
+		if request.StartAt != nil {
+			item.StartAt = request.StartAt
+		}
+		if request.EndAt != nil {
+			item.EndAt = request.EndAt
+		}
+		item.UpdatedAt = time.Now().UTC()
+		s.validationEngagements[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) ApproveValidationEngagementForTenant(_ context.Context, _ string, engagementID string, actor string, _ string) (models.ValidationEngagement, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEngagements {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "approved"
+		item.ApprovedBy = strings.TrimSpace(actor)
+		item.ApprovedAt = &now
+		item.UpdatedAt = now
+		s.validationEngagements[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) ActivateValidationEngagementForTenant(_ context.Context, _ string, engagementID string, actor string) (models.ValidationEngagement, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEngagements {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "active"
+		item.ActivatedBy = strings.TrimSpace(actor)
+		item.ActivatedAt = &now
+		item.UpdatedAt = now
+		s.validationEngagements[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationEngagement{}, false, nil
+}
+
+func (s *stubAPIStore) CloseValidationEngagementForTenant(_ context.Context, _ string, engagementID string, actor string, _ string) (models.ValidationEngagement, bool, error) {
+	if s.validationEngagementErr != nil {
+		return models.ValidationEngagement{}, false, s.validationEngagementErr
+	}
+	for idx, item := range s.validationEngagements {
+		if !strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(engagementID)) {
+			continue
+		}
+		now := time.Now().UTC()
+		item.Status = "closed"
+		item.ClosedBy = strings.TrimSpace(actor)
+		item.ClosedAt = &now
+		item.UpdatedAt = now
+		s.validationEngagements[idx] = item
+		return item, true, nil
+	}
+	return models.ValidationEngagement{}, false, nil
 }
 
 func (s *stubAPIStore) ListPoliciesForTenant(context.Context, string, int) ([]models.Policy, error) {

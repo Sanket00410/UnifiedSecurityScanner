@@ -146,6 +146,13 @@ type apiStore interface {
 	SyncAssetProfilesForTenant(ctx context.Context, tenantID string, request models.SyncAssetProfilesRequest) (models.SyncAssetProfilesResult, error)
 	ListCompensatingControlsForTenant(ctx context.Context, tenantID string, assetID string, limit int) ([]models.CompensatingControl, error)
 	CreateCompensatingControlForTenant(ctx context.Context, tenantID string, assetID string, request models.CreateCompensatingControlRequest) (models.CompensatingControl, error)
+	ListValidationEngagementsForTenant(ctx context.Context, tenantID string, status string, limit int) ([]models.ValidationEngagement, error)
+	GetValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string) (models.ValidationEngagement, bool, error)
+	CreateValidationEngagementForTenant(ctx context.Context, tenantID string, actor string, request models.CreateValidationEngagementRequest) (models.ValidationEngagement, error)
+	UpdateValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, request models.UpdateValidationEngagementRequest) (models.ValidationEngagement, bool, error)
+	ApproveValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
+	ActivateValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string) (models.ValidationEngagement, bool, error)
+	CloseValidationEngagementForTenant(ctx context.Context, tenantID string, engagementID string, actor string, reason string) (models.ValidationEngagement, bool, error)
 	ListPoliciesForTenant(ctx context.Context, tenantID string, limit int) ([]models.Policy, error)
 	GetPolicyForTenant(ctx context.Context, tenantID string, policyID string) (models.Policy, bool, error)
 	CreatePolicyForTenant(ctx context.Context, tenantID string, request models.CreatePolicyRequest) (models.Policy, error)
@@ -348,6 +355,15 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodPut:  auth.PermissionAssetsWrite,
 		http.MethodPost: auth.PermissionAssetsWrite,
 	}, "asset", "asset", server.handleAssetRoute))
+	mux.HandleFunc("/v1/validation-engagements", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_engagements", "validation_engagement", server.handleValidationEngagements))
+	mux.HandleFunc("/v1/validation-engagements/", server.withUserAuthForMethod(map[string]auth.Permission{
+		http.MethodGet:  auth.PermissionPoliciesRead,
+		http.MethodPut:  auth.PermissionPoliciesWrite,
+		http.MethodPost: auth.PermissionPoliciesWrite,
+	}, "validation_engagement", "validation_engagement", server.handleValidationEngagementRoute))
 	mux.HandleFunc("/v1/policies", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
@@ -987,6 +1003,9 @@ func (s *Server) handleWebTargetRoute(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, http.StatusBadRequest, "web_runtime_tool_not_allowed", err.Error())
 				return
 			}
+			if s.writeValidationEngagementExecutionError(w, err) {
+				return
+			}
 			var denied *jobs.PolicyDeniedError
 			if errors.As(err, &denied) {
 				s.writeJSON(w, http.StatusForbidden, map[string]any{
@@ -1451,6 +1470,9 @@ func (s *Server) handleScanTargetRoute(w http.ResponseWriter, r *http.Request) {
 
 		target, job, found, err := s.store.RunScanTargetForTenant(r.Context(), principal.OrganizationID, targetID, principal.Email, request)
 		if err != nil {
+			if s.writeValidationEngagementExecutionError(w, err) {
+				return
+			}
 			var denied *jobs.PolicyDeniedError
 			if errors.As(err, &denied) {
 				s.writeJSON(w, http.StatusForbidden, map[string]any{
@@ -3836,6 +3858,181 @@ func (s *Server) handleAssetRoute(w http.ResponseWriter, r *http.Request) {
 	s.writeError(w, http.StatusNotFound, "asset_route_not_found", "the requested asset route was not found")
 }
 
+func (s *Server) handleValidationEngagements(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		limit := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				s.writeError(w, http.StatusBadRequest, "validation_error", "limit must be a positive integer")
+				return
+			}
+			limit = parsed
+		}
+		status := strings.TrimSpace(r.URL.Query().Get("status"))
+
+		items, err := s.store.ListValidationEngagementsForTenant(r.Context(), principal.OrganizationID, status, limit)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, "list_validation_engagements_failed", "validation engagements could not be loaded")
+			return
+		}
+
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"items": items,
+		})
+	case http.MethodPost:
+		defer r.Body.Close()
+
+		var request models.CreateValidationEngagementRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(request.Name) == "" {
+			s.writeError(w, http.StatusBadRequest, "validation_error", "name is required")
+			return
+		}
+
+		item, err := s.store.CreateValidationEngagementForTenant(r.Context(), principal.OrganizationID, principal.Email, request)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "create_validation_engagement_failed", "validation engagement could not be created")
+			return
+		}
+
+		s.writeJSON(w, http.StatusCreated, item)
+	default:
+		s.writeMethodNotAllowed(w)
+	}
+}
+
+func (s *Server) handleValidationEngagementRoute(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, http.StatusUnauthorized, "unauthorized", "authentication is required")
+		return
+	}
+
+	path := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/validation-engagements/"))
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		s.writeError(w, http.StatusNotFound, "validation_engagement_route_not_found", "the requested validation engagement route was not found")
+		return
+	}
+
+	engagementID := strings.TrimSpace(parts[0])
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			item, found, err := s.store.GetValidationEngagementForTenant(r.Context(), principal.OrganizationID, engagementID)
+			if err != nil {
+				s.writeError(w, http.StatusInternalServerError, "get_validation_engagement_failed", "validation engagement could not be loaded")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "validation_engagement_not_found", "validation engagement was not found")
+				return
+			}
+			s.writeJSON(w, http.StatusOK, item)
+		case http.MethodPut:
+			defer r.Body.Close()
+
+			var request models.UpdateValidationEngagementRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+				return
+			}
+
+			item, found, err := s.store.UpdateValidationEngagementForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, request)
+			if err != nil {
+				if s.writeValidationEngagementMutationError(w, err) {
+					return
+				}
+				s.writeError(w, http.StatusInternalServerError, "update_validation_engagement_failed", "validation engagement could not be updated")
+				return
+			}
+			if !found {
+				s.writeError(w, http.StatusNotFound, "validation_engagement_not_found", "validation engagement was not found")
+				return
+			}
+
+			s.writeJSON(w, http.StatusOK, item)
+		default:
+			s.writeMethodNotAllowed(w)
+		}
+		return
+	}
+
+	if len(parts) != 2 || r.Method != http.MethodPost {
+		s.writeError(w, http.StatusNotFound, "validation_engagement_route_not_found", "the requested validation engagement route was not found")
+		return
+	}
+
+	defer r.Body.Close()
+	var decision models.ValidationEngagementDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&decision); err != nil && !errors.Is(err, io.EOF) {
+		s.writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+		return
+	}
+
+	action := strings.TrimSpace(parts[1])
+	switch action {
+	case "approve":
+		item, found, err := s.store.ApproveValidationEngagementForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, decision.Reason)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "approve_validation_engagement_failed", "validation engagement could not be approved")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_engagement_not_found", "validation engagement was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case "activate":
+		item, found, err := s.store.ActivateValidationEngagementForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "activate_validation_engagement_failed", "validation engagement could not be activated")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_engagement_not_found", "validation engagement was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	case "close":
+		item, found, err := s.store.CloseValidationEngagementForTenant(r.Context(), principal.OrganizationID, engagementID, principal.Email, decision.Reason)
+		if err != nil {
+			if s.writeValidationEngagementMutationError(w, err) {
+				return
+			}
+			s.writeError(w, http.StatusInternalServerError, "close_validation_engagement_failed", "validation engagement could not be closed")
+			return
+		}
+		if !found {
+			s.writeError(w, http.StatusNotFound, "validation_engagement_not_found", "validation engagement was not found")
+			return
+		}
+		s.writeJSON(w, http.StatusOK, item)
+	default:
+		s.writeError(w, http.StatusNotFound, "validation_engagement_route_not_found", "the requested validation engagement route was not found")
+	}
+}
+
 func (s *Server) handlePolicies(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {
@@ -4714,6 +4911,55 @@ func (s *Server) handleRemediationEscalationSweep(w http.ResponseWriter, r *http
 	s.writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) writeValidationEngagementExecutionError(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, jobs.ErrValidationEngagementRequired):
+		s.writeError(w, http.StatusBadRequest, "validation_engagement_required", "validation engagement is required for restricted scan tools")
+		return true
+	case errors.Is(err, jobs.ErrValidationEngagementNotFound):
+		s.writeError(w, http.StatusBadRequest, "validation_engagement_not_found", "validation engagement was not found")
+		return true
+	case errors.Is(err, jobs.ErrValidationEngagementInactive):
+		s.writeError(w, http.StatusConflict, "validation_engagement_inactive", "validation engagement is not active")
+		return true
+	case errors.Is(err, jobs.ErrValidationEngagementScope):
+		s.writeError(w, http.StatusBadRequest, "validation_engagement_scope_mismatch", "validation engagement does not match requested target")
+		return true
+	case errors.Is(err, jobs.ErrValidationEngagementTool):
+		s.writeError(w, http.StatusBadRequest, "validation_engagement_tool_not_allowed", "validation engagement does not allow requested tools")
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) writeValidationEngagementMutationError(w http.ResponseWriter, err error) bool {
+	if s.writeValidationEngagementExecutionError(w, err) {
+		return true
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(lower, "name is required"),
+		strings.Contains(lower, "end_at must"),
+		strings.Contains(lower, "required"):
+		s.writeError(w, http.StatusBadRequest, "validation_error", err.Error())
+		return true
+	case strings.Contains(lower, "cannot be"),
+		strings.Contains(lower, "requires approval"),
+		strings.Contains(lower, "in the past"):
+		s.writeError(w, http.StatusConflict, "validation_engagement_state_invalid", err.Error())
+		return true
+	case strings.Contains(lower, "duplicate key"),
+		strings.Contains(lower, "already exists"),
+		strings.Contains(lower, "unique"):
+		s.writeError(w, http.StatusConflict, "validation_engagement_conflict", "validation engagement already exists for this tenant")
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal models.AuthPrincipal) {
 	defer r.Body.Close()
 
@@ -4740,6 +4986,9 @@ func (s *Server) createScanJob(w http.ResponseWriter, r *http.Request, principal
 
 	job, err := s.store.CreateForTenant(r.Context(), principal.OrganizationID, request)
 	if err != nil {
+		if s.writeValidationEngagementExecutionError(w, err) {
+			return
+		}
 		var denied *jobs.PolicyDeniedError
 		if errors.As(err, &denied) {
 			s.writeJSON(w, http.StatusForbidden, map[string]any{

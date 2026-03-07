@@ -78,8 +78,10 @@ type UpdateScanTargetRequest struct {
 }
 
 type RunScanTargetRequest struct {
-	Profile string   `json:"profile"`
-	Tools   []string `json:"tools"`
+	Profile                string            `json:"profile"`
+	Tools                  []string          `json:"tools"`
+	TaskLabels             map[string]string `json:"task_labels,omitempty"`
+	ValidationEngagementID string            `json:"validation_engagement_id,omitempty"`
 }
 
 type APIError struct {
