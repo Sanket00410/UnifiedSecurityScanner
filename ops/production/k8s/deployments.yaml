@@ -1,0 +1,389 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: uss-prod
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: worker-evidence
+  namespace: uss-prod
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: platform-exports
+  namespace: uss-prod
+spec:
+  accessModes: ["ReadWriteMany"]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: uss-prod
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: unified_security_scanner
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "unified_security_scanner"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "unified_security_scanner"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane-api
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: control-plane-api
+  template:
+    metadata:
+      labels:
+        app: control-plane-api
+    spec:
+      containers:
+        - name: api
+          image: unifiedsecurityscanner/control-plane:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: uss-config
+            - secretRef:
+                name: uss-secrets
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane-scheduler
+  namespace: uss-prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: control-plane-scheduler
+  template:
+    metadata:
+      labels:
+        app: control-plane-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: unifiedsecurityscanner/control-plane:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/uss-control-plane-scheduler"]
+          envFrom:
+            - configMapRef:
+                name: uss-config
+            - secretRef:
+                name: uss-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-runtime
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker-runtime
+  template:
+    metadata:
+      labels:
+        app: worker-runtime
+    spec:
+      containers:
+        - name: worker
+          image: unifiedsecurityscanner/uss-worker:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: USS_WORKER_DAEMON
+              value: "true"
+            - name: USS_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: USS_CONTROL_PLANE_URL
+              value: control-plane-api:9090
+            - name: USS_EVIDENCE_ROOT
+              value: /var/lib/uss/evidence
+          envFrom:
+            - secretRef:
+                name: uss-secrets
+          volumeMounts:
+            - name: worker-evidence
+              mountPath: /var/lib/uss/evidence
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+      volumes:
+        - name: worker-evidence
+          persistentVolumeClaim:
+            claimName: worker-evidence
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: risk-engine-api
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: risk-engine-api
+  template:
+    metadata:
+      labels:
+        app: risk-engine-api
+    spec:
+      containers:
+        - name: risk-engine
+          image: unifiedsecurityscanner/risk-engine:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: uss-config
+          ports:
+            - containerPort: 18110
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 18110
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 18110
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-services-api
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: platform-services-api
+  template:
+    metadata:
+      labels:
+        app: platform-services-api
+    spec:
+      containers:
+        - name: platform-api
+          image: unifiedsecurityscanner/platform-services:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: uss-config
+            - secretRef:
+                name: uss-secrets
+          ports:
+            - containerPort: 18090
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 18090
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 18090
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          volumeMounts:
+            - name: platform-exports
+              mountPath: /var/lib/uss/exports
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+      volumes:
+        - name: platform-exports
+          persistentVolumeClaim:
+            claimName: platform-exports
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-services-worker
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: platform-services-worker
+  template:
+    metadata:
+      labels:
+        app: platform-services-worker
+    spec:
+      containers:
+        - name: platform-worker
+          image: unifiedsecurityscanner/platform-services:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/uss-platform-services-worker"]
+          env:
+            - name: USS_PLATFORM_SERVICES_WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - configMapRef:
+                name: uss-config
+            - secretRef:
+                name: uss-secrets
+          volumeMounts:
+            - name: platform-exports
+              mountPath: /var/lib/uss/exports
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+      volumes:
+        - name: platform-exports
+          persistentVolumeClaim:
+            claimName: platform-exports
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: uss-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+    spec:
+      containers:
+        - name: ui
+          image: unifiedsecurityscanner/ui:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

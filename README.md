@@ -51,3 +51,9 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 - One-command local stack starter: `ops/start-local-e2e.ps1`
 - Docker-based UI startup (no local npm): `ops/start-local-e2e.ps1 -UseDockerUI`
 - To make dedicated UI primary behind control-plane, set `USS_UI_DIST_PATH=../ui/dist` before starting API.
+
+## Production Bundle
+- Unified production compose path: `ops/production/docker-compose.yml`
+- Kubernetes path: `ops/production/k8s/` (`kubectl apply -k ops/production/k8s`)
+- Observability pack: `ops/production/observability/` (Prometheus + Grafana dashboard provisioning)
+- Operations docs: `ops/production/RUNBOOKS.md` and `ops/production/HA_SETTINGS.md`

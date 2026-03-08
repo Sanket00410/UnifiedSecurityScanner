@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: uss-prod
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane-api
+  namespace: uss-prod
+spec:
+  selector:
+    app: control-plane-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: grpc
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: risk-engine-api
+  namespace: uss-prod
+spec:
+  selector:
+    app: risk-engine-api
+  ports:
+    - name: http
+      port: 18110
+      targetPort: 18110
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-services-api
+  namespace: uss-prod
+spec:
+  selector:
+    app: platform-services-api
+  ports:
+    - name: http
+      port: 18090
+      targetPort: 18090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: uss-prod
+spec:
+  selector:
+    app: ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

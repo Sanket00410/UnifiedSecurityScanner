@@ -1,0 +1,17 @@
+.git
+.github
+.msd
+
+**/target
+**/node_modules
+**/evidence
+**/dist
+**/.DS_Store
+
+**/*.exe
+**/*.log
+**/*.tmp
+
+worker-runtime/crates/uss-worker/evidence
+worker-runtime/crates/uss-worker/target
+ui/node_modules

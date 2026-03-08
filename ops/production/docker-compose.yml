@@ -1,0 +1,211 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: uss-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: unified_security_scanner
+    ports:
+      - "5432:5432"
+    volumes:
+      - uss-prod-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d unified_security_scanner"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  control-plane-api:
+    container_name: uss-control-plane-api
+    build:
+      context: ../../control-plane
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      USS_API_BIND_ADDRESS: ":8080"
+      USS_GRPC_BIND_ADDRESS: ":9090"
+      USS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/unified_security_scanner?sslmode=disable
+      USS_BOOTSTRAP_ADMIN_TOKEN: ${USS_BOOTSTRAP_ADMIN_TOKEN:-uss-local-admin-token}
+      USS_WORKER_SHARED_SECRET: ${USS_WORKER_SHARED_SECRET:-uss-worker-shared-secret}
+      USS_WORKER_HEARTBEAT_TTL: 2m
+      USS_SCHEDULER_INTERVAL: 15s
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/readyz | grep -q ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  control-plane-scheduler:
+    container_name: uss-control-plane-scheduler
+    build:
+      context: ../../control-plane
+      dockerfile: Dockerfile
+    command: ["/usr/local/bin/uss-control-plane-scheduler"]
+    restart: unless-stopped
+    depends_on:
+      control-plane-api:
+        condition: service_healthy
+    environment:
+      USS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/unified_security_scanner?sslmode=disable
+      USS_WORKER_SHARED_SECRET: ${USS_WORKER_SHARED_SECRET:-uss-worker-shared-secret}
+      USS_SCHEDULER_INTERVAL: 15s
+
+  worker-runtime:
+    container_name: uss-worker-runtime
+    build:
+      context: ../..
+      dockerfile: worker-runtime/crates/uss-worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      control-plane-api:
+        condition: service_healthy
+    environment:
+      USS_WORKER_DAEMON: "true"
+      USS_WORKER_ID: worker-prod-1
+      USS_WORKER_VERSION: "0.1.0"
+      USS_CONTROL_PLANE_URL: control-plane-api:9090
+      USS_WORKER_SHARED_SECRET: ${USS_WORKER_SHARED_SECRET:-uss-worker-shared-secret}
+      USS_EVIDENCE_ROOT: /var/lib/uss/evidence
+    volumes:
+      - uss-prod-worker-evidence:/var/lib/uss/evidence
+
+  risk-engine-api:
+    container_name: uss-risk-engine-api
+    build:
+      context: ../..
+      dockerfile: risk-engine/Dockerfile
+    restart: unless-stopped
+    environment:
+      USS_RISK_ENGINE_BIND: ":18110"
+    ports:
+      - "18110:18110"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:18110/healthz | grep -q ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  platform-services-api:
+    container_name: uss-platform-services-api
+    build:
+      context: ../../platform-services
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      USS_PLATFORM_SERVICES_BIND: ":18090"
+      USS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/unified_security_scanner?sslmode=disable
+      USS_PLATFORM_SERVICES_API_TOKEN: ${USS_PLATFORM_SERVICES_API_TOKEN:-uss-local-admin-token}
+      USS_PLATFORM_SERVICES_WORKER_ID: platform-worker-prod
+      USS_PLATFORM_SERVICES_WORKER_INTERVAL: 10s
+      USS_PLATFORM_SERVICES_WORKER_BATCH_SIZE: 64
+      USS_PLATFORM_SERVICES_EXPORT_ROOT: /var/lib/uss/exports
+    volumes:
+      - uss-prod-platform-exports:/var/lib/uss/exports
+    ports:
+      - "18090:18090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:18090/readyz | grep -q ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  platform-services-worker:
+    container_name: uss-platform-services-worker
+    build:
+      context: ../../platform-services
+      dockerfile: Dockerfile
+    command: ["/usr/local/bin/uss-platform-services-worker"]
+    restart: unless-stopped
+    depends_on:
+      platform-services-api:
+        condition: service_healthy
+    environment:
+      USS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/unified_security_scanner?sslmode=disable
+      USS_PLATFORM_SERVICES_API_TOKEN: ${USS_PLATFORM_SERVICES_API_TOKEN:-uss-local-admin-token}
+      USS_PLATFORM_SERVICES_WORKER_ID: platform-worker-prod
+      USS_PLATFORM_SERVICES_WORKER_INTERVAL: 10s
+      USS_PLATFORM_SERVICES_WORKER_BATCH_SIZE: 64
+      USS_PLATFORM_SERVICES_EXPORT_ROOT: /var/lib/uss/exports
+    volumes:
+      - uss-prod-platform-exports:/var/lib/uss/exports
+
+  ui:
+    container_name: uss-ui
+    build:
+      context: ../../ui
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    depends_on:
+      control-plane-api:
+        condition: service_healthy
+    ports:
+      - "5180:80"
+    volumes:
+      - ../../ui/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.27.0
+    container_name: uss-blackbox
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./observability/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    ports:
+      - "9115:9115"
+
+  prometheus:
+    image: prom/prometheus:v3.7.2
+    container_name: uss-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    depends_on:
+      control-plane-api:
+        condition: service_healthy
+      platform-services-api:
+        condition: service_healthy
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - uss-prod-prometheus:/prometheus
+    ports:
+      - "9091:9090"
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    container_name: uss-grafana
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: ${USS_GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${USS_GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - uss-prod-grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+
+volumes:
+  uss-prod-pgdata:
+  uss-prod-worker-evidence:
+  uss-prod-platform-exports:
+  uss-prod-prometheus:
+  uss-prod-grafana:

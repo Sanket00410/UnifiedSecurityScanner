@@ -7,11 +7,16 @@ responsibilities:
   - worker_upgrade_management
   - notifications_and_approvals
   - audit_export
+  - connector_dispatch_and_retries
+  - ticketing_and_external_sync_jobs
+  - siem_cmdb_event_fanout
 primary_inputs:
   - signed_rule_packs
   - advisory_feeds
   - tenant_policies
+  - connector_delivery_requests
 primary_outputs:
   - versioned_updates
   - approval_events
   - audit_records
+  - delivery_attempt_logs

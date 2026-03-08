@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: uss-config
+  namespace: uss-prod
+data:
+  USS_DATABASE_URL: postgres://postgres:postgres@postgres:5432/unified_security_scanner?sslmode=disable
+  USS_API_BIND_ADDRESS: ":8080"
+  USS_GRPC_BIND_ADDRESS: ":9090"
+  USS_RISK_ENGINE_BIND: ":18110"
+  USS_PLATFORM_SERVICES_BIND: ":18090"
+  USS_SCHEDULER_INTERVAL: "15s"
+  USS_WORKER_HEARTBEAT_TTL: "2m"
+  USS_PLATFORM_SERVICES_WORKER_INTERVAL: "10s"
+  USS_PLATFORM_SERVICES_WORKER_BATCH_SIZE: "64"
+  USS_PLATFORM_SERVICES_EXPORT_ROOT: "/var/lib/uss/exports"
