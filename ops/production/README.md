@@ -14,6 +14,32 @@ It includes:
 
 ## 1. Container Deployment (Compose)
 
+Recommended one-command launcher (auto-handles busy ports):
+
+```powershell
+.\ops\start-production.ps1 -Rebuild
+```
+
+Add observability stack:
+
+```powershell
+.\ops\start-production.ps1 -Rebuild -WithObservability
+```
+
+Stop:
+
+```powershell
+.\ops\start-production.ps1 -Down
+```
+
+Stop and delete volumes:
+
+```powershell
+.\ops\start-production.ps1 -Down -Clean
+```
+
+Manual compose path:
+
 ```powershell
 cd ops/production
 docker compose up -d --build

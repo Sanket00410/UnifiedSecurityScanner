@@ -19,6 +19,12 @@ From repo root:
 .\ops\start-local-e2e.ps1
 ```
 
+If you want full Dockerized production-style runtime instead of mixed local processes:
+
+```powershell
+.\ops\start-production.ps1 -Rebuild
+```
+
 This starts:
 - PostgreSQL
 - Control-plane API (`:8080`)

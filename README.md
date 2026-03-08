@@ -54,6 +54,7 @@ Code/Assets -> Ingestion and Context -> Orchestration and Policy -> SAST/SCA/Sec
 
 ## Production Bundle
 - Unified production compose path: `ops/production/docker-compose.yml`
+- One-command production launcher: `ops/start-production.ps1`
 - Kubernetes path: `ops/production/k8s/` (`kubectl apply -k ops/production/k8s`)
 - Observability pack: `ops/production/observability/` (Prometheus + Grafana dashboard provisioning)
 - Operations docs: `ops/production/RUNBOOKS.md` and `ops/production/HA_SETTINGS.md`
