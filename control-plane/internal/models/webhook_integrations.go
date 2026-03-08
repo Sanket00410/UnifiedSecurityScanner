@@ -94,3 +94,47 @@ type DispatchTenantSummary struct {
 	Failed    int64 `json:"failed"`
 	Skipped   int64 `json:"skipped"`
 }
+
+type ReplayDeadLetterWebhookDeliveriesRequest struct {
+	WebhookID string     `json:"webhook_id"`
+	EventType string     `json:"event_type"`
+	Since     *time.Time `json:"since,omitempty"`
+	Until     *time.Time `json:"until,omitempty"`
+	Limit     int        `json:"limit"`
+}
+
+type ReplayDeadLetterWebhookDeliveriesResult struct {
+	Candidates   int64 `json:"candidates"`
+	Attempted    int64 `json:"attempted"`
+	Delivered    int64 `json:"delivered"`
+	Failed       int64 `json:"failed"`
+	Requeued     int64 `json:"requeued"`
+	DeadLettered int64 `json:"dead_lettered"`
+	Skipped      int64 `json:"skipped"`
+}
+
+type WebhookDeliveryMetrics struct {
+	WebhookID              string     `json:"webhook_id"`
+	TotalAttempts          int64      `json:"total_attempts"`
+	DeliveredAttempts      int64      `json:"delivered_attempts"`
+	FailedAttempts         int64      `json:"failed_attempts"`
+	ScheduledRetryAttempts int64      `json:"scheduled_retry_attempts"`
+	DeadLetterAttempts     int64      `json:"dead_letter_attempts"`
+	SuccessRate            float64    `json:"success_rate"`
+	LastAttemptAt          *time.Time `json:"last_attempt_at,omitempty"`
+	LastDeliveredAt        *time.Time `json:"last_delivered_at,omitempty"`
+}
+
+type WebhookDeliveryMetricsSummary struct {
+	TotalAttempts          int64   `json:"total_attempts"`
+	DeliveredAttempts      int64   `json:"delivered_attempts"`
+	FailedAttempts         int64   `json:"failed_attempts"`
+	ScheduledRetryAttempts int64   `json:"scheduled_retry_attempts"`
+	DeadLetterAttempts     int64   `json:"dead_letter_attempts"`
+	SuccessRate            float64 `json:"success_rate"`
+}
+
+type WebhookDeliveryMetricsResult struct {
+	Summary WebhookDeliveryMetricsSummary `json:"summary"`
+	Items   []WebhookDeliveryMetrics      `json:"items"`
+}

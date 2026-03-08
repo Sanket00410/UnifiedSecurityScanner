@@ -121,7 +121,9 @@ type apiStore interface {
 	CreateWebhookIntegrationForTenant(ctx context.Context, tenantID string, actor string, request models.CreateWebhookIntegrationRequest) (models.WebhookIntegration, error)
 	UpdateWebhookIntegrationForTenant(ctx context.Context, tenantID string, webhookID string, actor string, request models.UpdateWebhookIntegrationRequest) (models.WebhookIntegration, bool, error)
 	ListWebhookDeliveriesForTenant(ctx context.Context, tenantID string, webhookID string, status string, limit int) ([]models.WebhookDelivery, error)
+	ListWebhookDeliveryMetricsForTenant(ctx context.Context, tenantID string, webhookID string, eventType string, since *time.Time, until *time.Time, limit int) (models.WebhookDeliveryMetricsResult, error)
 	DispatchWebhookDeliveriesForTenant(ctx context.Context, tenantID string, actor string, request models.DispatchWebhookDeliveriesRequest) (models.DispatchWebhookDeliveriesResult, error)
+	ReplayDeadLetterWebhookDeliveriesForTenant(ctx context.Context, tenantID string, actor string, request models.ReplayDeadLetterWebhookDeliveriesRequest) (models.ReplayDeadLetterWebhookDeliveriesResult, error)
 	GetTenantOperationsSnapshot(ctx context.Context, tenantID string) (models.TenantOperationsSnapshot, error)
 	UpdateTenantLimitsForTenant(ctx context.Context, tenantID string, actor string, request models.UpdateTenantLimitsRequest) (models.TenantOperationsSnapshot, error)
 	GetTenantExecutionControlsForTenant(ctx context.Context, tenantID string) (models.TenantExecutionControls, error)
@@ -342,7 +344,9 @@ func New(cfg config.Config, store apiStore) *Server {
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPost: auth.PermissionPoliciesWrite,
 	}, "webhook_integrations", "webhook_integration", server.handleWebhookIntegrations))
+	mux.HandleFunc("/v1/integrations/webhooks/metrics", server.withUserAuth(auth.PermissionPoliciesRead, "webhook_delivery.metrics", "webhook_metrics", server.handleWebhookMetrics))
 	mux.HandleFunc("/v1/integrations/webhooks/dispatch", server.withUserAuth(auth.PermissionPoliciesWrite, "webhook_delivery.dispatch", "webhook_dispatch", server.handleWebhookDispatch))
+	mux.HandleFunc("/v1/integrations/webhooks/replay-dead-letter", server.withUserAuth(auth.PermissionPoliciesWrite, "webhook_dead_letter.replay", "webhook_delivery", server.handleWebhookDeadLetterReplay))
 	mux.HandleFunc("/v1/integrations/webhooks/", server.withUserAuthForMethod(map[string]auth.Permission{
 		http.MethodGet:  auth.PermissionPoliciesRead,
 		http.MethodPut:  auth.PermissionPoliciesWrite,

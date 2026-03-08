@@ -1165,6 +1165,101 @@ func (s *stubAPIStore) ListWebhookDeliveriesForTenant(_ context.Context, _ strin
 	return items, nil
 }
 
+func (s *stubAPIStore) ListWebhookDeliveryMetricsForTenant(_ context.Context, _ string, webhookID string, eventType string, _ *time.Time, _ *time.Time, _ int) (models.WebhookDeliveryMetricsResult, error) {
+	webhookID = strings.TrimSpace(webhookID)
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	metricsByWebhook := map[string]*models.WebhookDeliveryMetrics{}
+
+	for _, delivery := range s.webhookDeliveries {
+		if webhookID != "" && strings.TrimSpace(delivery.WebhookID) != webhookID {
+			continue
+		}
+		if eventType != "" && strings.ToLower(strings.TrimSpace(delivery.EventType)) != eventType {
+			continue
+		}
+		key := strings.TrimSpace(delivery.WebhookID)
+		entry, exists := metricsByWebhook[key]
+		if !exists {
+			entry = &models.WebhookDeliveryMetrics{WebhookID: key}
+			metricsByWebhook[key] = entry
+		}
+		entry.TotalAttempts++
+		switch strings.ToLower(strings.TrimSpace(delivery.Status)) {
+		case "delivered":
+			entry.DeliveredAttempts++
+		case "failed":
+			entry.FailedAttempts++
+		case "scheduled_retry":
+			entry.ScheduledRetryAttempts++
+		case "dead_letter":
+			entry.DeadLetterAttempts++
+		}
+		if entry.LastAttemptAt == nil || delivery.AttemptedAt.After(*entry.LastAttemptAt) {
+			value := delivery.AttemptedAt
+			entry.LastAttemptAt = &value
+		}
+		if delivery.DeliveredAt != nil {
+			if entry.LastDeliveredAt == nil || delivery.DeliveredAt.After(*entry.LastDeliveredAt) {
+				value := *delivery.DeliveredAt
+				entry.LastDeliveredAt = &value
+			}
+		}
+	}
+
+	result := models.WebhookDeliveryMetricsResult{
+		Summary: models.WebhookDeliveryMetricsSummary{},
+		Items:   make([]models.WebhookDeliveryMetrics, 0, len(metricsByWebhook)),
+	}
+	for _, entry := range metricsByWebhook {
+		if entry.TotalAttempts > 0 {
+			entry.SuccessRate = float64(entry.DeliveredAttempts) / float64(entry.TotalAttempts)
+		}
+		result.Items = append(result.Items, *entry)
+		result.Summary.TotalAttempts += entry.TotalAttempts
+		result.Summary.DeliveredAttempts += entry.DeliveredAttempts
+		result.Summary.FailedAttempts += entry.FailedAttempts
+		result.Summary.ScheduledRetryAttempts += entry.ScheduledRetryAttempts
+		result.Summary.DeadLetterAttempts += entry.DeadLetterAttempts
+	}
+	if result.Summary.TotalAttempts > 0 {
+		result.Summary.SuccessRate = float64(result.Summary.DeliveredAttempts) / float64(result.Summary.TotalAttempts)
+	}
+	return result, nil
+}
+
+func (s *stubAPIStore) ReplayDeadLetterWebhookDeliveriesForTenant(_ context.Context, _ string, _ string, request models.ReplayDeadLetterWebhookDeliveriesRequest) (models.ReplayDeadLetterWebhookDeliveriesResult, error) {
+	webhookID := strings.TrimSpace(request.WebhookID)
+	eventType := strings.ToLower(strings.TrimSpace(request.EventType))
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 200
+	}
+	result := models.ReplayDeadLetterWebhookDeliveriesResult{}
+
+	seen := 0
+	for _, delivery := range s.webhookDeliveries {
+		if strings.ToLower(strings.TrimSpace(delivery.Status)) != "dead_letter" {
+			continue
+		}
+		if webhookID != "" && strings.TrimSpace(delivery.WebhookID) != webhookID {
+			continue
+		}
+		if eventType != "" && strings.ToLower(strings.TrimSpace(delivery.EventType)) != eventType {
+			continue
+		}
+		result.Candidates++
+		if seen >= limit {
+			result.Skipped++
+			continue
+		}
+		seen++
+		result.Attempted++
+		result.Delivered++
+	}
+
+	return result, nil
+}
+
 func (s *stubAPIStore) DispatchWebhookDeliveriesForTenant(_ context.Context, _ string, _ string, request models.DispatchWebhookDeliveriesRequest) (models.DispatchWebhookDeliveriesResult, error) {
 	webhookIDFilter := strings.TrimSpace(request.WebhookID)
 	eventTypeFilter := strings.ToLower(strings.TrimSpace(request.EventType))

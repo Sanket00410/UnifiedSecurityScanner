@@ -256,6 +256,27 @@ func TestPhase5WebhookIntegrationsDispatchFlow(t *testing.T) {
 	if listDeliveriesPayload.Items[0].Status != "delivered" {
 		t.Fatalf("expected delivered status, got %s", listDeliveriesPayload.Items[0].Status)
 	}
+
+	metricsResponse, metricsBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodGet,
+		testServer.URL+"/v1/integrations/webhooks/metrics?webhook_id="+webhook.ID+"&event_type=scan_job.created",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		nil,
+		http.StatusOK,
+	)
+	defer metricsResponse.Body.Close()
+	var metricsPayload models.WebhookDeliveryMetricsResult
+	decodeJSONResponse(t, metricsBody, &metricsPayload)
+	if metricsPayload.Summary.TotalAttempts < 1 {
+		t.Fatalf("expected webhook metrics total_attempts >= 1, got %d", metricsPayload.Summary.TotalAttempts)
+	}
+	if len(metricsPayload.Items) < 1 {
+		t.Fatal("expected at least one webhook metrics item")
+	}
 }
 
 func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
@@ -412,5 +433,59 @@ func TestPhase5WebhookIntegrationsRetryAndDeadLetterFlow(t *testing.T) {
 	}
 	if latest.DeadLetteredAt == nil {
 		t.Fatal("expected dead_lettered_at to be set on dead_letter delivery")
+	}
+
+	successCallbacks := int64(0)
+	successReceiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.Body.Close()
+		successCallbacks++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer successReceiver.Close()
+
+	updateWebhookResponse, updateWebhookBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPut,
+		testServer.URL+"/v1/integrations/webhooks/"+webhook.ID,
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"endpoint_url": successReceiver.URL,
+			"status":       "active",
+		},
+		http.StatusOK,
+	)
+	defer updateWebhookResponse.Body.Close()
+	decodeJSONResponse(t, updateWebhookBody, &webhook)
+
+	replayResponse, replayBody := mustJSONRequest(
+		t,
+		client,
+		http.MethodPost,
+		testServer.URL+"/v1/integrations/webhooks/replay-dead-letter",
+		cfg.BootstrapAdminToken,
+		auth.WorkerSecretHeader,
+		"",
+		map[string]any{
+			"webhook_id": webhook.ID,
+			"event_type": "scan_job.created",
+			"limit":      10,
+		},
+		http.StatusOK,
+	)
+	defer replayResponse.Body.Close()
+	var replayResult models.ReplayDeadLetterWebhookDeliveriesResult
+	decodeJSONResponse(t, replayBody, &replayResult)
+	if replayResult.Attempted < 1 {
+		t.Fatalf("expected replay attempted >= 1, got %d", replayResult.Attempted)
+	}
+	if replayResult.Delivered < 1 {
+		t.Fatalf("expected replay delivered >= 1, got %d", replayResult.Delivered)
+	}
+	if successCallbacks < 1 {
+		t.Fatalf("expected replay callback receiver to be called, got %d", successCallbacks)
 	}
 }

@@ -21,6 +21,13 @@ type webhookIntegrationRecord struct {
 	secretEncrypted string
 }
 
+type webhookReplayCandidate struct {
+	webhookID       string
+	platformEventID string
+	eventType       string
+	attemptCount    int
+}
+
 const (
 	defaultWebhookRetryMaxAttempts      = 3
 	defaultWebhookRetryBaseDelaySeconds = 1
@@ -503,6 +510,212 @@ func (s *Store) DispatchWebhookDeliveriesForAllTenants(ctx context.Context, acto
 	return out, nil
 }
 
+func (s *Store) ListWebhookDeliveryMetricsForTenant(
+	ctx context.Context,
+	tenantID string,
+	webhookID string,
+	eventType string,
+	since *time.Time,
+	until *time.Time,
+	limit int,
+) (models.WebhookDeliveryMetricsResult, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	webhookID = strings.TrimSpace(webhookID)
+	eventType = strings.ToLower(strings.TrimSpace(eventType))
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT webhook_id,
+		       COUNT(*) AS total_attempts,
+		       COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_attempts,
+		       COUNT(*) FILTER (WHERE status = 'failed') AS failed_attempts,
+		       COUNT(*) FILTER (WHERE status = 'scheduled_retry') AS scheduled_retry_attempts,
+		       COUNT(*) FILTER (WHERE status = 'dead_letter') AS dead_letter_attempts,
+		       MAX(attempted_at) AS last_attempt_at,
+		       MAX(delivered_at) AS last_delivered_at
+		FROM webhook_deliveries
+		WHERE tenant_id = $1
+		  AND ($2 = '' OR webhook_id = $2)
+		  AND ($3 = '' OR event_type = $3)
+		  AND ($4::timestamptz IS NULL OR attempted_at >= $4)
+		  AND ($5::timestamptz IS NULL OR attempted_at <= $5)
+		GROUP BY webhook_id
+		ORDER BY total_attempts DESC, webhook_id ASC
+		LIMIT $6
+	`, tenantID, webhookID, eventType, since, until, limit)
+	if err != nil {
+		return models.WebhookDeliveryMetricsResult{}, fmt.Errorf("list webhook delivery metrics: %w", err)
+	}
+	defer rows.Close()
+
+	out := models.WebhookDeliveryMetricsResult{
+		Summary: models.WebhookDeliveryMetricsSummary{},
+		Items:   make([]models.WebhookDeliveryMetrics, 0, limit),
+	}
+
+	for rows.Next() {
+		var item models.WebhookDeliveryMetrics
+		if err := rows.Scan(
+			&item.WebhookID,
+			&item.TotalAttempts,
+			&item.DeliveredAttempts,
+			&item.FailedAttempts,
+			&item.ScheduledRetryAttempts,
+			&item.DeadLetterAttempts,
+			&item.LastAttemptAt,
+			&item.LastDeliveredAt,
+		); err != nil {
+			return models.WebhookDeliveryMetricsResult{}, fmt.Errorf("scan webhook delivery metrics: %w", err)
+		}
+		item.SuccessRate = computeWebhookSuccessRate(item.DeliveredAttempts, item.TotalAttempts)
+		out.Items = append(out.Items, item)
+
+		out.Summary.TotalAttempts += item.TotalAttempts
+		out.Summary.DeliveredAttempts += item.DeliveredAttempts
+		out.Summary.FailedAttempts += item.FailedAttempts
+		out.Summary.ScheduledRetryAttempts += item.ScheduledRetryAttempts
+		out.Summary.DeadLetterAttempts += item.DeadLetterAttempts
+	}
+	if err := rows.Err(); err != nil {
+		return models.WebhookDeliveryMetricsResult{}, fmt.Errorf("iterate webhook delivery metrics: %w", err)
+	}
+	out.Summary.SuccessRate = computeWebhookSuccessRate(out.Summary.DeliveredAttempts, out.Summary.TotalAttempts)
+	return out, nil
+}
+
+func (s *Store) ReplayDeadLetterWebhookDeliveriesForTenant(
+	ctx context.Context,
+	tenantID string,
+	actor string,
+	request models.ReplayDeadLetterWebhookDeliveriesRequest,
+) (models.ReplayDeadLetterWebhookDeliveriesResult, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
+
+	limit := request.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+
+	webhookID := strings.TrimSpace(request.WebhookID)
+	eventType := strings.ToLower(strings.TrimSpace(request.EventType))
+	candidates, err := s.listDeadLetterReplayCandidatesForTenant(ctx, tenantID, webhookID, eventType, request.Since, request.Until, limit)
+	if err != nil {
+		return models.ReplayDeadLetterWebhookDeliveriesResult{}, err
+	}
+
+	result := models.ReplayDeadLetterWebhookDeliveriesResult{
+		Candidates: int64(len(candidates)),
+	}
+	if len(candidates) == 0 {
+		return result, nil
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	for _, candidate := range candidates {
+		webhook, found, err := s.getWebhookIntegrationRecordForTenant(ctx, tenantID, candidate.webhookID)
+		if err != nil {
+			return models.ReplayDeadLetterWebhookDeliveriesResult{}, err
+		}
+		if !found {
+			result.Skipped++
+			continue
+		}
+		if strings.TrimSpace(webhook.integration.Status) != "active" {
+			result.Skipped++
+			continue
+		}
+		if !webhookAcceptsEvent(webhook.integration.EventTypes, candidate.eventType) {
+			result.Skipped++
+			continue
+		}
+
+		event, found, err := s.getPlatformEventForTenant(ctx, tenantID, candidate.platformEventID)
+		if err != nil {
+			return models.ReplayDeadLetterWebhookDeliveriesResult{}, err
+		}
+		if !found {
+			result.Skipped++
+			continue
+		}
+
+		attemptCount := candidate.attemptCount + 1
+		attemptedAt := time.Now().UTC()
+		delivery := models.WebhookDelivery{
+			ID:              nextWebhookDeliveryID(),
+			TenantID:        tenantID,
+			WebhookID:       candidate.webhookID,
+			PlatformEventID: candidate.platformEventID,
+			EventType:       candidate.eventType,
+			Status:          "failed",
+			AttemptCount:    attemptCount,
+			AttemptedAt:     attemptedAt,
+			CreatedAt:       attemptedAt,
+		}
+
+		delivered, responseStatus, responseBody, errMessage := s.sendWebhookDelivery(ctx, client, webhook, event, delivery.ID)
+		delivery.ResponseStatus = responseStatus
+		delivery.ResponseBody = truncateWebhookText(responseBody, 2048)
+		delivery.ErrorMessage = truncateWebhookText(errMessage, 1024)
+
+		result.Attempted++
+		if delivered {
+			deliveredAt := time.Now().UTC()
+			delivery.Status = "delivered"
+			delivery.DeliveredAt = &deliveredAt
+			result.Delivered++
+		} else if attemptCount >= webhook.integration.RetryMaxAttempts {
+			deadLetteredAt := time.Now().UTC()
+			delivery.Status = "dead_letter"
+			delivery.DeadLetteredAt = &deadLetteredAt
+			result.DeadLettered++
+			result.Failed++
+		} else {
+			nextAttemptAt := attemptedAt.Add(webhookRetryDelay(
+				attemptCount,
+				webhook.integration.RetryBaseDelaySeconds,
+				webhook.integration.RetryMaxDelaySeconds,
+			))
+			delivery.Status = "scheduled_retry"
+			delivery.NextAttemptAt = &nextAttemptAt
+			result.Requeued++
+			result.Failed++
+		}
+
+		if err := s.insertWebhookDelivery(ctx, delivery); err != nil {
+			return models.ReplayDeadLetterWebhookDeliveriesResult{}, err
+		}
+		if err := s.updateWebhookDeliveryStatusSummary(ctx, tenantID, webhook.integration.ID, attemptedAt, delivery.DeliveredAt); err != nil {
+			return models.ReplayDeadLetterWebhookDeliveriesResult{}, err
+		}
+	}
+
+	_ = s.publishPlatformEvent(ctx, models.PlatformEvent{
+		TenantID:      tenantID,
+		EventType:     "webhook.dead_letter.replay.completed",
+		SourceService: "control-plane",
+		AggregateType: "webhook_dead_letter_replay",
+		AggregateID:   actor,
+		Payload: map[string]any{
+			"candidates":    result.Candidates,
+			"attempted":     result.Attempted,
+			"delivered":     result.Delivered,
+			"failed":        result.Failed,
+			"requeued":      result.Requeued,
+			"dead_lettered": result.DeadLettered,
+			"skipped":       result.Skipped,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+
+	return result, nil
+}
+
 func (s *Store) listActiveWebhookTenantIDs(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT tenant_id
@@ -554,6 +767,94 @@ func (s *Store) getLatestWebhookDeliveryForEvent(ctx context.Context, tenantID s
 	return item, true, nil
 }
 
+func (s *Store) listDeadLetterReplayCandidatesForTenant(
+	ctx context.Context,
+	tenantID string,
+	webhookID string,
+	eventType string,
+	since *time.Time,
+	until *time.Time,
+	limit int,
+) ([]webhookReplayCandidate, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH latest AS (
+			SELECT DISTINCT ON (webhook_id, platform_event_id)
+				webhook_id,
+				platform_event_id,
+				event_type,
+				status,
+				attempt_count,
+				attempted_at
+			FROM webhook_deliveries
+			WHERE tenant_id = $1
+			  AND ($2 = '' OR webhook_id = $2)
+			  AND ($3 = '' OR event_type = $3)
+			ORDER BY webhook_id, platform_event_id, attempted_at DESC, id DESC
+		)
+		SELECT webhook_id, platform_event_id, event_type, attempt_count
+		FROM latest
+		WHERE status = 'dead_letter'
+		  AND ($4::timestamptz IS NULL OR attempted_at >= $4)
+		  AND ($5::timestamptz IS NULL OR attempted_at <= $5)
+		ORDER BY attempt_count DESC, webhook_id ASC, platform_event_id ASC
+		LIMIT $6
+	`, tenantID, webhookID, eventType, since, until, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list dead-letter replay candidates: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]webhookReplayCandidate, 0, limit)
+	for rows.Next() {
+		var item webhookReplayCandidate
+		if err := rows.Scan(&item.webhookID, &item.platformEventID, &item.eventType, &item.attemptCount); err != nil {
+			return nil, fmt.Errorf("scan dead-letter replay candidate: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dead-letter replay candidates: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) getPlatformEventForTenant(ctx context.Context, tenantID string, eventID string) (models.PlatformEvent, bool, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, event_type, source_service, aggregate_type, aggregate_id, payload_json, created_at
+		FROM platform_events
+		WHERE tenant_id = $1
+		  AND id = $2
+	`, strings.TrimSpace(tenantID), strings.TrimSpace(eventID))
+
+	var (
+		item        models.PlatformEvent
+		payloadJSON []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.TenantID,
+		&item.EventType,
+		&item.SourceService,
+		&item.AggregateType,
+		&item.AggregateID,
+		&payloadJSON,
+		&item.CreatedAt,
+	); err != nil {
+		if isNoRows(err) {
+			return models.PlatformEvent{}, false, nil
+		}
+		return models.PlatformEvent{}, false, fmt.Errorf("get platform event: %w", err)
+	}
+
+	item.Payload = map[string]any{}
+	if len(payloadJSON) > 0 {
+		if err := json.Unmarshal(payloadJSON, &item.Payload); err != nil {
+			return models.PlatformEvent{}, false, fmt.Errorf("decode platform event payload: %w", err)
+		}
+	}
+	return item, true, nil
+}
+
 func webhookRetryDelay(attemptCount int, baseDelaySeconds int, maxDelaySeconds int) time.Duration {
 	if baseDelaySeconds < minWebhookRetryDelaySeconds {
 		baseDelaySeconds = minWebhookRetryDelaySeconds
@@ -576,6 +877,13 @@ func webhookRetryDelay(attemptCount int, baseDelaySeconds int, maxDelaySeconds i
 		}
 	}
 	return delay
+}
+
+func computeWebhookSuccessRate(delivered int64, total int64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	return float64(delivered) / float64(total)
 }
 
 func (s *Store) listWebhookIntegrationRecordsForDispatch(ctx context.Context, tenantID string, webhookID string) ([]webhookIntegrationRecord, error) {
